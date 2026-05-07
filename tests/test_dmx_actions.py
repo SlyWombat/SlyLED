@@ -216,6 +216,12 @@ def test_dmx_scene_action(mh_id):
     """DMX Scene action with explicit pan/tilt/gobo/strobe."""
     section('DMX Scene Action')
 
+    # #841 — DMX Scene (type 14) actions no longer carry an explicit
+    # colorWheel slot. The wheel is derived from RGB at render time via
+    # rgb_to_wheel_slot (#842). Manual slot control belongs to the
+    # dedicated Colour Wheel action (type 17) only. The POST below
+    # deliberately includes colorWheel: 3 to verify the server strips
+    # it for type-14.
     r = api('POST', '/api/actions', {
         'name': 'DMX Full Scene', 'type': 14,
         'r': 100, 'g': 200, 'b': 50,
@@ -247,7 +253,9 @@ def test_dmx_scene_action(mh_id):
         ok(p.get('tilt') == 0.75, f'tilt=0.75, got {p.get("tilt")}')
         ok(p.get('strobe') == 128, f'strobe=128, got {p.get("strobe")}')
         ok(p.get('gobo') == 5, f'gobo=5, got {p.get("gobo")}')
-        ok(p.get('colorWheel') == 3, f'colorWheel=3, got {p.get("colorWheel")}')
+        # #841 — colorWheel must NOT survive on a type-14 action.
+        ok(p.get('colorWheel') is None,
+           f'#841: colorWheel stripped on DMX Scene, got {p.get("colorWheel")}')
         ok(p.get('prism') == 10, f'prism=10, got {p.get("prism")}')
 
     api('DELETE', f'/api/timelines/{tl_id}')

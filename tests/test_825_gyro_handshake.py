@@ -152,14 +152,34 @@ def test_start_handler_sends_ack_on_success():
     body = _start_handler_body()
     _assert("_send_gyro_claim_ack(" in body,
             "START handler invokes _send_gyro_claim_ack on success")
-    _assert("_schedule_arm_check(" in body,
-            "START handler arms the arm-check timer on success")
+    _assert("_gyro_lights_on(" in body,
+            "START handler turns the lights on at claim creation (#813 §1.1)")
+    _assert("_send_gyro_heartbeat(" in body,
+            "START handler sends an immediate first HB so the puck has "
+            "something to reply to (#813 §3.3)")
 
 
 def test_start_handler_idempotent_replay():
     body = _start_handler_body()
     _assert("GYRO_HANDSHAKE_DEDUPE_S" in body,
             "START handler honours the dedupe window for replays")
+
+
+def test_no_arm_check_subsystem():
+    """#813 §7.1 — speculative arm-check timers are anti-pattern. The
+    realigned spec deletes them. Guard against accidental re-introduction
+    by checking that none of the dead-symbol names are anywhere in the
+    module."""
+    import inspect
+    src = inspect.getsource(parent_server)
+    _assert("GYRO_ARM_DEADLINE_S" not in src,
+            "GYRO_ARM_DEADLINE_S removed (no speculative deadline)")
+    _assert("_schedule_arm_check" not in src,
+            "_schedule_arm_check helper removed")
+    _assert("_arm_check_release" not in src,
+            "_arm_check_release helper removed")
+    _assert("_mark_gyro_armed" not in src,
+            "_mark_gyro_armed helper removed (replaced by _gyro_touch_remote)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -185,22 +205,58 @@ def test_stop_handler_parses_nonce_and_sends_ack():
             "STOP handler sends STOP_ACK")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 5. Orient handler arms the claim.
+def test_stop_handler_uses_blackout_false():
+    """#813 §1.2 / §6.1 — Press-Stop hands the fixture back to whatever
+    was driving it before the gyro session (timeline / Track action /
+    #800 park-at-home). Forced blackout=True would create a 1-frame
+    flicker and contradicts Android-controller-mode semantics."""
+    body = _stop_handler_body()
+    _assert("blackout=False" in body,
+            "STOP handler releases with blackout=False (releases to prior writer)")
+    _assert("blackout=True" not in body,
+            "STOP handler does NOT use blackout=True anywhere (#813 §1.2)")
 
-def test_orient_handler_calls_mark_armed():
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. All-comms-silence semantics.
+
+def test_touch_remote_helper_present():
+    """#813 §6.3 — every gyro packet refreshes the silence clock so
+    STALE_HARD_SECS measures all-comms silence, not just orient silence.
+    A puck legitimately holding a still pose (no orient updates) but
+    sending heartbeat-rep + battery should NOT trip the fallback."""
     import inspect
     src = inspect.getsource(parent_server)
-    marker = "elif cmd == CMD_GYRO_ORIENT and len(data) >= 16:"
-    i = src.find(marker)
-    if i < 0:
-        _assert(False, "CMD_GYRO_ORIENT handler exists")
-        return
-    rest = src[i:]
-    j = rest[len(marker):].find("\n        elif cmd ==")
-    body = rest if j < 0 else rest[:len(marker) + j]
-    _assert("_mark_gyro_armed(" in body,
-            "orient handler calls _mark_gyro_armed (arms the claim)")
+    _assert("def _gyro_touch_remote" in src,
+            "_gyro_touch_remote helper defined")
+    # Spot-check every gyro CMD branch invokes it (or is ORIENT, which
+    # implicitly touches via _apply_quat → last_data = time.time()).
+    for branch_marker in (
+        "elif cmd == CMD_GYRO_STOP:",
+        "elif cmd == CMD_GYRO_START:",
+        "elif cmd == CMD_GYRO_BATT and len(data) >= 12:",
+        "elif cmd == CMD_GYRO_COLOR and len(data) >= 12:",
+        "elif cmd == CMD_GYRO_CALIBRATE and len(data) >= 15:",
+        "elif cmd == CMD_GYRO_HEARTBEAT_REP and len(data) >= 13:",
+    ):
+        i = src.find(branch_marker)
+        if i < 0:
+            _assert(False, f"{branch_marker} present")
+            continue
+        rest = src[i:]
+        j = rest[len(branch_marker):].find("\n        elif cmd ==")
+        body = rest if j < 0 else rest[:len(branch_marker) + j]
+        _assert("_gyro_touch_remote(" in body,
+                f"{branch_marker.split()[2].rstrip(':')} branch refreshes silence clock")
+
+
+def test_stale_hard_secs_bumped_to_600():
+    """#813 §6.3 — 60 s threshold was the orient-silence-only cliff that
+    fired on legitimate calibrate-screen pauses. Realigned spec uses
+    600 s + all-comms-silence semantics."""
+    from remote_orientation import STALE_HARD_SECS
+    _assert(STALE_HARD_SECS >= 600,
+            f"STALE_HARD_SECS ≥ 600 (got {STALE_HARD_SECS})")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -223,18 +279,26 @@ def test_hb_rep_handler_present():
             "CMD_GYRO_HEARTBEAT_REP handler exists in UDP dispatcher")
 
 
-def test_hb_rep_releases_orphan_claim_on_idle():
+def test_hb_rep_does_not_release_on_idle():
+    """#813 §7.2 — HB_REP-IDLE → release is anti-pattern. Operator may
+    have rolled back the puck UI for any reason; only an explicit
+    operator gesture (press-Stop or Inactive toggle) releases."""
     body = _hb_rep_handler_body()
-    _assert("GYRO_UI_IDLE" in body and "_mover_engine.release(" in body,
-            "HB_REP releases the claim when puck reports IDLE")
+    _assert("_mover_engine.release(" not in body,
+            "HB_REP handler does NOT call release() (#813 §7.2 anti-pattern)")
 
 
 def test_hb_rep_bootstraps_on_active_with_no_server_claim():
+    """#813 §5.3 — orchestrator-restart bootstrap is the legitimate use
+    of HB_REP. Puck=ACTIVE + server has no claim → reconstruct from
+    heartbeat-rep payload."""
     body = _hb_rep_handler_body()
     _assert("GYRO_UI_ACTIVE" in body
             and "_mover_engine.claim(" in body
             and "_send_gyro_claim_ack(" in body,
             "HB_REP reconstructs the claim when puck=ACTIVE but server has none")
+    _assert("_gyro_lights_on(" in body,
+            "HB_REP-bootstrap path also turns the lights on (#813 §1.1 parity)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -247,13 +311,12 @@ def test_start_dedupe_replay_does_not_double_claim():
     nonce, with no second engine call."""
     import inspect
     src = inspect.getsource(parent_server)
-    # Sanity-check the cached-response replay logic exists:
     _assert("is_replay" in src,
             "is_replay variable steers the START dedupe branch")
     _assert('_gyro_handshake.setdefault(device_id, {})' in src,
             "_gyro_handshake dict is keyed on device_id")
-    _assert("GYRO_ARM_DEADLINE_S" in src,
-            "arm-check deadline constant defined")
+    _assert("GYRO_HANDSHAKE_DEDUPE_S" in src,
+            "dedupe window constant defined")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -265,10 +328,13 @@ ALL = [
     test_start_handler_parses_nonce,
     test_start_handler_sends_ack_on_success,
     test_start_handler_idempotent_replay,
+    test_no_arm_check_subsystem,
     test_stop_handler_parses_nonce_and_sends_ack,
-    test_orient_handler_calls_mark_armed,
+    test_stop_handler_uses_blackout_false,
+    test_touch_remote_helper_present,
+    test_stale_hard_secs_bumped_to_600,
     test_hb_rep_handler_present,
-    test_hb_rep_releases_orphan_claim_on_idle,
+    test_hb_rep_does_not_release_on_idle,
     test_hb_rep_bootstraps_on_active_with_no_server_claim,
     test_start_dedupe_replay_does_not_double_claim,
 ]

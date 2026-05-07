@@ -74,22 +74,59 @@ class DMXUniverse:
     # ── Fixture helpers ───────────────────────────────────────────
 
     def set_fixture_rgb(self, start_addr, r, g, b, profile=None):
-        """Set RGB channels for a fixture at *start_addr* (1-based).
-        If *profile* is given, uses its channel mapping; otherwise assumes
-        consecutive R, G, B at the start address."""
-        if profile:
-            ch_map = profile.get("channel_map", {})
-            r_off = ch_map.get("red")
-            g_off = ch_map.get("green")
-            b_off = ch_map.get("blue")
+        """Set the colour of a fixture at *start_addr* (1-based) from an
+        abstract RGB triple, regardless of how the fixture exposes
+        colour to DMX.
+
+        Three profile shapes are handled in one place (#842):
+
+        * **RGB** — the profile maps ``red`` / ``green`` / ``blue``.
+          Write each channel from the matching component.
+        * **Hybrid RGB + colour wheel** — the profile carries both an
+          RGB triple AND a ``color-wheel`` channel. Write RGB, then
+          force the wheel to slot 0 (open) so the wheel's default
+          coloured slot does not filter the beam (per the long-
+          standing project rule in
+          ``feedback_hybrid_rgb_wheel_colors.md``).
+        * **Colour-wheel-only** — no RGB channels, only a
+          ``color-wheel`` channel. Resolve the closest matching wheel
+          slot via :func:`dmx_profiles.rgb_to_wheel_slot` and write its
+          DMX value directly. This was previously duplicated in three
+          render paths (``_evaluate_track_actions``,
+          ``_dmx_playback_loop``, ``_show_playback_loop`` segment-mode)
+          plus the ``_set_fixture_color`` legacy helper — every caller
+          had to remember to do the dance themselves.
+
+        If no ``profile`` is supplied the call falls back to writing
+        three consecutive bytes at ``start_addr`` (the legacy "raw RGB
+        block" path used by tests).
+        """
+        if not profile:
+            self.set_channels(start_addr, [r, g, b])
+            return
+        ch_map = profile.get("channel_map", {}) or {}
+        r_off = ch_map.get("red")
+        g_off = ch_map.get("green")
+        b_off = ch_map.get("blue")
+        cw_off = ch_map.get("color-wheel")
+        has_rgb = any(off is not None for off in (r_off, g_off, b_off))
+        if has_rgb:
             if r_off is not None:
                 self.set_channel(start_addr + r_off, r)
             if g_off is not None:
                 self.set_channel(start_addr + g_off, g)
             if b_off is not None:
                 self.set_channel(start_addr + b_off, b)
-        else:
-            self.set_channels(start_addr, [r, g, b])
+            # Hybrid RGB + wheel: park the wheel at open so the
+            # wheel's default slot doesn't filter the beam.
+            if cw_off is not None:
+                self.set_channel(start_addr + cw_off, 0)
+            return
+        if cw_off is not None:
+            # Wheel-only fixture — derive the slot from RGB.
+            from dmx_profiles import rgb_to_wheel_slot
+            slot = rgb_to_wheel_slot(profile, r, g, b) if (r or g or b) else 0
+            self.set_channel(start_addr + cw_off, slot)
 
     def set_fixture_dimmer(self, start_addr, value, profile=None):
         """Set the master dimmer channel for a fixture.

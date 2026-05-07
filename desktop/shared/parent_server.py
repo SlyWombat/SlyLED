@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.80"
+VERSION = "1.7.82"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -275,6 +275,24 @@ _spatial_fx = _load("spatial_fx", [])
 _timelines  = _load("timelines",  [])
 _show_playlist = _load("show_playlist", {"order": [], "loopAll": False})  # {order: [tid,...], loopAll: bool}
 _actions = _load("actions", [])
+
+# #841 — one-shot migration: strip stale `colorWheel` from any non-type-17
+# action. Pre-fix, the DMX Scene / PT-Move / Gobo Select editors all wrote
+# `colorWheel: 0` into the action body even when the user never touched
+# the field, which then defeated the rgb_to_wheel_slot fallback at render
+# time on hybrid RGB+wheel fixtures (#842). Wheel slots belong to the
+# Colour Wheel action (type 17) only.
+def _migrate_strip_stale_color_wheel():
+    changed = 0
+    for a in _actions:
+        if a.get("type") != 17 and "colorWheel" in a:
+            a.pop("colorWheel", None)
+            changed += 1
+    if changed:
+        _save("actions", _actions)
+        print(f"[migration #841] stripped colorWheel from {changed} non-type-17 action(s)")
+_migrate_strip_stale_color_wheel()
+
 _wifi    = _load("wifi",    {"ssid": "", "password": ""})
 _ssh     = _load("ssh",    {"sshUser": "root", "sshPassword": "", "sshKeyPath": ""})
 _camera_ssh = _load("camera_ssh", {})  # {ip: {authType, user, password(encrypted), keyPath, keyStored}}
@@ -578,8 +596,13 @@ def _gyro_inactive_transition(gf):
     mid = gf.get("assignedMoverId")
     if mid is not None and _mover_engine:
         try:
+            # #813 §1.2 / §6.2 — Inactive transition follows the same
+            # "release to whatever was driving it before" semantics as
+            # press-Stop. Forced blackout would create a 1-frame
+            # flicker if a timeline / Track-action is about to write
+            # the same channel on the next engine tick.
             _mover_engine.release(mid, f"gyro-{ip}" if ip else None,
-                                   blackout=True)
+                                   blackout=False)
         except Exception:
             log.debug("gyro Inactive: claim release for mover %s failed",
                       mid, exc_info=True)
@@ -1353,10 +1376,11 @@ def _udp_listener():
             # reads Remote.aim_stage via its tick loop — no legacy call
             # here any more.
             device_id = f"gyro-{ip}"
-            # #825 — first orient after CLAIM_ACK arms the claim and cancels
-            # the arm-check timer that would otherwise release it at t+1.5s.
-            # No-op when no in-flight handshake is tracked for this device.
-            _mark_gyro_armed(device_id)
+            # #822 — bump child.seen so Firmware Updates doesn't flag a
+            # streaming gyro as offline. The puck rarely sends CMD_PONG
+            # in steady state; orient is the high-frequency liveness
+            # signal.
+            _touch_child_seen(ip)
             remote = _auto_register_remote(device_id, kind=KIND_PUCK)
             remote.update_from_euler_deg(
                 roll100/100.0, pitch100/100.0, yaw100/100.0,
@@ -1369,15 +1393,16 @@ def _udp_listener():
             # claims. The back-compat auto-claim-on-first-orient path
             # (#772 era) was deleted — green-field reflash assumed.
         elif cmd == CMD_GYRO_STOP:
-            # #819 — discrete press-STOP. Replaces the v1.2.5-and-earlier
-            # bit-3-on-orient overload (which mis-fired and auto-released
-            # the live claim ~25 ms after start). Teardown: release claim
-            # w/ blackout, end the puck's primitive session so the next
-            # press-Start re-aligns from a known state.
+            # #819 — discrete press-STOP. #825 — payload now carries a
+            # nonce(2). Header-only legacy variants (puck firmware ≤
+            # v1.2.6) are still accepted with nonce=0 and no STOP_ACK.
             #
-            # #825 — payload now carries a nonce(2). Header-only legacy
-            # variants (puck firmware ≤ v1.2.6) are still accepted with
-            # nonce=0 and no STOP_ACK — matches pre-#825 behaviour.
+            # #813 §1.2 / §6.1 — release(blackout=False). Press-Stop hands
+            # the fixture back to whatever was driving it before the gyro
+            # session (timeline / Track action / #800 park-at-home idle).
+            # Pre-fix this forced dimmer-zero, fighting the next writer's
+            # first frame; the operator's mental model is "release to what
+            # it was doing before" (Android-controller-mode semantics).
             stop_nonce = None
             if len(data) >= 10:
                 try:
@@ -1385,6 +1410,7 @@ def _udp_listener():
                 except Exception:
                     stop_nonce = None
             did_stop = f"gyro-{ip}"
+            _gyro_touch_remote(did_stop)  # §6.3 silence-clock
             try:
                 # Idempotent dedupe: a retransmitted STOP with the same
                 # nonce just replays the STOP_ACK; we don't double-release.
@@ -1403,13 +1429,13 @@ def _udp_listener():
                     if stop_nonce is not None:
                         _send_gyro_stop_ack(ip, stop_nonce)
                     continue
-                log.info("GYRO_STOP from %s nonce=%s — releasing claim, clearing cal",
+                log.info("GYRO_STOP from %s nonce=%s — releasing claim (blackout=False)",
                           ip, stop_nonce)
                 if _mover_engine:
                     gf_stop = _gyro_fixture_for_ip(ip)
                     if gf_stop and gf_stop.get("assignedMoverId") is not None:
                         _mover_engine.release(gf_stop["assignedMoverId"],
-                                              did_stop, blackout=True)
+                                              did_stop, blackout=False)
                 remote_stop = _remotes.by_device(did_stop)
                 if remote_stop is not None:
                     remote_stop.end_session()
@@ -1419,14 +1445,7 @@ def _udp_listener():
                         log.error("remotes.save() during stop failed: %s", e)
                 with _gyro_handshake_lock:
                     st_hs = _gyro_handshake.setdefault(did_stop, {})
-                    # Tear down any in-flight start-arm timer; the claim
-                    # is gone now anyway.
-                    t = st_hs.get("arm_timer")
-                    if t is not None:
-                        try: t.cancel()
-                        except Exception: pass
-                        st_hs["arm_timer"] = None
-                    st_hs["armed"] = False
+                    # Drop nonce tracking for the gesture we just stopped.
                     st_hs["start_nonce"] = None
                     st_hs["mover_id"] = None
                     if stop_nonce is not None:
@@ -1437,20 +1456,16 @@ def _udp_listener():
             except Exception as e:
                 log.error("GYRO_STOP handler failed: %s", e, exc_info=True)
         elif cmd == CMD_GYRO_START:
-            # #772 — explicit press-START. Resolve fixture + mover, run
-            # claim + start_stream synchronously, send CMD_GYRO_CLAIM_DENIED
-            # back on refusal so the puck can revert ACTIVE → IDLE with a
-            # BUSY indication (Android parity).
-            #
-            # #825 — payload now carries a nonce(2) so the handshake is
-            # rock-solid against dropped ACKs. On success we send
-            # CMD_GYRO_CLAIM_ACK (the puck advances UI on this packet,
-            # not on the absence of DENIED) and arm a 1.5 s timer that
-            # releases the claim if no orient packet arrives by then —
-            # belt-and-braces against the puck never receiving the ACK.
+            # #813 §4 — explicit press-START. Server-side handshake:
+            # resolve fixture+mover, claim, start stream, lights on
+            # (§4.2 step 6), send CLAIM_ACK (idempotent retransmission
+            # protected by the nonce dedupe window — §3.2). No arm-check
+            # timer is scheduled; the claim lives until press-Stop /
+            # Inactive / 600 s all-comms-silence (§6.1 / §6.2 / §6.3).
             gf = _gyro_fixture_for_ip(ip)
             target_mover_id = gf.get("assignedMoverId") if gf else None
             device_id = f"gyro-{ip}"
+            _gyro_touch_remote(device_id)  # §6.3 silence-clock
             start_nonce = None
             if len(data) >= 10:
                 try:
@@ -1531,13 +1546,29 @@ def _udp_listener():
                         st_hs["ack_sent_ts"] = time.time()
                 else:
                     _mover_engine.start_stream(target_mover_id, device_id)
+                    # #813 §1.1 / §4.2 step 6 — turn the lights on.
+                    # Press-Start is the moment the head should visibly
+                    # come alive; pre-fix the operator had to hold-to-
+                    # calibrate before any output was produced.
+                    _gyro_lights_on(target_mover_id)
                     if start_nonce is not None:
                         _send_gyro_claim_ack(ip, start_nonce, target_mover_id)
+                        # Fire an immediate heartbeat so the puck has
+                        # something to reply to (HB_REP) right away.
+                        _send_gyro_heartbeat(ip)
+                        # Cache the nonce + response for idempotent START
+                        # retransmissions (#813 §3.2). No arm-check timer
+                        # is scheduled — the claim lives until §6.1 / §6.2
+                        # / §6.3 fires, never on a speculative deadline.
                         with _gyro_handshake_lock:
-                            _schedule_arm_check(device_id, target_mover_id, start_nonce)
+                            st_hs = _gyro_handshake.setdefault(device_id, {})
+                            st_hs["start_nonce"] = start_nonce
+                            st_hs["start_response"] = "ack"
+                            st_hs["ack_sent_ts"] = time.time()
+                            st_hs["mover_id"] = target_mover_id
                         log.info(
                             "GYRO_START from %s nonce=%d — claim+start_stream ok "
-                            "mover=%d (ACK sent, arm-check armed)",
+                            "mover=%d (lights on, ACK + initial HB sent)",
                             ip, start_nonce, target_mover_id)
                     else:
                         # Legacy puck (firmware ≤ v1.2.6, no nonce). Pre-
@@ -1553,9 +1584,8 @@ def _udp_listener():
         elif cmd == CMD_GYRO_BATT and len(data) >= 12:
             # #813 follow-up — GyroBattPayload: vbat100(2) pct(1) flags(1).
             # Stamp into _gyro_state so /api/gyros and the SPA can surface
-            # battery without operator intervention. Voltage is signed-
-            # safe at 16 bits (~655 V max), pct is 0..100 or 0xFF for
-            # "no battery", flags bit0 = charging.
+            # battery without operator intervention.
+            _gyro_touch_remote(f"gyro-{ip}")  # §6.3 silence-clock
             vbat100, pct, bflags = struct.unpack_from("<HBB", data, 8)
             charging = bool(bflags & 0x01)
             with _gyro_lock:
@@ -1568,6 +1598,7 @@ def _udp_listener():
                       ip, vbat100/100.0, pct, charging)
         elif cmd == CMD_GYRO_COLOR and len(data) >= 12:
             # GyroColorPayload: r(1) g(1) b(1) flags(1)
+            _gyro_touch_remote(f"gyro-{ip}")  # §6.3 silence-clock
             r, g, b, flags = struct.unpack_from("<BBBB", data, 8)
             flash = bool(flags & 0x01)
             log.info("GYRO_COLOR from %s: r=%d g=%d b=%d flash=%s", ip, r, g, b, flash)
@@ -1578,6 +1609,11 @@ def _udp_listener():
             roll = roll100 / 100.0
             pitch = pitch100 / 100.0
             yaw = yaw100 / 100.0
+            # #813 §6.3 — every gyro packet refreshes the all-comms-silence
+            # clock. Calibrate is optional (#813 §5.0) so we never gate any
+            # downstream behaviour on having seen one — but receiving one
+            # is proof the puck is alive.
+            _gyro_touch_remote(f"gyro-{ip}")
             log.info("GYRO_CALIBRATE from %s: cal=%d R=%.1f P=%.1f Y=%.1f",
                      ip, calibrating, roll, pitch, yaw)
             # Resolve the gyro fixture + target mover for this puck.
@@ -1635,48 +1671,38 @@ def _udp_listener():
             #                                    so the operator never sees
             #                                    the puck UI blink.
             #   • both agree → no action.
+            # #813 §5.3 + §7.2 — HB_REP is used ONLY for the orchestrator-
+            # restart bootstrap path (puck reports ACTIVE while server has
+            # no claim → reconstruct from heartbeat). The puck-IDLE-while-
+            # server-holds-claim branch is anti-pattern §7.2 and is
+            # deliberately NOT implemented: the operator may have rolled
+            # back the puck UI for any reason, and only an explicit STOP
+            # gesture or Inactive toggle releases the claim.
             ui_state, claim_nonce, hb_seq = struct.unpack_from("<BHH", data, 8)
             device_id_hb = f"gyro-{ip}"
+            _gyro_touch_remote(device_id_hb)
             try:
                 with _gyro_handshake_lock:
                     st_hs = _gyro_handshake.setdefault(device_id_hb, {})
                     last_seq = st_hs.get("last_seen_seq")
                     st_hs["last_seen_seq"] = hb_seq
                 if last_seq == hb_seq:
-                    # Duplicate of a prior REP — already reconciled.
+                    # Duplicate of a prior REP — already processed.
                     pass
-                else:
-                    server_has_claim = False
-                    server_mover_id = None
-                    if _mover_engine is not None:
-                        for cl in _mover_engine.get_status() or []:
-                            if cl.get("deviceId") == device_id_hb:
-                                server_has_claim = True
-                                server_mover_id = cl.get("moverId")
-                                break
+                elif (ui_state == GYRO_UI_ACTIVE
+                      and claim_nonce != 0
+                      and _mover_engine is not None):
+                    server_has_claim = any(
+                        cl.get("deviceId") == device_id_hb
+                        for cl in (_mover_engine.get_status() or []))
                     log.debug(
                         "GYRO_HB_REP from %s ui=%d claimNonce=%d seq=%d "
                         "(server_has_claim=%s)",
                         ip, ui_state, claim_nonce, hb_seq, server_has_claim)
-                    if ui_state == GYRO_UI_IDLE and server_has_claim:
-                        log.warning(
-                            "GYRO_HB_REP reconcile: puck %s reports IDLE but "
-                            "server holds claim on mover=%s — releasing orphan",
-                            ip, server_mover_id)
-                        try:
-                            if server_mover_id is not None:
-                                _mover_engine.release(server_mover_id,
-                                                      device_id_hb,
-                                                      blackout=True)
-                        except Exception as e:
-                            log.error("HB_REP orphan release failed: %s", e)
-                    elif (ui_state == GYRO_UI_ACTIVE
-                          and not server_has_claim
-                          and claim_nonce != 0
-                          and _mover_engine is not None):
-                        # Restart bootstrap. Re-establish the claim from
-                        # the puck's view; if the fixture is still wired
-                        # up the same way (mover assigned + Active), the
+                    if not server_has_claim:
+                        # Restart bootstrap (#813 §5.3). Re-establish the
+                        # claim from the puck's view; if the fixture is
+                        # still wired up (mover assigned + Active), the
                         # operator never sees a UI blink.
                         gf_hb = _gyro_fixture_for_ip(ip)
                         target_mover_id_hb = (
@@ -1693,12 +1719,10 @@ def _udp_listener():
                             if ok_hb:
                                 _mover_engine.start_stream(
                                     target_mover_id_hb, device_id_hb)
+                                _gyro_lights_on(target_mover_id_hb)
                                 _send_gyro_claim_ack(ip, claim_nonce,
                                                       target_mover_id_hb)
-                                with _gyro_handshake_lock:
-                                    _schedule_arm_check(device_id_hb,
-                                                         target_mover_id_hb,
-                                                         claim_nonce)
+                                _send_gyro_heartbeat(ip)
                                 log.info(
                                     "GYRO_HB_REP bootstrap: reconstructed "
                                     "claim for %s mover=%d nonce=%d "
@@ -1719,6 +1743,7 @@ def _udp_listener():
                 # Store for discover to find
                 _recent_pongs[ip] = info
                 # Update known children
+                matched = None
                 for c in _children:
                     if c.get("ip") == ip or c.get("hostname") == info.get("hostname"):
                         saved_fw = c.get("fwVersion", "")
@@ -1726,8 +1751,25 @@ def _udp_listener():
                         # Preserve 3-digit version over PONG's 2-digit
                         if saved_fw and saved_fw.count(".") >= 2 and info.get("fwVersion", "").count(".") < 2:
                             c["fwVersion"] = saved_fw
+                        # #822 — bump seen so Firmware Updates tab
+                        # doesn't show this child as offline. The
+                        # parsed PongPayload doesn't include `seen`,
+                        # so the c.update(info) above doesn't refresh
+                        # it; do it explicitly here.
+                        c["seen"] = int(time.time())
+                        c["status"] = 1
                         _probe_board_type(c)
+                        matched = c
                         break
+                # #843 — top up brightness on a freshly-online child.
+                # `childBrightness` boots to 255 in firmware (Child.cpp).
+                # If our master is currently below that, push the value
+                # so the child doesn't display its first show frame at
+                # full intensity. LED children only.
+                if matched is not None and matched.get("type") not in ("dmx", "gyro"):
+                    g_bri = _settings.get("globalBrightness", 255)
+                    if g_bri < 255:
+                        _send(ip, _brightness_packet(g_bri))
         else:
             log.debug("UDP cmd=0x%02X from %s (%d bytes)", cmd, ip, len(data))
 
@@ -1772,18 +1814,21 @@ def _send_gyro_claim_denied(ip):
 #      orient packet has arrived from the device by then, we assume the
 #      ACK was lost and release the claim so it doesn't orphan.
 #
-# Per-device entry shape:
+# Per-device entry shape (see docs/gyro-claim-lifecycle.md §3.2):
 #   {
 #     "start_nonce":     uint16 | None,   # nonce of last START seen
 #     "start_response":  "ack" | "denied" | None,
-#     "ack_sent_ts":     float | None,    # monotonic ts of last ACK send
-#     "armed":           bool,            # True once an orient arrived after ACK
+#     "ack_sent_ts":     float | None,    # ts of last ACK / DENIED send
 #     "mover_id":        int | None,      # mover bound to the active claim
 #     "stop_nonce":      uint16 | None,
 #     "stop_ack_ts":     float | None,
-#     "arm_timer":       threading.Timer | None,
 #     "last_seen_seq":   uint16 | None,   # last HB_REP seq we've processed
 #   }
+#
+# No arm-check timer is tracked — the spec (docs/gyro-claim-lifecycle.md
+# §7.1) explicitly forbids speculative release timers. Claim survives
+# until press-Stop (§6.1), Inactive toggle (§6.2), or 600 s of all-comms
+# silence (§6.3); nothing else.
 _gyro_handshake = {}
 _gyro_handshake_lock = threading.Lock()
 
@@ -1791,12 +1836,6 @@ _gyro_handshake_lock = threading.Lock()
 # cached response instead of running claim/release. Tuned to comfortably
 # cover the puck's retry budget (5 retries × 150 ms = 750 ms).
 GYRO_HANDSHAKE_DEDUPE_S = 5.0
-
-# Time (seconds) to wait for an orient packet after sending CLAIM_ACK
-# before assuming the ACK was lost and releasing the claim. The puck's
-# own retry budget is shorter (~750 ms); this window has slack for both
-# the wire round-trip and the puck's ACTIVE-state IMU spin-up.
-GYRO_ARM_DEADLINE_S = 1.5
 
 
 def _send_gyro_claim_ack(ip, nonce, mover_id):
@@ -1826,68 +1865,132 @@ def _send_gyro_stop_ack(ip, nonce):
         log.debug("stop-ack to %s failed: %s", ip, e)
 
 
-def _mark_gyro_armed(device_id):
-    """#825 — called from the orient handler. Flags the in-flight claim as
-    armed (puck has clearly received CLAIM_ACK and is streaming). Cancels
-    the pending arm-check timer."""
-    with _gyro_handshake_lock:
-        st = _gyro_handshake.get(device_id)
-        if not st or st.get("armed"):
-            return
-        st["armed"] = True
-        t = st.get("arm_timer")
-        if t is not None:
-            try:
-                t.cancel()
-            except Exception:
-                pass
-            st["arm_timer"] = None
+def _touch_child_seen(ip):
+    """#822 — refresh `_children[*].seen` for a child matching `ip`.
+
+    The Firmware Updates tab uses `seen` (last-heard timestamp) to flag
+    children as offline / stale (`CHILD_STALE_S`). Pre-fix:
+      - The CMD_PONG handler called `c.update(info)` with the parsed
+        PongPayload, which doesn't include a `seen` key — so `seen` was
+        never bumped on the discovery / ping cycle.
+      - The gyro puck rarely sends CMD_PONG (only on boot broadcast); its
+        steady-state traffic is CMD_GYRO_ORIENT / BATT / HEARTBEAT_REP,
+        none of which touched `_children`. A perfectly online gyro
+        therefore showed as offline in the Firmware tab.
+      - The Giga DMX bridge sends ArtPollReply via the dmx_artnet engine,
+        which doesn't share state with `_children`. Same outcome.
+
+    This helper is the single point that updates `seen` whenever any
+    incoming packet establishes liveness. Called from the CMD_PONG
+    branch (fixes DMX bridge) and from CMD_GYRO_ORIENT (fixes gyro).
+    """
+    if not ip:
+        return
+    now = int(time.time())
+    for c in _children:
+        if c.get("ip") == ip:
+            c["seen"] = now
+            if c.get("status") == 0:
+                c["status"] = 1
+            break
 
 
-def _arm_check_release(device_id, mover_id, nonce):
-    """#825 — fired by `threading.Timer` GYRO_ARM_DEADLINE_S seconds after
-    CLAIM_ACK is sent. If no orient has arrived in that window, the puck
-    almost certainly never received the ACK; release the claim so it
-    doesn't sit orphan until the 60 s stale threshold."""
-    with _gyro_handshake_lock:
-        st = _gyro_handshake.get(device_id)
-        if not st or st.get("armed"):
-            return
-        if st.get("start_nonce") != nonce:
-            # A newer START already superseded this one; let it run.
-            return
-        st["arm_timer"] = None
-    log.warning(
-        "GYRO arm-check fired for %s mover=%s nonce=%d — no orient within "
-        "%.1fs, releasing orphan claim", device_id, mover_id, nonce,
-        GYRO_ARM_DEADLINE_S)
+def _gyro_touch_remote(device_id):
+    """#813 §6.3 — refresh the all-comms-silence clock for a gyro device.
+    Called from every gyro CMD branch in the UDP listener (orient, color,
+    calibrate, heartbeat-rep, batt, start, stop). The 600 s stale-comms
+    threshold (`STALE_HARD_SECS`) measures silence on ANY incoming packet
+    from this device, not just orient — see docs/gyro-claim-lifecycle.md
+    §6.3. Without this, a puck legitimately holding a still pose (no
+    orient updates) but otherwise alive would still trip the silence
+    fallback, contradicting #813's rock-solid principle.
+
+    Auto-registers the Remote on first call so packets that arrive
+    before any orient (BATT / HEARTBEAT_REP from an IDLE puck) still
+    establish a tracked entity.
+    """
     try:
-        if _mover_engine is not None and mover_id is not None:
-            _mover_engine.release(mover_id, device_id, blackout=True)
+        remote = _remotes.by_device(device_id) or _auto_register_remote(
+            device_id, kind=KIND_PUCK)
+        if remote is not None:
+            remote.last_data = time.time()
+            if remote.stale_reason == "connection-lost":
+                # #812 — auto-clear hard-stale when the puck comes back.
+                remote.stale_reason = None
+                remote.soft_stale = False
     except Exception as e:
-        log.error("arm-check release failed: %s", e, exc_info=True)
+        log.debug("touch_remote(%s) failed: %s", device_id, e)
 
 
-def _schedule_arm_check(device_id, mover_id, nonce):
-    """#825 — arm a one-shot timer that releases the claim if no orient
-    arrives in time. Caller holds `_gyro_handshake_lock`."""
-    st = _gyro_handshake.setdefault(device_id, {})
-    old = st.get("arm_timer")
-    if old is not None:
-        try:
-            old.cancel()
-        except Exception:
-            pass
-    t = threading.Timer(GYRO_ARM_DEADLINE_S, _arm_check_release,
-                        args=(device_id, mover_id, nonce))
-    t.daemon = True
-    t.start()
-    st["arm_timer"] = t
-    st["armed"] = False
-    st["mover_id"] = mover_id
-    st["start_nonce"] = nonce
-    st["start_response"] = "ack"
-    st["ack_sent_ts"] = time.time()
+def _gyro_lights_on(mover_id):
+    """#813 §1.1 / §4.2 step 6 — turn the moving head on at claim time.
+    Press-Start should produce visible output immediately; the operator
+    must NOT have to perform a calibrate gesture to see the lamp light.
+
+    Per #814, colour is INHERITED from whatever was driving the wire
+    before the claim arrived (Track action / scene / SET_BRIGHTNESS) —
+    we never slam to white. This function only nudges the dimmer to
+    `lampOnDimmer` IF the wire was dark (dimmer=0) and applies non-
+    R/G/B/dimmer profile defaults so beam-shaping channels (strobe
+    open, gobo open, prism off, …) produce a clean visible beam when
+    the fixture is coming up from a cold/idle state.
+
+    For fixtures already lit by an upstream writer (Track action
+    coloured red, mid-show), this is effectively a no-op on colour:
+    the existing red survives the claim transition.
+    """
+    try:
+        mover = _mover_fixture(mover_id)
+        if mover is None:
+            return
+        engine = _artnet if _dmx_settings.get("protocol", "artnet") == "artnet" else _sacn
+        if engine is None or not engine.running:
+            return
+        pid = mover.get("dmxProfileId")
+        prof_info = _profile_lib.channel_info(pid) if pid else None
+        if prof_info is None:
+            return
+        addr = mover.get("dmxStartAddr", 1)
+        uni = engine.get_universe(mover.get("dmxUniverse", 1))
+        profile = {"channel_map": prof_info.get("channel_map"),
+                   "channels": prof_info.get("channels", [])}
+        ch_map = prof_info.get("channel_map") or {}
+        # Read current dimmer from the universe buffer; only force
+        # `lampOnDimmer` when the fixture is currently dark. If a
+        # show is already driving the head with dimmer up, leave it.
+        dim_off = ch_map.get("dimmer")
+        cur_dim = uni.get_channel(addr + dim_off) if dim_off is not None else 0
+        if cur_dim == 0:
+            dim = int(mover.get("lampOnDimmer", 255) or 255)
+            uni.set_fixture_dimmer(addr, max(0, min(255, dim)), profile)
+        # Apply non-pan/tilt/dimmer/RGB/colour-wheel defaults so beam-
+        # shaping channels (strobe open, gobo open, prism off, focus
+        # mid…) produce a clean visible beam. Pan/tilt are driven live
+        # by the engine tick from Remote.aim_stage; RGB / colour-wheel
+        # are inherited per #814.
+        skip = {"pan", "tilt", "dimmer", "red", "green", "blue", "color-wheel"}
+        for ch in prof_info.get("channels", []):
+            ch_type = ch.get("type", "")
+            default = ch.get("default")
+            if default is not None and ch_type not in skip:
+                uni.set_channel(addr + ch.get("offset", 0), int(default))
+    except Exception as e:
+        log.debug("lights_on(mover=%s) failed: %s", mover_id, e)
+
+
+def _send_gyro_heartbeat(ip, state="streaming"):
+    """#825 — single CMD_GYRO_HEARTBEAT to one puck. Extracted from
+    `_heartbeat_loop` so the START success path can fire an immediate
+    heartbeat right after CLAIM_ACK (#813 §3.3 packet diagram). Cheap
+    (~10 byte UDP); idempotent."""
+    try:
+        state_byte = 1 if state == "streaming" else 0
+        pkt = _hdr(CMD_GYRO_HEARTBEAT) + bytes([state_byte, 1])
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.sendto(pkt, (ip, UDP_PORT))
+        sock.close()
+    except Exception as e:
+        log.debug("heartbeat to %s failed: %s", ip, e)
 
 
 def _heartbeat_loop():
@@ -1911,15 +2014,7 @@ def _heartbeat_loop():
             ip = did[len("gyro-"):]
             if not ip:
                 continue
-            try:
-                state_byte = 1 if claim.get("state") == "streaming" else 0
-                active_byte = 1
-                pkt = _hdr(CMD_GYRO_HEARTBEAT) + bytes([state_byte, active_byte])
-                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                sock.sendto(pkt, (ip, UDP_PORT))
-                sock.close()
-            except Exception as e:
-                log.debug("heartbeat to %s failed: %s", ip, e)
+            _send_gyro_heartbeat(ip, claim.get("state") or "streaming")
         time.sleep(2.0)
 
 
@@ -11012,29 +11107,24 @@ def api_dmx_status():
     )
 
 def _set_fixture_color(engine_or_buf, uni_or_addr, addr_or_none, r, g, b, prof_info):
-    """Set color on a fixture — RGB or color-wheel depending on profile.
-    Accepts (engine, uni, addr, ...) or (uni_buf, addr, None, ...)."""
-    from dmx_profiles import rgb_to_wheel_slot
+    """Set colour on a fixture — RGB or colour-wheel depending on profile.
+
+    Thin compat shim over :meth:`DMXUniverse.set_fixture_rgb`, which now
+    centrally handles the RGB / hybrid / wheel-only dispatch (#842).
+    Two call shapes survive for legacy callers: ``(engine, uni, addr,
+    r, g, b, prof_info)`` and ``(uni_buf, addr, None, r, g, b,
+    prof_info)``.
+    """
+    profile = None
+    if prof_info:
+        profile = {"channel_map": prof_info.get("channel_map") or {},
+                   "channels":    prof_info.get("channels") or []}
     if addr_or_none is not None:
-        # Engine mode: engine.set_fixture_rgb(uni, addr, ...)
         engine, uni, addr = engine_or_buf, uni_or_addr, addr_or_none
-        cm = prof_info.get("channel_map", {}) if prof_info else {}
-        if "red" in cm or not cm:
-            profile = {"channel_map": cm} if cm else None
-            engine.set_fixture_rgb(uni, addr, r, g, b, profile)
-        elif "color-wheel" in cm:
-            cw = rgb_to_wheel_slot(prof_info, r, g, b) if (r or g or b) else 0
-            engine.get_universe(uni).set_channel(addr + cm["color-wheel"], cw)
+        engine.set_fixture_rgb(uni, addr, r, g, b, profile)
     else:
-        # Buffer mode: uni_buf.set_fixture_rgb(addr, ...)
         uni_buf, addr = engine_or_buf, uni_or_addr
-        cm = prof_info.get("channel_map", {}) if prof_info else {}
-        if "red" in cm or not cm:
-            profile = {"channel_map": cm, "channels": prof_info.get("channels", [])} if cm else None
-            uni_buf.set_fixture_rgb(addr, r, g, b, profile)
-        elif "color-wheel" in cm:
-            cw = rgb_to_wheel_slot(prof_info, r, g, b) if (r or g or b) else 0
-            uni_buf.set_channel(addr + cm["color-wheel"], cw)
+        uni_buf.set_fixture_rgb(addr, r, g, b, profile)
 
 
 # ── #737 — Lamp / beam / blackout helpers ──────────────────────────────
@@ -12968,6 +13058,14 @@ def api_fixtures_live():
     for f in _fixtures:
         fid = f["id"]
         ft = f.get("fixtureType", "led")
+        # #834 — Fixture Monitor renders light-producing fixtures only.
+        # Gyro and camera fixtures are controllers / sensors with their
+        # own dashboard cards (Remote Controllers, Cameras); they have
+        # no DMX/LED output to surface here. Pre-fix gyros fell through
+        # to the LED branch and emitted always-Idle tiles with no useful
+        # info.
+        if ft in ("gyro", "camera"):
+            continue
         entry = {
             "id": fid,
             "name": f.get("name") or f"Fixture {fid}",
@@ -13610,8 +13708,9 @@ def api_bake_sync(tid):
             _save("settings", _settings)
         time.sleep(0.15)
 
+        # #843 — packet construction extracted to _brightness_packet().
         bri = _settings.get("globalBrightness", 255)
-        bri_pkt = _hdr(CMD_SET_BRIGHTNESS) + bytes([bri & 0xFF])
+        bri_pkt = _brightness_packet(bri)
 
         for p in plan:
             child = p["child"]
@@ -13804,6 +13903,65 @@ def _evaluate_object_patrols(elapsed):
                 new_pos[0] = x_lo
                 new_pos[1] = y_hi - seg_t * (y_hi - y_lo)
 
+        elif pattern == "ribbon":
+            # #839 — ribbon: travelling stage-coord anchor along a named
+            # axis. Movers + spatial sweeps both lock onto this point so
+            # the whole rig moves as one unit. The two anchor points are
+            # derived from `axis` + stage bounds; `elevation` (0..1)
+            # picks the Z slice; `loopMode` controls wrap behaviour.
+            axis_name = pat.get("ribbonAxis") or pat.get("axis", "left-right")
+            elevation = float(pat.get("elevation", 0.5))
+            loop_mode = pat.get("loopMode", "ping-pong")
+            z_anchor = sh * max(0.0, min(1.0, elevation))
+            mid_x = sw / 2.0
+            mid_y = sd / 2.0
+            if axis_name in ("left-right", "right-left"):
+                p_a = [0, mid_y, z_anchor]
+                p_b = [sw, mid_y, z_anchor]
+                if axis_name == "right-left":
+                    p_a, p_b = p_b, p_a
+            elif axis_name in ("front-back", "back-front"):
+                p_a = [mid_x, 0, z_anchor]
+                p_b = [mid_x, sd, z_anchor]
+                if axis_name == "back-front":
+                    p_a, p_b = p_b, p_a
+            elif axis_name in ("up-down", "down-up"):
+                # Vertical sweep — Z is the up axis (#837). Pin X,Y at
+                # stage centre.
+                p_a = [mid_x, mid_y, 0]
+                p_b = [mid_x, mid_y, sh]
+                if axis_name == "down-up":
+                    p_a, p_b = p_b, p_a
+            elif axis_name == "cross":
+                # Diagonal — left-front low to right-back high.
+                p_a = [0, 0, sh * 0.2]
+                p_b = [sw, sd, sh * 0.8]
+            elif axis_name == "figure8":
+                # Use the existing figure-8 pattern but at the elevation.
+                r = min(sw, sd) * 0.35
+                angle = phase * 2.0 * math.pi
+                new_pos[0] = mid_x + r * math.sin(angle)
+                new_pos[1] = mid_y + r * math.sin(2.0 * angle)
+                new_pos[2] = z_anchor
+                obj.setdefault("transform", {})["pos"] = new_pos
+                continue
+            else:
+                p_a = [0, mid_y, z_anchor]
+                p_b = [sw, mid_y, z_anchor]
+            # Compute the parametric `t` along (p_a → p_b) per loop mode.
+            if loop_mode == "ping-pong":
+                t = 1.0 - abs(2.0 * phase - 1.0)
+            elif loop_mode == "once":
+                t = min(1.0, phase)  # park at p_b after one cycle
+            else:  # "wrap"
+                t = phase
+            # `figure8` loop mode would ignore `t` — handled above with
+            # an explicit `continue`. Easing applies to ping-pong / wrap.
+            if easing == "sine":
+                t = 0.5 - 0.5 * math.cos(t * math.pi)
+            for i in range(3):
+                new_pos[i] = p_a[i] + t * (p_b[i] - p_a[i])
+
         else:
             # Default: pingpong — back-and-forth along axis
             t = 1.0 - abs(2.0 * phase - 1.0)  # triangle wave 0→1→0
@@ -13845,7 +14003,9 @@ def _apply_handover_slew(fid, uni, addr, ch_map, engine):
         engine.get_universe(uni).set_channel(addr + pts_offset, 0)
 
 
-def _evaluate_track_actions(elapsed, engine, dmx_fixtures, timeline_track_fids=None):
+def _evaluate_track_actions(elapsed, engine, dmx_fixtures,
+                              timeline_track_fids=None,
+                              tl_action_ids=None):
     """Evaluate active Track actions -- compute real-time pan/tilt for moving heads.
 
     `timeline_track_fids` (#829): when provided, an iterable of fixture
@@ -13853,8 +14013,23 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures, timeline_track_fids=N
     own `trackFixtureIds` is empty fall back to this scope rather than
     "every mover on the rig". `None` preserves the legacy "all movers"
     behaviour for callers that don't have a timeline scope to pass.
+
+    `tl_action_ids` (#835): when provided, an iterable of action ids
+    referenced by clips in the running timeline's tracks. Only Track
+    actions whose `id` is in this set are evaluated — orphan Track
+    actions in the global library no longer drive the unrelated-
+    timeline blackout sweep that zeroes every mover's dimmer. Pre-fix
+    a generative show with no Track-action clips would still see every
+    type-18 entry in `_actions` evaluate every frame, blackout-stomp
+    its bake's dimmer writes via the unassigned-heads sweep, and leave
+    the rig dark while pan/tilt animated. `None` preserves the legacy
+    "evaluate all type-18 actions" behaviour for non-playback callers.
     """
     track_actions = [a for a in _actions if a.get("type") == 18]
+    if tl_action_ids is not None:
+        active_ids = set(int(x) for x in tl_action_ids)
+        track_actions = [a for a in track_actions
+                          if int(a.get("id", -1)) in active_ids]
     if not track_actions:
         return
     all_objects = _objects + _temporal_objects
@@ -13881,6 +14056,11 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures, timeline_track_fids=N
             }
     if not fx_lookup:
         return
+    # #843 — snapshot global brightness once per frame so all writes in
+    # this Track-action pass see the same value, immune to a /api/brightness
+    # write landing mid-iteration.
+    with _lock:
+        g_bri = _settings.get("globalBrightness", 255)
     # #829 — timeline-track-scoped default. When the running timeline
     # only assigned the Track action to a subset of fixtures, that
     # subset is the default scope; the action's own `trackFixtureIds`
@@ -14138,18 +14318,35 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures, timeline_track_fids=N
                     pass
                 # Track action also sets dimmer + color so the beam is visible
                 tr = ta.get("trackDimmer", 255)
-                uni_buf.set_fixture_dimmer(addr, tr, profile)
                 cm = prof_info.get("channel_map", {})
-                if "red" in cm:
-                    # RGB fixture — set color from action
-                    uni_buf.set_fixture_rgb(addr, ta.get("r", 255), ta.get("g", 255), ta.get("b", 255), profile)
-                elif "color-wheel" in cm:
-                    # Color wheel fixture — resolve action RGB to closest wheel slot
-                    from dmx_profiles import rgb_to_wheel_slot
-                    cw_val = ta.get("colorWheel")
-                    if cw_val is None:
-                        cw_val = rgb_to_wheel_slot(prof_info, ta.get("r", 255), ta.get("g", 255), ta.get("b", 255))
-                    uni_buf.set_channel(addr + cm["color-wheel"], cw_val)
+                # #842 — set_fixture_rgb dispatches RGB / hybrid / wheel-only.
+                # The action body's manual `colorWheel` override (only ever
+                # written by type-17 Colour Wheel actions, #841) still wins
+                # for wheel-only profiles where the operator explicitly
+                # named a slot.
+                ta_r = ta.get("r", 255)
+                ta_g = ta.get("g", 255)
+                ta_b = ta.get("b", 255)
+                # #843 — apply global brightness. Master-dimmer fixtures
+                # scale the dimmer channel; RGB-only fixtures (no dimmer
+                # in profile) scale the RGB triple instead. Colour-wheel-
+                # only fixtures fall through to dimmer scaling — slots are
+                # categorical, not intensity, so the wheel index stays.
+                if "dimmer" in cm:
+                    tr_out = _scale_for_brightness(tr, g_bri)
+                    r_out, g_out, b_out = ta_r, ta_g, ta_b
+                else:
+                    tr_out = tr
+                    r_out = _scale_for_brightness(ta_r, g_bri)
+                    g_out = _scale_for_brightness(ta_g, g_bri)
+                    b_out = _scale_for_brightness(ta_b, g_bri)
+                uni_buf.set_fixture_dimmer(addr, tr_out, profile)
+                cw_override = ta.get("colorWheel")
+                if (cw_override is not None and "color-wheel" in cm
+                        and not any(c in cm for c in ("red", "green", "blue"))):
+                    uni_buf.set_channel(addr + cm["color-wheel"], cw_override)
+                else:
+                    uni_buf.set_fixture_rgb(addr, r_out, g_out, b_out, profile)
                 # Apply channel defaults (strobe open, etc.) so beam is visible
                 for ch in prof_info.get("channels", []):
                     ch_type = ch.get("type", "")
@@ -14184,13 +14381,24 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
     # #829 — collect the set of fixtures this timeline's tracks are
     # assigned to. Track actions with no explicit `trackFixtureIds`
     # default to this scope rather than "every mover on the rig".
+    # #835 — also collect the action ids referenced by clips in this
+    # timeline. Track actions NOT in this set are orphans (live in
+    # `_actions` but no clip plays them) and must not evaluate — pre-
+    # fix the unassigned-heads-blackout swept the timeline's full
+    # mover scope every frame, zeroing the bake's dimmer writes.
     _tl_obj = next((t for t in _timelines if t.get("id") == tid), None)
     timeline_track_fids = set()
+    tl_action_ids = set()
     for _tr in (_tl_obj.get("tracks", []) if _tl_obj else []):
         _fid = _tr.get("fixtureId")
         if _fid is not None:
             try: timeline_track_fids.add(int(_fid))
             except (TypeError, ValueError): pass
+        for _cl in _tr.get("clips", []):
+            _aid = _cl.get("actionId")
+            if _aid is not None:
+                try: tl_action_ids.add(int(_aid))
+                except (TypeError, ValueError): pass
     baked_fixtures = result.get("fixtures", {})
     # Collect DMX fixtures with their baked segments
     dmx_fixtures = []
@@ -14229,18 +14437,28 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
     # could drive — baked-segment fixtures + every fixture targeted by
     # an active Track action — so the natural-end park snaps every
     # involved head to home.
+    # #835 — only consider Track actions that this timeline's clips
+    # reference. Pre-fix every type-18 entry in the global action
+    # library expanded the natural-end park scope, even when the
+    # running timeline didn't use any of them.
     track_driven_fids = set()
-    for ta in (a for a in _actions if a.get("type") == 18):
+    for ta in (a for a in _actions
+                if a.get("type") == 18 and int(a.get("id", -1)) in tl_action_ids):
         listed = ta.get("trackFixtureIds") or []
         if listed:
             for tfid in listed:
                 track_driven_fids.add(int(tfid))
         else:
-            # Auto-discover Track action — every Home + Secondary mover
-            # is eligible (matches `_evaluate_track_actions`'s candidate
-            # set when `trackFixtureIds` is empty).
-            for f in _fixtures:
-                if (f.get("fixtureType") == "dmx"
+            # Auto-discover Track action — fall back to the timeline's
+            # assigned mover set (matches `_evaluate_track_actions`'s
+            # candidate scope when `trackFixtureIds` is empty + #829
+            # timeline-track-fid scoping). If the timeline has no
+            # assigned movers and no explicit list, no fixtures are
+            # added — the action has no scope.
+            for fid in timeline_track_fids:
+                f = next((x for x in _fixtures if x.get("id") == fid), None)
+                if (f is not None
+                        and f.get("fixtureType") == "dmx"
                         and f.get("homePanDmx16") is not None
                         and f.get("homeTiltDmx16") is not None):
                     track_driven_fids.add(int(f["id"]))
@@ -14292,6 +14510,11 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
         # #763 — claim-arbiter snapshot, frozen for the duration of this
         # ~25 ms frame so every per-fixture decision sees a consistent set.
         claim_snap = _claim_arbiter.snapshot()
+        # #843 — snapshot the master-brightness setting once per frame so
+        # all per-fixture writes in this iteration see the same value
+        # (immune to a /api/brightness write landing mid-iteration).
+        with _lock:
+            g_bri = _settings.get("globalBrightness", 255)
         # Evaluate each DMX fixture — merge ALL matching segments per-channel.
         # Higher-priority segments (_pri) override lower ones per-channel,
         # allowing e.g. a PT sweep to control pan/tilt while a base wash
@@ -14334,16 +14557,32 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
             zoom = ch_vals.get("zoom", (None, 0))[0]
             profile = {"channel_map": fx["ch_map"], "channels": fx.get("channels", [])} if fx["ch_map"] else None
             uni_buf = engine.get_universe(fx["uni"])
-            # RGB or color-wheel resolution
-            if fx["ch_map"] and "red" in fx["ch_map"]:
-                uni_buf.set_fixture_rgb(fx["addr"], r, g, b, profile)
-            elif fx["ch_map"] and "color-wheel" in fx["ch_map"] and (r or g or b):
-                from dmx_profiles import rgb_to_wheel_slot
-                cw = color_wheel if color_wheel is not None else rgb_to_wheel_slot(fx, r, g, b)
-                uni_buf.set_channel(fx["addr"] + fx["ch_map"]["color-wheel"], cw)
+            # #842 — set_fixture_rgb handles RGB, hybrid, and wheel-only.
+            # The baked frame's explicit `colorWheel` override (only set
+            # by type-17 Colour Wheel actions, #841) still wins for
+            # wheel-only profiles where the operator picked a slot.
+            cm = fx["ch_map"] or {}
+            # #843 — apply global brightness. Master-dimmer fixtures
+            # scale the dimmer channel; RGB-only fixtures (no dimmer)
+            # scale the RGB triple. Bake outputs are unchanged — scaling
+            # happens here at render time, so brightness slewing during
+            # a show needs no re-bake.
+            if "dimmer" in cm:
+                r_out, g_out, b_out = r, g, b
+            else:
+                r_out = _scale_for_brightness(r, g_bri)
+                g_out = _scale_for_brightness(g, g_bri)
+                b_out = _scale_for_brightness(b, g_bri)
+            if (color_wheel is not None and "color-wheel" in cm
+                    and not any(c in cm for c in ("red", "green", "blue"))):
+                uni_buf.set_channel(fx["addr"] + cm["color-wheel"], color_wheel)
+            elif cm and (r or g or b
+                         or any(c in cm for c in ("red", "green", "blue"))):
+                uni_buf.set_fixture_rgb(fx["addr"], r_out, g_out, b_out, profile)
             # Dimmer
             if fx["ch_map"] and "dimmer" in fx["ch_map"]:
                 dim = dimmer if dimmer is not None else (255 if (r or g or b) else 0)
+                dim = _scale_for_brightness(dim, g_bri)
                 uni_buf.set_fixture_dimmer(fx["addr"], dim, profile)
             # Pan/Tilt
             if pan is not None and tilt is not None and profile:
@@ -14387,7 +14626,8 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
         if frame_count % 40 == 0:  # reap temporals every 1s
             _reap_temporal_objects()
         _evaluate_track_actions(elapsed, engine, dmx_fixtures,
-                                 timeline_track_fids=timeline_track_fids)
+                                 timeline_track_fids=timeline_track_fids,
+                                 tl_action_ids=tl_action_ids)
         frame_count += 1
         if frame_count == 1:
             log.info("DMX playback: first frame sent at elapsed=%.1fs", elapsed)
@@ -14633,6 +14873,31 @@ def _show_playback_loop(playlist_order, loop_all, go_epoch, start_idx=0):
         return
 
     log.info("Show playback: %d timelines, loop=%s, startIdx=%d", len(tl_list), loop_all, start_idx)
+
+    # #840 — single-item looping playlist: route through
+    # `_dmx_playback_loop(loop=True)`. That function does correct modulo
+    # wrap internally and only blackouts on stop, eliminating the one-
+    # frame blackout that the per-iteration `_dmx_playback_single` path
+    # produces at every loop boundary.
+    if loop_all and len(tl_list) == 1 and start_idx == 0:
+        tid, tl = tl_list[0]
+        duration = tl.get("durationS", 60)
+        _show_playback["currentIndex"] = 0
+        _show_playback["currentTid"] = tid
+        _settings["activeTimeline"] = tid
+        _save("settings", _settings)
+        log.info("Show playback: single-item loop_all → _dmx_playback_loop")
+        _dmx_playback_loop(tid, time.time(), duration, loop=True)
+        _show_playback["running"] = False
+        _show_playback["currentTid"] = -1
+        with _lock:
+            _settings["runnerRunning"] = False
+            _settings["activeTimeline"] = -1
+            _settings["runnerStartEpoch"] = 0
+            _save("settings", _settings)
+        log.info("Show playback: finished")
+        return
+
     cumulative = 0
     first_pass = True
 
@@ -14653,8 +14918,13 @@ def _show_playback_loop(playlist_order, loop_all, go_epoch, start_idx=0):
             _settings["activeTimeline"] = tid
             _save("settings", _settings)
 
-            # Run the single-timeline DMX loop inline (blocking)
-            _dmx_playback_single(tid, time.time(), duration)
+            # Run the single-timeline DMX loop inline (blocking).
+            # #840 — this segment is "final" only when (a) it's the last
+            # item of the playlist AND (b) we're not looping. Otherwise
+            # skip the blackout sweep so the next iteration's first
+            # frame doesn't follow an all-zero frame on the wire.
+            is_final = (idx == len(tl_list) - 1) and not loop_all
+            _dmx_playback_single(tid, time.time(), duration, is_final=is_final)
 
             if _dmx_playback_stop.is_set():
                 break
@@ -14677,19 +14947,37 @@ def _show_playback_loop(playlist_order, loop_all, go_epoch, start_idx=0):
     log.info("Show playback: finished")
 
 
-def _dmx_playback_single(tid, go_epoch, duration):
-    """Play a single timeline's DMX data. Returns when done or stopped."""
+def _dmx_playback_single(tid, go_epoch, duration, is_final=True):
+    """Play a single timeline's DMX data. Returns when done or stopped.
+
+    `is_final` (#840): when False, skip the post-loop blackout sweep
+    so the next playlist iteration's first frame doesn't follow an
+    all-zero frame on the wire. Pre-fix the orchestrator's per-iteration
+    call always blackout-swept on natural end, producing a one-frame
+    blackout at every loop wrap. Caller (`_show_playback_loop`) sets
+    True only on the final iteration of a non-looping playlist or on
+    the last iteration before stop. For single-item looping playlists
+    the orchestrator now bypasses this function entirely and uses
+    `_dmx_playback_loop(loop=True)` which has correct modulo-wrap and
+    only blackouts on stop.
+    """
     result = _bake_result.get(tid)
     if not result:
         return
-    # #829 — same timeline-scope collection as _dmx_playback_loop.
+    # #829 / #835 — same timeline-scope + action-id collection as _dmx_playback_loop.
     _tl_obj = next((t for t in _timelines if t.get("id") == tid), None)
     timeline_track_fids = set()
+    tl_action_ids = set()
     for _tr in (_tl_obj.get("tracks", []) if _tl_obj else []):
         _fid = _tr.get("fixtureId")
         if _fid is not None:
             try: timeline_track_fids.add(int(_fid))
             except (TypeError, ValueError): pass
+        for _cl in _tr.get("clips", []):
+            _aid = _cl.get("actionId")
+            if _aid is not None:
+                try: tl_action_ids.add(int(_aid))
+                except (TypeError, ValueError): pass
     baked_fixtures = result.get("fixtures", {})
     dmx_fixtures = []
     for f in _fixtures:
@@ -14746,6 +15034,9 @@ def _dmx_playback_single(tid, go_epoch, duration):
             continue
         # #763 — claim-arbiter snapshot, frozen for the duration of this frame.
         claim_snap = _claim_arbiter.snapshot()
+        # #843 — segment-mode also snapshots master brightness per frame.
+        with _lock:
+            g_bri = _settings.get("globalBrightness", 255)
         for fx in dmx_fixtures:
             # #511 — skip playback for fixtures mid-calibration.
             if _fixture_is_calibrating(fx.get("id")):
@@ -14780,14 +15071,24 @@ def _dmx_playback_single(tid, go_epoch, duration):
             zoom = ch_vals.get("zoom", (None, 0))[0]
             profile = {"channel_map": fx["ch_map"], "channels": fx.get("channels", [])} if fx["ch_map"] else None
             uni_buf = engine.get_universe(fx["uni"])
-            if fx["ch_map"] and "red" in fx["ch_map"]:
-                uni_buf.set_fixture_rgb(fx["addr"], r, g, b, profile)
-            elif fx["ch_map"] and "color-wheel" in fx["ch_map"] and (r or g or b):
-                from dmx_profiles import rgb_to_wheel_slot
-                cw = color_wheel if color_wheel is not None else rgb_to_wheel_slot(fx, r, g, b)
-                uni_buf.set_channel(fx["addr"] + fx["ch_map"]["color-wheel"], cw)
+            # #842 — see _dmx_playback_loop for the dispatch rationale.
+            cm = fx["ch_map"] or {}
+            # #843 — apply global brightness (matches _dmx_playback_loop).
+            if "dimmer" in cm:
+                r_out, g_out, b_out = r, g, b
+            else:
+                r_out = _scale_for_brightness(r, g_bri)
+                g_out = _scale_for_brightness(g, g_bri)
+                b_out = _scale_for_brightness(b, g_bri)
+            if (color_wheel is not None and "color-wheel" in cm
+                    and not any(c in cm for c in ("red", "green", "blue"))):
+                uni_buf.set_channel(fx["addr"] + cm["color-wheel"], color_wheel)
+            elif cm and (r or g or b
+                         or any(c in cm for c in ("red", "green", "blue"))):
+                uni_buf.set_fixture_rgb(fx["addr"], r_out, g_out, b_out, profile)
             if fx["ch_map"] and "dimmer" in fx["ch_map"]:
                 dim = dimmer if dimmer is not None else (255 if (r or g or b) else 0)
+                dim = _scale_for_brightness(dim, g_bri)
                 uni_buf.set_fixture_dimmer(fx["addr"], dim, profile)
             if pan is not None and tilt is not None and profile:
                 uni_buf.set_fixture_pan_tilt(fx["addr"], pan, tilt, profile)
@@ -14818,27 +15119,35 @@ def _dmx_playback_single(tid, go_epoch, duration):
         if frame_count % 40 == 0:
             _reap_temporal_objects()
         _evaluate_track_actions(elapsed, engine, dmx_fixtures,
-                                 timeline_track_fids=timeline_track_fids)
+                                 timeline_track_fids=timeline_track_fids,
+                                 tl_action_ids=tl_action_ids)
         frame_count += 1
     # Blackout on segment end (#364) — zero RGB, dimmer, pan/tilt, and all extras.
     # #763 — leave claimed fixtures alone; the operator owns their output.
-    seg_snap = _claim_arbiter.snapshot()
-    for fx in dmx_fixtures:
-        if _claim_arbiter.is_muted(fx["fid"], seg_snap):
-            continue
-        profile = {"channel_map": fx["ch_map"], "channels": fx.get("channels", [])} if fx["ch_map"] else None
-        uni_buf = engine.get_universe(fx["uni"])
-        uni_buf.set_fixture_rgb(fx["addr"], 0, 0, 0, profile)
-        if fx["ch_map"] and "dimmer" in fx["ch_map"]:
-            uni_buf.set_fixture_dimmer(fx["addr"], 0, profile)
-        if profile and fx["ch_map"]:
-            # Zero all mapped channels (pan, tilt, strobe, gobo, etc.)
-            zero_ch = {}
-            for ch_type in ("pan", "tilt", "strobe", "gobo", "color-wheel", "prism", "focus", "zoom", "speed"):
-                if ch_type in fx["ch_map"]:
-                    zero_ch[ch_type] = 0
-            if zero_ch:
-                uni_buf.set_fixture_channels(fx["addr"], zero_ch, profile)
+    # #840 — only run the blackout sweep when this is the final segment
+    # OR when the operator pressed Stop. Mid-playlist iteration boundaries
+    # (loop wrap, next-segment-coming-up) skip it so the universe buffer
+    # holds its t=duration values until the next segment writes its t=0
+    # values, eliminating the visible one-frame blackout.
+    ended_by_stop = _dmx_playback_stop.is_set()
+    if is_final or ended_by_stop:
+        seg_snap = _claim_arbiter.snapshot()
+        for fx in dmx_fixtures:
+            if _claim_arbiter.is_muted(fx["fid"], seg_snap):
+                continue
+            profile = {"channel_map": fx["ch_map"], "channels": fx.get("channels", [])} if fx["ch_map"] else None
+            uni_buf = engine.get_universe(fx["uni"])
+            uni_buf.set_fixture_rgb(fx["addr"], 0, 0, 0, profile)
+            if fx["ch_map"] and "dimmer" in fx["ch_map"]:
+                uni_buf.set_fixture_dimmer(fx["addr"], 0, profile)
+            if profile and fx["ch_map"]:
+                # Zero all mapped channels (pan, tilt, strobe, gobo, etc.)
+                zero_ch = {}
+                for ch_type in ("pan", "tilt", "strobe", "gobo", "color-wheel", "prism", "focus", "zoom", "speed"):
+                    if ch_type in fx["ch_map"]:
+                        zero_ch[ch_type] = 0
+                if zero_ch:
+                    uni_buf.set_fixture_channels(fx["addr"], zero_ch, profile)
 
 
 @app.post("/api/show/start")
@@ -14997,7 +15306,12 @@ def api_settings_save():
         if errors:
             return jsonify(err="calibrationTuning validation failed",
                             details=errors), 400
+    # #843 — capture the pre-write brightness so we know whether to
+    # broadcast after the save commits. Only emit a UDP frame on change.
+    bri_changed = False
+    bri_new = None
     with _lock:
+        bri_prev = _settings.get("globalBrightness", 255)
         for k in ("name", "units", "canvasW", "canvasH", "darkMode", "runnerLoop",
                   "globalBrightness", "logging", "logPath", "autoStartShow",
                   # #685 follow-up — operator-selected vision model for AI
@@ -15024,14 +15338,90 @@ def api_settings_save():
         _stage["w"] = _settings["canvasW"] / 1000.0
         _stage["h"] = _settings["canvasH"] / 1000.0
         _save("stage", _stage)
+        bri_new = _settings.get("globalBrightness", 255)
+        bri_changed = (bri_new != bri_prev)
     # Toggle file logging if changed
     if "logging" in body:
         _apply_logging(body["logging"], body.get("logPath"))
+    # #843 — manual-slider brightness change must reach the lights too.
+    if bri_changed and bri_new is not None:
+        _broadcast_brightness(bri_new)
     return jsonify(ok=True)
+
+# #843 — gamma LUT for global-brightness scaling at render time.
+#
+# LED children apply ``childBrightness`` via FastLED's gamma-corrected
+# scaler in firmware. The orchestrator-side DMX render path was
+# unscaled, so a mixed rig at globalBrightness=128 saw the LED strips
+# look noticeably dimmer than DMX pars at the same setting (LED ~22%
+# perceived, DMX ~50% linear). This LUT is the same gamma=2.2 curve
+# FastLED uses, so a half-brightness setting reads the same on both
+# fixture types.
+#
+# Build at import time so render frames pay zero cost beyond a list
+# index. 256 bytes — trivial.
+_GAMMA_LUT = bytes(int((i / 255.0) ** 2.2 * 255 + 0.5) for i in range(256))
+
+
+def _scale_for_brightness(value, g_bri):
+    """Apply the global-brightness gamma curve to an 8-bit channel value.
+
+    ``g_bri`` is the master brightness 0..255. ``value`` is the
+    pre-scaled output (e.g. the bake's dimmer byte or an RGB
+    component). Returns the gamma-corrected scaled byte.
+
+    Fast-path: ``g_bri == 255`` returns the input unchanged. Most
+    frames hit this path during normal operation; only Auto Brightness
+    or a non-default master slider sees the LUT lookup.
+    """
+    if g_bri >= 255:
+        return value
+    if g_bri <= 0:
+        return 0
+    # Linear scale first, then gamma — matches FastLED's setBrightness
+    # ordering: brightness modulates intensity, then the LUT maps the
+    # post-scaled value to the perception curve.
+    scaled = (int(value) * int(g_bri)) // 255
+    return _GAMMA_LUT[scaled & 0xFF]
+
+
+def _brightness_packet(value):
+    """Build a CMD_SET_BRIGHTNESS UDP packet for a single 0..255 value."""
+    iv = max(0, min(255, int(value)))
+    return _hdr(CMD_SET_BRIGHTNESS) + bytes([iv])
+
+
+def _broadcast_brightness(value):
+    """Send CMD_SET_BRIGHTNESS to every online LED child (#843).
+
+    The 0x22 packet carries a single byte 0..255. Gyro / DMX-bridge /
+    camera children ignore it; LED children apply it via FastLED. We
+    skip ``type=="dmx"`` and ``type=="gyro"`` children so we don't burn
+    UDP frames they'll discard.
+
+    Used by:
+      * ``/api/brightness`` fast path (Android auto-brightness, ~20 Hz)
+      * ``/api/settings`` save when ``globalBrightness`` changes
+      * ``_parse_pong`` post-receipt (newly-online child top-up)
+    """
+    pkt = _brightness_packet(value)
+    for c in _children:
+        ip = c.get("ip")
+        if not ip:
+            continue
+        ctype = c.get("type")
+        if ctype in ("dmx", "gyro"):
+            continue  # not LED children — packet has no meaning
+        _send(ip, pkt)
+
 
 # #804 — fast-path master brightness for Android auto-brightness (mic-driven).
 # Updates the live in-memory value at high cadence (~20 Hz) without rewriting
 # settings.json on every call. Manual slider keeps using POST /api/settings.
+#
+# #843 — additionally broadcasts CMD_SET_BRIGHTNESS to all LED children on
+# every change so the value actually reaches the lights. Pre-fix the value
+# stashed in _settings was never read by any output path.
 @app.post("/api/brightness")
 def api_brightness_fast():
     body = request.get_json(silent=True) or {}
@@ -15040,7 +15430,10 @@ def api_brightness_fast():
         return jsonify(ok=False, err="value must be 0..255"), 400
     iv = int(max(0, min(255, v)))
     with _lock:
+        prev = _settings.get("globalBrightness", 255)
         _settings["globalBrightness"] = iv
+    if iv != prev:
+        _broadcast_brightness(iv)
     return jsonify(ok=True, value=iv)
 
 @app.post("/api/logging/start")
@@ -15115,6 +15508,11 @@ def api_actions_create():
                 a[k] = body[k]
         a.setdefault("name", name)
         a.setdefault("type", 1)
+        # #841 — colorWheel is type-17-only. Drop it for any other type
+        # so old SPA payloads / API clients can't reintroduce stale
+        # wheel-slot values that defeat rgb_to_wheel_slot at render time.
+        if a.get("type") != 17:
+            a.pop("colorWheel", None)
         _actions.append(a)
         _nxt_a += 1
         _save("actions", _actions)
@@ -15137,6 +15535,10 @@ def api_action_put(aid):
         for k in _ACTION_FIELDS:
             if k in body:
                 a[k] = body[k]
+        # #841 — colorWheel is type-17-only. Strip after merge in case
+        # the type changed or the SPA sent a 0 alongside other fields.
+        if a.get("type") != 17:
+            a.pop("colorWheel", None)
         _save("actions", _actions)
     return jsonify(ok=True)
 
@@ -17453,6 +17855,8 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
 
 
 

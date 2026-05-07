@@ -241,13 +241,23 @@ function renderFirmwareLibrary(){
       var badge;
       if(e.local){
         badge='<span class="badge" style="background:#14532d;color:#86efac">Local</span>';
+      }else if(e.unreadable){
+        // #821 — file is on disk but the orchestrator can't read it
+        // (file lock, antivirus, OneDrive cloud-only placeholder).
+        // Distinct from "Not downloaded" so the operator knows to fix
+        // the file rather than waiting for a re-download.
+        badge='<span class="badge" style="background:#7c2d12;color:#fdba74" '
+          +'title="Binary exists on disk but the orchestrator could not read it. '
+          +'Check file lock / antivirus / OneDrive cloud-only placeholder; '
+          +'copy the file via Windows Explorer to ensure local availability.">'
+          +'Local — unreadable</span>';
       }else if(!e.hasReleaseAsset){
         badge='<span class="badge" style="background:#475569;color:#cbd5e1" title="No releaseAsset in registry — needs local build">Not downloadable</span>';
       }else{
         badge='<span class="badge" style="background:#78350f;color:#fbbf24">Not downloaded</span>';
       }
       var action='';
-      if(!e.local&&e.hasReleaseAsset){
+      if(!e.local&&!e.unreadable&&e.hasReleaseAsset){
         action='<button class="btn" onclick="fetchFirmware(\''+escapeHtml(e.id)+'\',this)" '
           +'style="font-size:.72em;padding:.18em .5em;background:#1e3a5f;color:#93c5fd">Download</button>';
       }

@@ -1001,9 +1001,16 @@ void gyroUIUpdate() {
                                  s_calibLastPitch,
                                  s_calibLastYaw);
         gyroUdpSetStreaming(true, 0);
+        // Brief cyan-fill confirmation flash on the Calibrate button.
         gyroFillCircle(CX, BTN_CAL_Y, BTN_CAL_R, GC_CYAN);
         delay(120);
-        drawCalibratePage();
+        // #813 §2.1 — auto-advance to the Colour page after the
+        // calibrate gesture completes. The Calibrate page exists only
+        // to perform the gesture; once done, the operator's next useful
+        // surface is colour selection. Pre-fix the UI stayed on page 0
+        // and the operator had to swipe manually.
+        s_page = 1;
+        drawColourPage();
     }
 
     // #772 / #825 — server refused the claim (another device holds the

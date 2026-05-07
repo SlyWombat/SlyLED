@@ -49,8 +49,12 @@ def test_807_park_loop_targets_track_driven_movers():
     src = inspect.getsource(parent_server._dmx_playback_loop)
     _assert("track_driven_fids" in src,
             "_dmx_playback_loop builds a track_driven_fids set")
-    _assert("for ta in (a for a in _actions if a.get(\"type\") == 18)" in src,
-            "_dmx_playback_loop iterates type=18 (Track) actions")
+    # #835 — the iteration now gates on tl_action_ids (only Track
+    # actions referenced by the running timeline contribute to the
+    # park scope). Pre-#835 form was `a.get("type") == 18` only.
+    _assert("a.get(\"type\") == 18" in src
+            and "tl_action_ids" in src,
+            "_dmx_playback_loop iterates type=18 Track actions used by this timeline")
     _assert("for tfid in track_driven_fids" in src,
             "_dmx_playback_loop park step iterates track_driven_fids")
     _assert("_park_fixture_at_home(tfid)" in src,

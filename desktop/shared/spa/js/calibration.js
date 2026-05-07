@@ -1475,7 +1475,7 @@ var _MCAL_ADV_LABELS={
   refineAfterHit:'Refine after battleship hit',
   battleshipPanStepsMax:'Battleship — max pan steps',
   battleshipTiltStepsMax:'Battleship — max tilt steps',
-  adaptiveDensity:'Adaptive density (#661)',
+  adaptiveDensity:'Adaptive density',
   settlePixelThresh:'Settle threshold (px)',
   discoveryBattleshipS:'Discovery budget (s)',
   mappingS:'Mapping budget (s)',
@@ -1684,7 +1684,7 @@ function _smartCoverageRender(fid){
           // #730 — pre-#730 secondary records can't bootstrap. Tell the
           // operator to re-run the wizard rather than burying it in a
           // generic abort reason.
-          line+=' · re-run Home wizard (secondary format changed in #730)';
+          line+=' · re-run Home wizard (saved secondary anchor uses an old format)';
         }else if(preview.abortReason){
           line+=' · preview: '+preview.abortReason;
         }else{

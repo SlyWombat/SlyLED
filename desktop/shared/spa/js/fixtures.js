@@ -789,7 +789,7 @@ function _setHomeShellHtml(f){
   s += '<div style="font-size:.85em;color:#94a3b8;margin-bottom:.6em">';
   s += 'Drive the fixture until the beam aims along its <b>rotation vector</b> ';
   s += '<span style="color:#cbd5e1">[tilt='+rot[0]+'°, pan='+rot[2]+'°, roll='+rot[1]+'°]</span>, ';
-  s += 'then Confirm. The saved DMX value becomes the cal-kickoff anchor (#687).';
+  s += 'then Confirm. The saved DMX value becomes the cal-kickoff anchor.';
   s += '</div>';
   // Pan slider
   s += '<label style="font-size:.82em;color:#cbd5e1">Pan <span id="sh-pan-val" style="color:#64748b">DMX16='+Math.round(_setHomeState.pan*65535)+'</span></label>';

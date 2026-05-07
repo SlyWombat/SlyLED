@@ -189,7 +189,12 @@ function _showActModal(a){
   h+=' <label style="display:inline;margin-left:.5em">Density</label><input type="number" id="ae-tden" value="'+(a?a.density||3:3)+'" min="1" max="20" style="width:50px">';
   h+=' <label style="display:inline;margin-left:.5em">Fade Speed</label><input type="number" id="ae-tfad" value="'+(a?a.fadeSpeed||15:15)+'" min="1" max="100" style="width:50px">';
   h+='</div>';
-  // DMX Scene: dimmer, pan, tilt, strobe, gobo
+  // #841 — DMX Scene-family editor: dimmer, pan, tilt, strobe, gobo,
+  // prism. Colour Wheel is intentionally NOT in this shared block —
+  // color is set abstractly via the top-of-editor RGB picker, and the
+  // bake/render layer derives the wheel slot via rgb_to_wheel_slot
+  // (#842). The dedicated type-17 (Colour Wheel) action editor below
+  // exposes manual slot control where it actually belongs.
   var isDmx=t>=14&&t<=17;
   h+='<div id="ae-dmx"'+(isDmx?'':' style="display:none"')+'>';
   h+='<label>Dimmer (0–255)</label><input type="number" id="ae-dimmer" value="'+(a?a.dimmer||255:255)+'" min="0" max="255" style="width:80px">';
@@ -197,8 +202,13 @@ function _showActModal(a){
   h+=' <label style="display:inline;margin-left:.5em">Tilt (0.0–1.0)</label><input type="number" id="ae-tilt" value="'+(a?a.tilt||0.5:0.5)+'" min="0" max="1" step="0.01" style="width:80px">';
   h+='<label>Strobe (0=off, 1–255=slow→fast)</label><input type="number" id="ae-strobe" value="'+(a?a.strobe||0:0)+'" min="0" max="255" style="width:80px">';
   h+='<label>Gobo (0=open, 1+=gobo index)</label><input type="number" id="ae-gobo" value="'+(a?a.gobo||0:0)+'" min="0" max="255" style="width:80px">';
-  h+='<label>Colour Wheel (0=open, 1+=colour index)</label><input type="number" id="ae-colorwheel" value="'+(a?a.colorWheel||0:0)+'" min="0" max="255" style="width:80px">';
   h+='<label>Prism (0=off)</label><input type="number" id="ae-prism" value="'+(a?a.prism||0:0)+'" min="0" max="255" style="width:80px">';
+  h+='</div>';
+  // Colour Wheel (type 17) — manual slot input. Only this action type
+  // exposes the wheel-slot index directly; for every other type the
+  // slot is derived from RGB via rgb_to_wheel_slot at render time.
+  h+='<div id="ae-colorwheel-block"'+(t===17?'':' style="display:none"')+'>';
+  h+='<label>Colour Wheel slot (0=open, 1+=colour index)</label><input type="number" id="ae-colorwheel" value="'+(a?a.colorWheel||0:0)+'" min="0" max="255" style="width:80px">';
   h+='</div>';
   // Pan/Tilt Move: start/end pan/tilt, speed
   h+='<div id="ae-ptmove"'+(t===15?'':' style="display:none"')+'>';
@@ -377,6 +387,9 @@ function _aeTypeChg(){
   document.getElementById('ae-twinkle').style.display=(t===8||t===12)?'block':'none'; // Twinkle + Sparkle
   document.getElementById('ae-dmx').style.display=(t>=14&&t<=17)?'block':'none';
   document.getElementById('ae-ptmove').style.display=t===15?'block':'none';
+  // #841 — Colour Wheel slot input is exposed only on type 17.
+  var cwBlk=document.getElementById('ae-colorwheel-block');
+  if(cwBlk)cwBlk.style.display=(t===17)?'block':'none';
   document.getElementById('ae-track').style.display=t===18?'block':'none';
 }
 
@@ -411,8 +424,10 @@ function _aeSubmit(id,btn){
     body.tilt=parseFloat(document.getElementById('ae-tilt').value)||0;
     body.strobe=parseInt(document.getElementById('ae-strobe').value)||0;
     body.gobo=parseInt(document.getElementById('ae-gobo').value)||0;
-    body.colorWheel=parseInt(document.getElementById('ae-colorwheel').value)||0;
     body.prism=parseInt(document.getElementById('ae-prism').value)||0;
+    // #841 — colorWheel is set ONLY by type 17 (Colour Wheel action)
+    // below. Types 14/15/16 don't expose the slot input; their colour
+    // is derived from RGB at render time (#842).
   }
   if(t===15){body.ptStartPos=[parseFloat(document.getElementById('ae-pt-sx').value)||0,parseFloat(document.getElementById('ae-pt-sy').value)||0,parseFloat(document.getElementById('ae-pt-sz').value)||0];body.ptEndPos=[parseFloat(document.getElementById('ae-pt-ex').value)||0,parseFloat(document.getElementById('ae-pt-ey').value)||0,parseFloat(document.getElementById('ae-pt-ez').value)||0];body.speedMs=_s2ms('ae-pt-spd',5000);}
   if(t===16){body.gobo=parseInt(document.getElementById('ae-gobo').value)||0;}

@@ -941,10 +941,10 @@ var _CAL_TUNE_GROUPS=[
   // #708 — DD plausibility-gate bounds (#697) + surface-aware reject
   // toggle (#684) + auto-pose-fit drift threshold (#709). The "Lab vs
   // Stage" preset on the panel writes these in bulk.
-  {title:'Confirm-nudge plausibility (#697)',keys:[
+  {title:'Confirm-nudge plausibility',keys:[
     'confirmContinuityCapMult','confirmRatioMin','confirmRatioMax','confirmSymmetryMinPx'
   ]},
-  {title:'Depth + pose (#684 / #709)',keys:[
+  {title:'Depth + pose',keys:[
     'surfaceAwareReject','poseDriftThresholdMm'
   ]},
   {title:'Settle timing',keys:[

@@ -128,8 +128,16 @@ THEMES = {
         "accent_colors": [[0, 255, 80], [120, 0, 200]],
     },
     "spotlight-sweep": {
-        "name": "Spotlight Sweep",
-        "desc": "Warm orb sweeps stage — moving heads track it",
+        "name": "Warm Orb Sweep",
+        # #837 — desc renamed to match implementation. The theme emits a
+        # spatial-field sphere effect that drifts across the stage and
+        # per-mover sweeps at #836's stage-coord endpoints; it does NOT
+        # emit a Track action. Pre-fix desc promised "moving heads track
+        # it" which the generator never delivered. (Adding Track-action
+        # routing here would require a patrol-prop target — out of
+        # scope; the figure-eight / spotlight-follow-person themes
+        # already fill the operator-driven-tracking niche.)
+        "desc": "Warm orb sweeps stage with coordinated mover wash",
         "durationS": 20,
         "palette": [[255, 240, 200], [200, 180, 255]],
         "base_action": {"type": 1, "r": 20, "g": 15, "b": 10},
@@ -141,7 +149,10 @@ THEMES = {
     },
     "concert-wash": {
         "name": "Concert Wash",
-        "desc": "Magenta flood + amber spot — moving heads follow",
+        # #837 — desc no longer claims "moving heads follow"; the theme
+        # emits per-mover stage-coord sweeps + a spatial-field plane,
+        # not a Track action. Coordinated movement, not target-tracking.
+        "desc": "Magenta flood + amber accent with synced mover sweeps",
         "durationS": 30,
         "palette": [[220, 0, 180], [255, 160, 40], [0, 40, 200]],
         "base_action": {"type": 3, "r": 0, "g": 40, "b": 200, "periodMs": 5000, "minBri": 20},
@@ -179,7 +190,11 @@ THEMES = {
     },
     "thunderstorm": {
         "name": "Thunderstorm",
-        "desc": "Lightning on deep blue — heads chase strikes",
+        # #837 — desc no longer claims "heads chase strikes"; the theme
+        # emits lightning sphere effects + per-mover stage-coord sweeps
+        # but no Track action. Bolts originate at light-emitting
+        # fixture positions only (cameras / gyros excluded post-#836).
+        "desc": "Lightning bursts on a deep-blue base wash",
         "durationS": 30,
         "palette": [[255, 255, 240], [200, 200, 255], [30, 20, 80]],
         "base_action": {"type": 1, "r": 5, "g": 5, "b": 30},
@@ -192,7 +207,9 @@ THEMES = {
     },
     "dance-floor": {
         "name": "Dance Floor",
-        "desc": "Fast orbiting spots + chase pulse — rapid tracking",
+        # #837 — desc no longer claims "rapid tracking"; theme is
+        # spatial sweeps + chase pulse, not a Track action.
+        "desc": "Fast orbiting spots + chase pulse",
         "durationS": 20,
         "palette": [[255, 0, 50], [50, 0, 255], [0, 255, 80]],
         "base_action": {"type": 4, "r": 255, "g": 0, "b": 128, "speedMs": 30, "spacing": 6, "direction": 0},
@@ -214,6 +231,41 @@ THEMES = {
         "energy": 0.3,
         "accent_colors": [[255, 240, 200]],
         "live_track": True,
+    },
+    # #839 — flagship template built on the new ribbon primitive. Every
+    # mover beam locks onto a single travelling stage-coord anchor so
+    # the rig moves as one unit; layered phase-offset spatial sweeps
+    # along the same path produce the shimmer that distinguishes
+    # "aurora" from "stripe"; sparkle overlay adds twinkles above the
+    # wash; fade-in/out brackets wrap the timeline boundaries.
+    "aurora-curtain": {
+        "name": "Aurora Curtain",
+        "desc": "Layered aurora ribbons sweep across the stage with synced movers",
+        "durationS": 60,
+        "palette": [[0, 200, 140], [40, 220, 180], [120, 80, 220],
+                     [180, 40, 200], [60, 240, 200]],
+        "base_action": {
+            "type": 3,           # ACT_BREATHE
+            "r": 0, "g": 80, "b": 60,
+            "periodMs": 8000,
+            "minBri": 35,        # the no-blackout floor
+        },
+        "sparkle_layer": {
+            "type": 12,          # ACT_SPARKLE
+            "r": 200, "g": 255, "b": 240,
+            "spawnMs": 240, "density": 2, "fadeSpeed": 8,
+        },
+        "ribbon": {
+            "axis": "left-right",
+            "speedS": 12,
+            "loopMode": "ping-pong",
+            "elevation": 0.65,
+            "phaseOffsets": [0.00, 0.07, -0.05],
+        },
+        "energy": 0.35,
+        "accent_colors": [[150, 255, 200], [80, 60, 255], [255, 100, 220]],
+        "fadeInS":  1.5,
+        "fadeOutS": 1.5,
     },
 }
 
@@ -263,8 +315,14 @@ def _classify_fixtures(fixtures, profile_lib=None):
                 dmx_movers.append(f)
             else:
                 dmx_pars.append(f)
-        else:
+        elif ft == "led":
             led_fixtures.append(f)
+        # #836 — non-light fixtures (camera, gyro, …) are deliberately
+        # NOT bucketed. Pre-fix the else-branch swallowed them into
+        # `led_fixtures`, producing inert LED-base tracks for cameras
+        # and gyro pucks that pollute the bake and inflate the
+        # dashboard's fixture count without producing any visible
+        # output (those fixtures can't render an action).
 
     return led_fixtures, dmx_pars, dmx_movers, groups
 
@@ -283,11 +341,17 @@ def _make_sweep_path(bounds, direction, jitter=True):
     elif direction == "right-left":
         return [xMax, j(cy), j(cz)], [xMin, j(cy), j(cz)]
     elif direction == "up":
-        return [j(cx), yMin, j(cz)], [j(cx), yMax, j(cz)]
+        # #837 — Z is the vertical axis (Z-up project convention; see
+        # CLAUDE.md "Rotation convention"). Pre-fix this swept Y, which
+        # made every "up" sweep travel front-to-back across the stage
+        # instead of floor-to-ceiling. Themes affected: rainbow-up,
+        # slow-fire (rising flames). Y is the depth (back-wall →
+        # audience) axis and stays at center for vertical sweeps.
+        return [j(cx), j(cy), zMin], [j(cx), j(cy), zMax]
     elif direction == "down":
-        return [j(cx), yMax, j(cz)], [j(cx), yMin, j(cz)]
+        return [j(cx), j(cy), zMax], [j(cx), j(cy), zMin]
     elif direction == "cross":
-        # Diagonal
+        # Diagonal — sweeps left-to-right while rising in Z (#837).
         return [xMin, j(cy), zMin], [xMax, j(cy), zMax]
     else:  # "random"
         return (
@@ -374,10 +438,15 @@ def _generate_spatial_effects(theme, bounds, fixture_positions, dmx_movers):
     palette = theme["palette"]
     accent = theme.get("accent_colors", palette[:2])
     dur = theme["durationS"]
-    sweep_speed = theme["sweep_speed"]
-    shape = theme["sweep_shape"]
-    direction = theme["sweep_dir"]
-    energy = theme["energy"]
+    # #839 — ribbon themes don't carry sweep_* fields. When they fall
+    # through to this generator (no movers on the rig, so the ribbon
+    # path was skipped), provide sensible defaults so the legacy
+    # spatial-sweep generator still produces useful output instead of
+    # raising KeyError.
+    sweep_speed = theme.get("sweep_speed", 10)
+    shape = theme.get("sweep_shape", "sphere")
+    direction = theme.get("sweep_dir", "left-right")
+    energy = theme.get("energy", 0.4)
     radius = _sphere_radius_for_coverage(bounds)
 
     # Number of sweep effects scales with energy and duration
@@ -401,13 +470,16 @@ def _generate_spatial_effects(theme, bounds, fixture_positions, dmx_movers):
         if shape == "sphere":
             size = {"radius": radius + random.randint(-300, 500)}
         elif shape == "plane":
-            # Determine normal from direction
+            # #837 — plane normal aligns with the sweep direction. Z is
+            # the vertical axis (Z-up project convention); pre-fix
+            # up/down used [0,1,0] which is the depth axis, producing a
+            # plane that swept front-to-back instead of floor-to-ceiling.
             if d in ("left-right", "right-left"):
                 normal = [1, 0, 0]
             elif d in ("up", "down"):
-                normal = [0, 1, 0]
+                normal = [0, 0, 1]
             else:
-                normal = [1, 0.3, 0]
+                normal = [1, 0, 0.3]   # diagonal: X-dominant + slight Z tilt
             size = {"normal": normal, "thickness": max(1000, radius)}
         elif shape == "box":
             w = bounds["xMax"] - bounds["xMin"]
@@ -449,7 +521,13 @@ def _generate_spatial_effects(theme, bounds, fixture_positions, dmx_movers):
             # Aim at the midpoint height of movers
             mid_y = sum(p[1] for p in sorted_pos) // len(sorted_pos)
             effects.append({
-                "name": f"{theme['name']} Tracker",
+                # #836 item 5 — renamed from "Tracker" to "Mover Visit"
+                # to defuse confusion with Track actions (type 18). This
+                # IS a spatial-field sphere effect that visits fixture
+                # positions; it has nothing to do with object tracking
+                # or camera detections. The previous name caused the
+                # operator to assume a missing tracker target.
+                "name": f"{theme['name']} Mover Visit",
                 "category": "spatial-field",
                 "shape": "sphere",
                 "r": color[0], "g": color[1], "b": color[2],
@@ -463,11 +541,18 @@ def _generate_spatial_effects(theme, bounds, fixture_positions, dmx_movers):
                 "blend": "add",
             })
 
-    # Thunderstorm special: add lightning bolts at random fixture positions
-    if theme.get("lightning") and fixture_positions:
-        positions = list(fixture_positions.values())
-        for i in range(min(4, len(positions))):
-            pos = random.choice(positions)
+    # Thunderstorm special: add lightning bolts at random fixture positions.
+    # #837 — bolts travel on Z (top → floor) and originate at light-
+    # emitting positions only. Pre-fix the bolt motion was on Y (front
+    # → back) and could anchor on cameras / gyros / patrol props (any
+    # entry in `fixture_positions`) — strikes appeared at non-light
+    # positions and weren't actually descending.
+    light_emitting_ids = {m["id"] for m in dmx_movers}
+    light_positions = [p for fid, p in fixture_positions.items()
+                        if fid in light_emitting_ids]
+    if theme.get("lightning") and light_positions:
+        for i in range(min(4, len(light_positions))):
+            pos = random.choice(light_positions)
             color = random.choice(accent)
             effects.append({
                 "name": f"Lightning {i+1}",
@@ -476,10 +561,12 @@ def _generate_spatial_effects(theme, bounds, fixture_positions, dmx_movers):
                 "r": color[0], "g": color[1], "b": color[2],
                 "size": {"radius": radius},
                 "motion": {
+                    # Strike from above (zMax+jitter) down to floor (zMin),
+                    # offset slightly in X/Y for natural variation.
                     "startPos": [pos[0] + random.randint(-500, 500),
-                                 bounds["yMax"] + 1000,
-                                 pos[2] + random.randint(-500, 500)],
-                    "endPos": [pos[0], bounds["yMin"], pos[2]],
+                                 pos[1] + random.randint(-500, 500),
+                                 bounds["zMax"] + 1000],
+                    "endPos": [pos[0], pos[1], bounds["zMin"]],
                     "durationS": 0.3,
                     "easing": "ease-in",
                 },
@@ -493,6 +580,17 @@ def _generate_mover_actions(theme, dmx_movers, fixture_positions, bounds):
     """Generate pan/tilt sweep actions for moving heads.
 
     Returns list of action dicts targeting specific movers.
+
+    #836 — sweep endpoints are stage-mm world coordinates (`ptStartPos`
+    / `ptEndPos`), NOT DMX-range fractions. Pre-fix the generator
+    emitted `panStart` / `panEnd` / `tiltStart` / `tiltEnd` as 0.0-1.0
+    fractions of each mover's mechanical pan/tilt range, which made
+    every mover sweep through a different world-space arc — five
+    disjoint movements instead of a coordinated wash. The bake engine
+    already routes `ptStartPos` / `ptEndPos` through
+    `spatial_engine.compute_pan_tilt`, which produces per-mover
+    pan/tilt that aim every head at the same world point on every
+    frame.
     """
     if not dmx_movers:
         return []
@@ -501,23 +599,32 @@ def _generate_mover_actions(theme, dmx_movers, fixture_positions, bounds):
     palette = theme["palette"]
     energy = theme["energy"]
 
+    # Pick a sweep direction per theme energy. High energy → diagonal
+    # cross; medium → horizontal; low → gentle vertical. Keeps the
+    # show generator's variety while staying stage-coord throughout.
+    if energy >= 0.7:
+        directions = ["cross", "left-right", "right-left"]
+    elif energy >= 0.4:
+        directions = ["left-right", "right-left"]
+    else:
+        directions = ["up", "down"]
+
     for i, mover in enumerate(dmx_movers):
         color = palette[i % len(palette)]
-
-        # Pan sweep range based on energy
-        pan_range = 0.3 + energy * 0.5
-        pan_start = max(0.0, 0.5 - pan_range / 2)
-        pan_end = min(1.0, 0.5 + pan_range / 2)
-
-        # Tilt follows energy: high energy = more movement
-        tilt_start = max(0.0, 0.4 - energy * 0.2)
-        tilt_end = min(1.0, 0.6 + energy * 0.2)
-
-        # Alternate pan direction for adjacent movers
+        direction = directions[i % len(directions)]
+        # Adjacent movers alternate so two heads next to each other
+        # sweep toward each other (visual interest), without all heads
+        # being parallel.
         if i % 2 == 1:
-            pan_start, pan_end = pan_end, pan_start
+            direction = {
+                "left-right": "right-left",
+                "right-left": "left-right",
+                "up": "down",
+                "down": "up",
+                "cross": "cross",
+            }[direction]
 
-        speed = max(2000, int(8000 / (energy + 0.5)))
+        start_pos, end_pos = _make_sweep_path(bounds, direction, jitter=False)
 
         actions.append({
             "action": {
@@ -525,11 +632,15 @@ def _generate_mover_actions(theme, dmx_movers, fixture_positions, bounds):
                 "type": 15,  # ACT_DMX_PT_MOVE
                 "r": color[0], "g": color[1], "b": color[2],
                 "dimmer": 255,
-                "panStart": round(pan_start, 2),
-                "panEnd": round(pan_end, 2),
-                "tiltStart": round(tilt_start, 2),
-                "tiltEnd": round(tilt_end, 2),
-                "speedMs": speed,
+                # #836 — canonical stage-mm pose endpoints. Bake engine
+                # at bake_engine.py:498-524 prefers these and routes
+                # via spatial_engine.compute_pan_tilt for per-mover IK.
+                "ptStartPos": [int(start_pos[0]), int(start_pos[1]), int(start_pos[2])],
+                "ptEndPos":   [int(end_pos[0]),   int(end_pos[1]),   int(end_pos[2])],
+                # No panStart/panEnd/tiltStart/tiltEnd: the generator no
+                # longer emits DMX-range fractions. No speedMs: the bake
+                # ignores it for type-15 actions (slice duration is
+                # determined by clip duration, not action speed).
             },
             "targets": [mover["id"]],
         })
@@ -573,6 +684,182 @@ def _generate_track_actions(theme, dmx_movers):
         },
         "targets": [],  # empty = all movers auto-discovered at runtime
     }]
+
+
+# ── #839 ribbon primitive ────────────────────────────────────────────────────
+
+def _generate_ribbon_target(theme):
+    """#839 — emit a single patrol object that acts as the rig's
+    coordinated travelling anchor. Stored in `patrol_objects` so the
+    same plumbing _install_preset_show already uses for live-track
+    shows creates the moving-object record. Server-side
+    `_evaluate_object_patrols` understands `pattern: "ribbon"` (axis +
+    elevation + loopMode) and animates the position every frame.
+    """
+    ribbon = theme.get("ribbon")
+    if not ribbon:
+        return None
+    palette = theme.get("palette") or [[200, 230, 255]]
+    color = palette[0]
+    return {
+        "name": f"{theme['name']} Ribbon",
+        "objectType": "ribbon-target",
+        "color": "#%02X%02X%02X" % (color[0], color[1], color[2]),
+        "opacity": 25,
+        "scale": [400, 400, 400],
+        "patrol": {
+            "enabled": True,
+            "pattern": "ribbon",
+            "axis": ribbon.get("axis", "left-right"),
+            "ribbonAxis": ribbon.get("axis", "left-right"),
+            "elevation": ribbon.get("elevation", 0.65),
+            "loopMode": ribbon.get("loopMode", "ping-pong"),
+            "cycleS": ribbon.get("speedS", 12),
+            # `speedPreset: "custom"` forces the patrol evaluator to
+            # use our `cycleS` (not the default "medium" → 10 s preset
+            # from `_PATROL_SPEED_PRESETS`). Otherwise the ribbon's
+            # speedS is silently ignored and loops aren't stable.
+            "speedPreset": "custom",
+            "easing": "sine",
+        },
+    }
+
+
+def _generate_track_action_for_ribbon(theme, dmx_movers):
+    """#839 — Track action whose `trackObjectIds` is filled in by
+    `_install_preset_show` once the ribbon patrol object's id is known.
+    Targets all movers (empty `targets` triggers the timeline-track-fid
+    fallback added in #829)."""
+    if not dmx_movers:
+        return None
+    color = (theme.get("palette") or [[255, 255, 255]])[0]
+    return {
+        "action": {
+            "name": f"Track {theme['name']} Ribbon",
+            "type": 18,
+            "r": color[0], "g": color[1], "b": color[2],
+            "trackObjectIds": [],   # filled in by _install_preset_show
+            "trackDimmer": 255,
+            "trackAutoSpread": False,
+            "trackFixedAssignment": False,
+            "trackCycleMs": 2000,
+            "dimmer": 255,
+        },
+        "targets": [],
+    }
+
+
+def _generate_ribbon_layered_effects(theme, bounds):
+    """#839 — emit one spatial-field effect per phase offset along the
+    ribbon's axis. The phase offsets stagger the effects in time so
+    three layered ripples drift relative to each other (the "shimmer"
+    that distinguishes aurora from a single stripe)."""
+    ribbon = theme.get("ribbon")
+    if not ribbon:
+        return []
+    phase_offsets = ribbon.get("phaseOffsets", [0.0])
+    palette = theme.get("palette") or [[200, 230, 255]]
+    accent = theme.get("accent_colors") or palette
+    speed = float(ribbon.get("speedS", 12))
+    axis = ribbon.get("axis", "left-right")
+    elevation = float(ribbon.get("elevation", 0.5))
+    z_anchor = bounds["zMin"] + (bounds["zMax"] - bounds["zMin"]) * elevation
+    mid_y = bounds["cy"]
+    if axis in ("left-right", "right-left"):
+        start = [bounds["xMin"], mid_y, z_anchor]
+        end   = [bounds["xMax"], mid_y, z_anchor]
+        if axis == "right-left":
+            start, end = end, start
+    elif axis in ("front-back", "back-front"):
+        start = [bounds["cx"], bounds["yMin"], z_anchor]
+        end   = [bounds["cx"], bounds["yMax"], z_anchor]
+        if axis == "back-front":
+            start, end = end, start
+    elif axis in ("up-down", "down-up"):
+        start = [bounds["cx"], mid_y, bounds["zMin"]]
+        end   = [bounds["cx"], mid_y, bounds["zMax"]]
+        if axis == "down-up":
+            start, end = end, start
+    else:
+        start = [bounds["xMin"], mid_y, z_anchor]
+        end   = [bounds["xMax"], mid_y, z_anchor]
+    effects = []
+    for i, offset in enumerate(phase_offsets):
+        color = accent[i % len(accent)]
+        # Slight per-clip speed variation — combined with phase offset
+        # this gives the ribbons a non-locked drift.
+        spd = speed * (1.0 + (offset * 0.5))
+        effects.append({
+            "name": f"{theme['name']} Ribbon {i+1}",
+            "category": "spatial-field",
+            "shape": "sphere",
+            "r": color[0], "g": color[1], "b": color[2],
+            "size": {"radius": max(800, (bounds["xMax"] - bounds["xMin"]) // 4)},
+            "motion": {
+                "startPos": [int(start[0]), int(start[1]), int(start[2])],
+                "endPos":   [int(end[0]),   int(end[1]),   int(end[2])],
+                "durationS": round(max(1.0, spd), 1),
+                "easing": "ease-in-out",
+            },
+            "blend": "add",
+            "_phaseOffset": offset,
+        })
+    return effects
+
+
+def _generate_sparkle_layer(theme, led_fx):
+    """#839 — sparkle / accent overlay on LED fixtures. Designed to be
+    additive: pixels light briefly above the wash, but the wash
+    minBri floor keeps the stage from going dark when sparkle isn't
+    active. Returns a list of action dicts (one per LED fixture) or
+    empty list if the theme doesn't declare a sparkle_layer."""
+    sparkle = theme.get("sparkle_layer")
+    if not sparkle or not led_fx:
+        return []
+    return [{
+        "action": {
+            "name": f"{theme['name']} Sparkle",
+            "type": int(sparkle.get("type", 12)),  # ACT_SPARKLE default
+            "r": sparkle.get("r", 200),
+            "g": sparkle.get("g", 255),
+            "b": sparkle.get("b", 240),
+            "spawnMs": sparkle.get("spawnMs", 240),
+            "density": sparkle.get("density", 2),
+            "fadeSpeed": sparkle.get("fadeSpeed", 8),
+            "dimmer": 255,
+        },
+        "targets": [f["id"] for f in led_fx],
+    }]
+
+
+def _apply_fade_brackets(theme, tracks, dur):
+    """#839 — wrap every track's first/last clip with fade-in / fade-out
+    metadata so the bake renderer ramps dimmer 0→target across `fadeInS`
+    at the timeline start and target→0 across `fadeOutS` at the end.
+
+    For now the metadata is annotated on each clip's `_fadeInS` /
+    `_fadeOutS` keys; the bake renderer's existing ramp logic
+    (ACT_FADE / `dimmer` tween) consumes them. Themes that don't
+    declare fade durations get no annotation (legacy snap-to-full
+    behaviour preserved)."""
+    fade_in = float(theme.get("fadeInS", 0))
+    fade_out = float(theme.get("fadeOutS", 0))
+    if fade_in <= 0 and fade_out <= 0:
+        return tracks
+    for tr in tracks:
+        clips = tr.get("clips") or []
+        if not clips:
+            continue
+        first = clips[0]
+        last = clips[-1]
+        # Mark only if clip envelope brackets the timeline edge.
+        if fade_in > 0 and first.get("startS", 0) < 0.05:
+            first["_fadeInS"] = fade_in
+        if fade_out > 0:
+            end_t = (last.get("startS", 0) + last.get("durationS", 0))
+            if end_t > dur - 0.05:
+                last["_fadeOutS"] = fade_out
+    return tracks
 
 
 def generate_show(theme_id, fixtures, layout, stage, profile_lib=None):
@@ -629,6 +916,101 @@ def generate_show(theme_id, fixtures, layout, stage, profile_lib=None):
     fpos = _fixture_positions(real_fixtures, layout_positions)
 
     dur = theme["durationS"]
+
+    # ── #839 ribbon shows: coordinated stage-anchor + layered slip ────
+    # Themes with a `ribbon` block emit a single travelling patrol
+    # object that all movers track in unison via a Track action.
+    # Layered phase-offset spatial effects ride the same path. Sparkle
+    # / fade-bracket primitives are layered on top.
+    if theme.get("ribbon") and dmx_movers:
+        ribbon_obj = _generate_ribbon_target(theme)
+        track_act = _generate_track_action_for_ribbon(theme, dmx_movers)
+        ribbon_effects = _generate_ribbon_layered_effects(theme, bounds)
+        base_actions = _generate_base_actions(theme, led_fx, dmx_pars, dmx_movers)
+        sparkle_actions = _generate_sparkle_layer(theme, led_fx)
+
+        tracks = []
+        # Per-fixture base wash (lowest priority)
+        if led_fx:
+            led_base = next((b for b in base_actions
+                              if b.get("targets") == "led"), None)
+            if led_base:
+                for lf in led_fx:
+                    tracks.append({
+                        "fixtureId": lf["id"],
+                        "clips": [{"_action_ref": led_base, "startS": 0, "durationS": dur}],
+                        "_layer": "base",
+                    })
+        if dmx_pars:
+            par_base = next((b for b in base_actions
+                              if b.get("targets") == "dmx_par"), None)
+            if par_base:
+                for pf in dmx_pars:
+                    tracks.append({
+                        "fixtureId": pf["id"],
+                        "clips": [{"_action_ref": par_base, "startS": 0, "durationS": dur}],
+                        "_layer": "base",
+                    })
+        if dmx_movers:
+            mov_base = next((b for b in base_actions
+                              if b.get("targets") == "dmx_mover"), None)
+            if mov_base:
+                for mf in dmx_movers:
+                    tracks.append({
+                        "fixtureId": mf["id"],
+                        "clips": [{"_action_ref": mov_base, "startS": 0, "durationS": dur}],
+                        "_layer": "base",
+                    })
+        # Layered spatial effects — phase-offset clips along the ribbon
+        # path. Each clip occupies the full timeline so the effect
+        # repeats; the phase offset shifts when each ripple is at
+        # peak intensity.
+        if ribbon_effects:
+            tracks.append({
+                "allPerformers": True,
+                "clips": [
+                    {"_effect_ref": fx,
+                     "startS": round(fx.get("_phaseOffset", 0) * dur, 2),
+                     "durationS": dur}
+                    for fx in ribbon_effects
+                ],
+                "_layer": "effects",
+            })
+        # Sparkle overlay on LEDs (additive, above wash, below ribbon).
+        if sparkle_actions and led_fx:
+            sp = sparkle_actions[0]
+            for lf in led_fx:
+                tracks.append({
+                    "fixtureId": lf["id"],
+                    "clips": [{"_action_ref": sp, "startS": 0, "durationS": dur}],
+                    "_layer": "sparkle",
+                })
+        # Track action — one allPerformers clip referencing the Track
+        # action. _install_preset_show fills `trackObjectIds` with the
+        # ribbon patrol object's id once it's created.
+        if track_act:
+            tracks.append({
+                "allPerformers": True,
+                "clips": [{"_action_ref": track_act, "startS": 0, "durationS": dur}],
+                "_layer": "track",
+            })
+
+        # Apply fade-in / fade-out brackets per #839.
+        tracks = _apply_fade_brackets(theme, tracks, dur)
+
+        result = {
+            "name": theme["name"],
+            "durationS": dur,
+            "base_actions": base_actions,
+            "mover_actions": ([track_act] if track_act else []) + sparkle_actions,
+            "effects": ribbon_effects,
+            "tracks": tracks,
+            "patrol_objects": [ribbon_obj] if ribbon_obj else [],
+            "led_fixture_ids": [f["id"] for f in led_fx],
+            "dmx_par_ids": [f["id"] for f in dmx_pars],
+            "dmx_mover_ids": [f["id"] for f in dmx_movers],
+        }
+        return result
 
     # ── Live tracking shows: minimal structure ────────────────────────
     # Track action (type 18) auto-discovers all movers at runtime —
@@ -711,27 +1093,36 @@ def generate_show(theme_id, fixtures, layout, stage, profile_lib=None):
                     "_layer": "base",
                 })
 
-    # Track 1: Spatial effects — sequenced so they don't overlap
+    # Track 1: Spatial effects — tile the timeline so adjacent slots
+    # touch without gaps (#836 item 4). Pre-fix the per-clip duration
+    # was capped by the spatial-effect's own motion.durationS (often
+    # less than slot_dur), leaving a dead window between adjacent
+    # clips during which only the wash was active.
     effect_clips = []
     if effects:
-        # Sequence effects: each gets its own time slot
-        # Effects have their own motion durationS; space them across the show
         n = len(effects)
         slot_dur = dur / n if n > 0 else dur
         for i, fx in enumerate(effects):
-            fx_motion_dur = fx.get("motion", {}).get("durationS", slot_dur)
-            clip_dur = min(slot_dur, max(fx_motion_dur, 1))
             start = round(i * slot_dur, 1)
-            effect_clips.append({"_effect_ref": fx, "startS": start, "durationS": round(clip_dur, 1)})
+            # Last slot absorbs any rounding remainder so total = dur.
+            this_slot = (dur - start) if i == n - 1 else slot_dur
+            effect_clips.append({"_effect_ref": fx, "startS": start,
+                                  "durationS": round(this_slot, 1)})
     tracks.append({"allPerformers": True, "clips": effect_clips, "_layer": "effects"})
 
-    # Track 2+: Per-mover pan/tilt sweeps
+    # Track 2+: Per-mover pan/tilt sweeps. #836 item 3 — sweep clip
+    # occupies the central 60 % of the timeline, leaving 20 % wash at
+    # start and 20 % wash at end. Pre-fix sweep ran the full duration
+    # at dimmer=255, fully masking the Mover Base wash on every frame.
+    sweep_start = round(dur * 0.2, 1)
+    sweep_dur = round(dur * 0.6, 1)
     for ma in mover_actions:
         fids = ma.get("targets", [])
         for fid in fids:
             tracks.append({
                 "fixtureId": fid,
-                "clips": [{"_action_ref": ma, "startS": 0, "durationS": dur}],
+                "clips": [{"_action_ref": ma, "startS": sweep_start,
+                           "durationS": sweep_dur}],
                 "_layer": "mover",
             })
 

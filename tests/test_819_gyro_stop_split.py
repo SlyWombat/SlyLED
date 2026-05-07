@@ -67,9 +67,12 @@ def test_orient_handler_no_longer_releases_on_bit3():
 
 
 def test_cmd_gyro_stop_handler_present_and_releases():
-    """The CMD_GYRO_STOP branch must call _mover_engine.release with
-    blackout=True and end_session() — the same teardown the bit-3 branch
-    used to do.
+    """The CMD_GYRO_STOP branch must call _mover_engine.release and
+    `end_session()`. Per #813 §1.2 / §6.1 the release uses
+    `blackout=False` (release to the prior writer, not forced
+    dimmer-zero); previously asserted as `blackout=True` per the
+    bit-3-on-orient teardown semantics — superseded by #813's
+    Android-controller-mode-parity rule.
     """
     import inspect
     src = inspect.getsource(parent_server)
@@ -83,8 +86,8 @@ def test_cmd_gyro_stop_handler_present_and_releases():
     body = rest if next_elif < 0 else rest[:len(marker) + next_elif]
     _assert("_mover_engine.release(" in body,
             "CMD_GYRO_STOP handler calls _mover_engine.release(...)")
-    _assert("blackout=True" in body,
-            "CMD_GYRO_STOP handler passes blackout=True")
+    _assert("blackout=False" in body,
+            "CMD_GYRO_STOP handler passes blackout=False (#813 §1.2)")
     _assert("end_session()" in body,
             "CMD_GYRO_STOP handler calls remote.end_session()")
 

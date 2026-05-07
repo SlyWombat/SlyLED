@@ -126,14 +126,28 @@ REMOTE_UP_LOCAL      = DEFAULT_REMOTE_UP_LOCAL
 
 # Staleness thresholds. Decision #7 says "N days" — N=7 initially.
 #
-# Two-tier comms staleness (#476):
-#   soft (5-60s):   puck fell off the air briefly — keep the claim, stop
-#                   writing pan/tilt (dmx frozen), UI pulses amber
-#                   "Reconnecting..."
-#   hard (>60s):    gone for long enough we should drop the claim and
-#                   blackout — operator will need to re-Send-Lock.
+# Two-tier comms staleness (#476, retuned per #813 §6.3 / 2026-05-06):
+#   soft (5-600s): puck fell off the air briefly — keep the claim, stop
+#                  writing pan/tilt (dmx frozen), UI pulses amber
+#                  "Reconnecting...".
+#   hard (>600s):  gone for long enough we conclude the puck has died
+#                  (power loss, hardware failure, sustained outage) and
+#                  release the claim. Per the rock-solid principle (#813
+#                  §1) this is NOT a "is the operator paying attention"
+#                  check — it is generous on purpose. Operators leaving
+#                  a puck on a table mid-show with the head still locked
+#                  are valid; the threshold only fires for "the puck is
+#                  gone, not just resting".
+#
+#                  Pre-2026-05-06 this was 60 s and was driven by orient
+#                  silence only, which fired during legitimate puck-still
+#                  poses and on calibrate-screen pauses. The new 600 s
+#                  threshold is paired with the all-comms-silence
+#                  semantic in `_gyro_touch_remote` — every incoming
+#                  packet (orient / heartbeat-rep / battery / color /
+#                  calibrate / start / stop) refreshes the clock.
 STALE_AGE_SECS   = 7 * 24 * 3600
-STALE_HARD_SECS  = 60      # comms silence beyond this → hard-stale (auto-release)
+STALE_HARD_SECS  = 600     # comms silence beyond this → hard-stale (auto-release)
 STALE_SOFT_SECS  = 5       # comms silence beyond this → soft-stale (freeze dmx)
 # #690 — orphan-pruning grace periods for remotes that registered (e.g. via
 # UDP) but never sent orientation data. Picked to err generous: an operator
