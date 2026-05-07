@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.86"
+VERSION = "1.7.87"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -17192,16 +17192,20 @@ _HELP_SLUGS = {
 
 
 def _resolve_lang():
-    """Pick EN or FR from ?lang= query, cookie, or Accept-Language."""
-    lang = (request.args.get("lang") or "").strip().lower()
-    if lang in ("en", "fr"):
-        return lang
-    ck = (request.cookies.get("slyled_lang") or "").strip().lower()
-    if ck in ("en", "fr"):
-        return ck
-    accept = (request.headers.get("Accept-Language") or "").lower()
-    if accept.startswith("fr") or ",fr" in accept.replace(" ", ""):
-        return "fr"
+    """Always returns ``"en"`` for now.
+
+    The orchestrator has bilingual content infrastructure
+    (``USER_MANUAL_fr.md``, ``docs/build/fr/help/*.html``, ``index_fr.html``,
+    a ``slyled_lang`` cookie path, and Accept-Language autodetection) but
+    no operator-facing language switcher in the SPA, so the
+    autodetection path was silently serving French to any browser
+    advertising ``Accept-Language: fr-…``. That surprised operators on
+    Canadian / bilingual systems.
+
+    Locked to English until install-time language selection + a
+    general settings option land. The infrastructure stays in place
+    so re-enabling is a one-line change here.
+    """
     return "en"
 
 @app.get("/help")
@@ -17212,28 +17216,13 @@ def serve_help_index():
     (rather than only the side-panel section extract). Works offline
     because the manual ships inside the project tree.
 
-    Bilingual per project policy (public-facing docs must be EN+FR):
-    - ``/help`` defaults to English.
-    - ``/help?lang=fr`` serves the French translation.
-    - When no lang query is provided, Accept-Language is honoured —
-      a browser with ``Accept-Language: fr,...`` gets the French
-      version automatically.
+    Locked to English (``index.html``) for now — see ``_resolve_lang``
+    for the rationale. The ``index_fr.html`` infrastructure stays in
+    place for the planned install-time language selector + settings
+    option; once that lands, change ``_resolve_lang`` and this route
+    will pick it up.
     """
-    # Choose language: explicit ?lang= wins, then Accept-Language.
-    lang = (request.args.get("lang") or "").strip().lower()
-    if not lang:
-        accept = (request.headers.get("Accept-Language") or "").lower()
-        if accept.startswith("fr") or ",fr" in accept.replace(" ", ""):
-            lang = "fr"
-        else:
-            lang = "en"
-    filename = "index_fr.html" if lang == "fr" else "index.html"
-    help_path = DOCS_HELP / filename
-    if not help_path.exists() and lang == "fr":
-        # Graceful fallback: French HTML missing → serve English HTML
-        # with a note. Users won't get a 404 page just because we
-        # haven't generated the French file yet.
-        help_path = DOCS_HELP / "index.html"
+    help_path = DOCS_HELP / "index.html"
     if not help_path.exists():
         return ("<h1>User manual not found</h1>"
                 "<p>Expected at <code>docs/help/index.html</code>.</p>",
