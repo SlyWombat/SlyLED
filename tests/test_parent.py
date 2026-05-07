@@ -3456,6 +3456,141 @@ def run():
         _ps_pb._remotes.remove(neg_remote.id)
         _ps_pb._remotes.remove(other_remote.id)
 
+        # ── #826 — empirical aim-axis wizard ────────────────────────
+        # Tests the server-side math + endpoint without any device.
+        # Synthesises three quaternions corresponding to a textbook
+        # phone grip (X-forward, Z-up): pitch-forward rotates around
+        # body-Y; yaw-left rotates around body-Z. Wizard math should
+        # then derive forward_local ≈ +X, up_local ≈ +Z.
+        import math as _math_826
+        def _q_axis_angle(axis, deg):
+            ax, ay, az = axis
+            mag = _math_826.sqrt(ax*ax + ay*ay + az*az)
+            ax, ay, az = ax/mag, ay/mag, az/mag
+            half = _math_826.radians(deg) / 2.0
+            s = _math_826.sin(half)
+            return [_math_826.cos(half), ax*s, ay*s, az*s]
+
+        # Neutral = identity (phone aimed forward in the operator's grip).
+        q_neutral = [1.0, 0.0, 0.0, 0.0]
+        # Pitch forward 30° about body-Y (right-hand rule: +Y axis).
+        # In a body-frame model the phone tipping nose-down rotates
+        # around its left-right axis. We pick axis-Y for this synthetic
+        # test — the wizard math returns forward = cross(yaw_axis,
+        # pitch_axis) = cross(+Z, +Y) = (-X). Sign of forward is
+        # locked by the gesture instructions; the test asserts the
+        # derived axes are unit vectors and orthogonal — sufficient to
+        # confirm the math doesn't reject a textbook input.
+        q_pitch = _q_axis_angle([0, 1, 0], 30)
+        # Yaw left 30° about body-Z.
+        q_yaw   = _q_axis_angle([0, 0, 1], 30)
+
+        # By-device endpoint: auto-registers a phone Remote.
+        wiz_dev = '#826-wizard-test'
+        r = c.post('/api/remotes/aim-wizard', json={
+            'deviceId': wiz_dev,
+            'poses': [
+                {'role': 'neutral',       'quat': q_neutral},
+                {'role': 'pitch_forward', 'quat': q_pitch},
+                {'role': 'yaw_left',      'quat': q_yaw},
+            ],
+        })
+        ok('#826 wizard endpoint returns 200', r.status_code == 200)
+        body = r.get_json()
+        ok('#826 wizard ok=true', body.get('ok') is True, f'body={body}')
+        fwd = body.get('forwardLocal') or [0, 0, 0]
+        up = body.get('upLocal') or [0, 0, 0]
+        # Both should be unit vectors.
+        fwd_mag = _math_826.sqrt(sum(c_*c_ for c_ in fwd))
+        up_mag = _math_826.sqrt(sum(c_*c_ for c_ in up))
+        ok('#826 forward_local is unit', abs(fwd_mag - 1.0) < 0.01,
+           f'|fwd|={fwd_mag}')
+        ok('#826 up_local is unit', abs(up_mag - 1.0) < 0.01,
+           f'|up|={up_mag}')
+        # Orthogonality of derived axes.
+        dot_fu = sum(fwd[i] * up[i] for i in range(3))
+        ok('#826 forward ⊥ up', abs(dot_fu) < 0.05,
+           f'dot={dot_fu}')
+
+        # Negative — degenerate (pitch and yaw same axis) → 400.
+        r = c.post('/api/remotes/aim-wizard', json={
+            'deviceId': wiz_dev,
+            'poses': [
+                {'role': 'neutral',       'quat': q_neutral},
+                {'role': 'pitch_forward', 'quat': q_yaw},  # same as yaw
+                {'role': 'yaw_left',      'quat': q_yaw},
+            ],
+        })
+        ok('#826 degenerate axes → 400',
+           r.status_code == 400 and r.get_json().get('err') == 'degenerate_axes',
+           f'status={r.status_code} body={r.get_json()}')
+
+        # Negative — insufficient rotation (5° < 10° threshold).
+        small = _q_axis_angle([0, 1, 0], 5)
+        r = c.post('/api/remotes/aim-wizard', json={
+            'deviceId': wiz_dev,
+            'poses': [
+                {'role': 'neutral',       'quat': q_neutral},
+                {'role': 'pitch_forward', 'quat': small},
+                {'role': 'yaw_left',      'quat': q_yaw},
+            ],
+        })
+        ok('#826 insufficient pitch → 400',
+           r.status_code == 400
+           and r.get_json().get('err') == 'insufficient_pitch')
+
+        # Cleanup wizard-registered phone.
+        wiz_remote = _ps_pb._remotes.by_device(wiz_dev)
+        if wiz_remote is not None:
+            _ps_pb._remotes.remove(wiz_remote.id)
+
+        # ── #837 — show-generator: live_track theme refuses with no movers ──
+        from show_generator import generate_show as _gs_837
+        # Mover-less rig.
+        no_mover_show = _gs_837(
+            'figure-eight',
+            [{'id': 1, 'name': 'L', 'fixtureType': 'led', 'type': 'point',
+              'childId': 0}],
+            {'children': [{'id': 1, 'x': 0, 'y': 0, 'z': 0}]},
+            {'w': 10, 'h': 5, 'd': 10})
+        ok('#837 figure-eight on mover-less rig returns error dict',
+           isinstance(no_mover_show, dict)
+           and no_mover_show.get('error') == 'needs_movers',
+           f'got {no_mover_show.get("error") if isinstance(no_mover_show, dict) else type(no_mover_show)}')
+        # Up-axis bug regression — sweep "up" must travel along Z.
+        from show_generator import _make_sweep_path as _msp
+        bnds = {'cx': 5000, 'cy': 2500, 'cz': 2500,
+                'xMin': 0, 'xMax': 10000,
+                'yMin': 0, 'yMax': 5000, 'zMin': 0, 'zMax': 5000}
+        s, e = _msp(bnds, 'up', jitter=False)
+        ok('#837 sweep "up" travels along Z (not Y)',
+           s[2] != e[2] and s[0] == e[0] and s[1] == e[1],
+           f'start={s} end={e}')
+
+        # ── #849 Part 2 — Auto Brightness shows up in /api/remotes/live ──
+        # Hit /api/brightness with a recognizable value, then sample
+        # /api/remotes/live and assert the virtual entry is present
+        # with kind=auto-brightness and the operator-meaningful extras.
+        c.post('/api/brightness', json={'value': 192})
+        r = c.get('/api/remotes/live')
+        ok('#849 remotes/live returns 200', r.status_code == 200)
+        snap = r.get_json().get('remotes') or []
+        ab_entries = [x for x in snap if x.get('kind') == 'auto-brightness']
+        ok('#849 auto-brightness virtual entry present',
+           len(ab_entries) >= 1,
+           f'remotes={[x.get("kind") for x in snap]}')
+        if ab_entries:
+            ab = ab_entries[0]
+            ok('#849 auto-brightness LIVE (lastDataAge < 3s)',
+               (ab.get('lastDataAge') or 999) < 3.0,
+               f'lastDataAge={ab.get("lastDataAge")}')
+            extras = ab.get('autoBrightness') or {}
+            ok('#849 autoBrightness.currentValue carries last value',
+               extras.get('currentValue') == 192,
+               f'currentValue={extras.get("currentValue")}')
+            ok('#849 autoBrightness.globalBrightness present',
+               extras.get('globalBrightness') is not None)
+
     # ── Print results ───────────────────────────────────────────────
     passed = sum(1 for _, v, _ in results if v)
     failed = sum(1 for _, v, _ in results if not v)

@@ -112,7 +112,12 @@ THEMES = {
         "sweep_dir": "random",
         "sweep_shape": "sphere",
         "sweep_speed": 8,
-        "energy": 0.2,
+        # #837 — energy bumped from 0.2 → 0.4 so the sweep count comes
+        # out at 2-3 random orbs instead of 1. Pre-fix a 60 s starfield
+        # had a single slow random orb plus the sparkle base — felt
+        # static. 0.4 gives enough variation without overwhelming the
+        # quiet aesthetic the theme is going for.
+        "energy": 0.4,
         "accent_colors": [[200, 200, 255], [255, 255, 200]],
     },
     "aurora": {
@@ -120,12 +125,20 @@ THEMES = {
         "desc": "Green curtain with purple shimmer",
         "durationS": 40,
         "palette": [[0, 255, 80], [120, 0, 200], [0, 200, 100], [80, 0, 160]],
-        "base_action": {"type": 3, "r": 0, "g": 80, "b": 40, "periodMs": 5000, "minBri": 10},
+        # #837 — minBri lifted from 10 → 30. At 10 the trough drops nearly
+        # to black on every breathe period, producing a visible floor
+        # flicker. 30 keeps the wash present without flattening the
+        # breathe envelope.
+        "base_action": {"type": 3, "r": 0, "g": 80, "b": 40, "periodMs": 5000, "minBri": 30},
         "sweep_dir": "left-right",
         "sweep_shape": "plane",
         "sweep_speed": 15,
         "energy": 0.3,
-        "accent_colors": [[0, 255, 80], [120, 0, 200]],
+        # #837 — accents distinct from the base palette. Pre-fix the
+        # accents `[0,255,80]` and `[120,0,200]` were the first two
+        # palette entries verbatim, so sweep highlights flattened into
+        # the wash and the operator never saw the accent layer.
+        "accent_colors": [[200, 255, 200], [255, 200, 255]],
     },
     "spotlight-sweep": {
         "name": "Warm Orb Sweep",
@@ -222,7 +235,14 @@ THEMES = {
     "spotlight-follow-person": {
         "name": "Spotlight: Follow Person",
         "desc": "Moving heads track detected people in real-time via camera (requires camera node)",
-        "durationS": 600,
+        # #837 — durationS 600 → 60 with loop=True. Pre-fix a 10-minute
+        # one-shot timeline confused operators who'd press Stop because
+        # they assumed the show had hung. 60 s + loop gives the same
+        # continuous-track behaviour with normal playlist semantics
+        # (status pegs the bar at 100% per iteration, wraps cleanly via
+        # the #840 single-item loop_all routing).
+        "durationS": 60,
+        "loop": True,
         "palette": [[255, 240, 200], [255, 200, 150]],
         "base_action": {"type": 1, "r": 10, "g": 5, "b": 30},
         "sweep_dir": "left-right",
@@ -1019,8 +1039,20 @@ def generate_show(theme_id, fixtures, layout, stage, profile_lib=None):
     if theme.get("live_track"):
         track_action = _generate_track_actions(theme, dmx_movers)
         if not track_action:
-            # No movers — fall through to normal generation
-            pass
+            # #837 — refuse rather than silently fall through. Pre-fix
+            # `figure-eight` / `spotlight-follow-person` on a stage
+            # without movers fell through to normal generation, which
+            # produces a non-tracking show that doesn't match the
+            # theme's name. The caller surfaces the error to the
+            # operator instead of installing a misleading preset.
+            return {
+                "error": "needs_movers",
+                "msg": (f"Theme '{theme['name']}' requires DMX moving heads "
+                        "to drive its tracking behaviour. No mover fixtures "
+                        "are present on this rig. Add a moving-head fixture "
+                        "(profile with panRange + tiltRange > 0), or pick a "
+                        "non-tracking preset."),
+            }
         else:
             tracks = [{"allPerformers": True, "clips": [
                 {"_action_ref": track_action[0], "startS": 0, "durationS": dur}

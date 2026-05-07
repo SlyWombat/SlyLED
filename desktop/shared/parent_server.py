@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.88"
+VERSION = "1.7.90"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -11915,9 +11915,281 @@ def api_remotes_delete(remote_id):
     return jsonify(ok=True, removed=r is not None)
 
 
+# #826 — empirical aim-axis calibration wizard. Operator captures three
+# pose quaternions (neutral, pitch-forward-down, yaw-left); the math
+# below derives the body-frame `forward_local` / `up_local` directly
+# from the measured rotations instead of guessing them from a
+# Surface.ROTATION_* table that varied by phone model / OS / sensor
+# fusion algorithm. The qz-negate hack from #824 becomes obsolete once
+# every device runs the wizard; the kind-specific branches in
+# `_apply_quat` collapse to one shared math path.
+def _aim_wizard_compute(poses):
+    """Derive (forward_local, up_local) from three operator gestures.
+
+    `poses` is a dict mapping role → quat tuple ``(w, x, y, z)``. Required
+    roles: ``neutral``, ``pitch_forward``, ``yaw_left``. Optional:
+    ``roll_cw`` (sanity check only).
+
+    Returns ``(forward_local, up_local, None)`` on success, or
+    ``(None, None, error_dict)`` on validation failure where
+    ``error_dict`` matches the issue's error contract: ``{err: <code>,
+    detail: <human message>}``.
+
+    Math (issue spec):
+    1. ΔQ_pitch_body = conj(Q_neutral) · Q_pitch_fwd  (rotation expressed in body frame)
+    2. ΔQ_yaw_body   = conj(Q_neutral) · Q_yaw_left
+    3. axis-angle of each Δ → unit pitch/yaw axes (body-frame)
+    4. up_local      = yaw_axis_body
+    5. forward_local = cross(yaw_axis_body, pitch_axis_body)  (right-hand rule)
+
+    Sign is locked by the gesture instructions ("tilt DOWN", "yaw
+    LEFT") — no hand-waving about which way is positive.
+    """
+    needed = ("neutral", "pitch_forward", "yaw_left")
+    for role in needed:
+        if role not in poses:
+            return None, None, {"err": "missing_pose",
+                                "detail": f"Pose '{role}' is required."}
+
+    def _normq(q):
+        w, x, y, z = q
+        m = math.sqrt(w * w + x * x + y * y + z * z)
+        if m < 0.95 or m > 1.05:
+            return None, m
+        return (w / m, x / m, y / m, z / m), m
+
+    def _conj(q):
+        w, x, y, z = q
+        return (w, -x, -y, -z)
+
+    def _qmul(a, b):
+        aw, ax, ay, az = a
+        bw, bx, by, bz = b
+        return (
+            aw * bw - ax * bx - ay * by - az * bz,
+            aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw,
+        )
+
+    def _axis_angle(q):
+        """Unit-axis + angle (radians) of a unit quaternion."""
+        w, x, y, z = q
+        # Clamp w to [-1, 1] to avoid acos domain errors on near-unity quats.
+        w_clamped = max(-1.0, min(1.0, w))
+        angle = 2.0 * math.acos(w_clamped)
+        s = math.sqrt(max(0.0, 1.0 - w_clamped * w_clamped))
+        if s < 1e-6:
+            return (0.0, 0.0, 1.0), 0.0
+        return (x / s, y / s, z / s), angle
+
+    def _cross(a, b):
+        return (a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0])
+
+    def _norm(v):
+        return math.sqrt(sum(c * c for c in v))
+
+    # Validate sensor stability across captures.
+    quats = {}
+    for role in ("neutral", "pitch_forward", "yaw_left"):
+        nq, m = _normq(poses[role])
+        if nq is None:
+            return None, None, {"err": "bad_quaternion",
+                                "detail": f"Pose '{role}' quaternion magnitude "
+                                          f"{m:.3f} outside [0.95, 1.05] — "
+                                          "the sensor wasn't stable. Hold "
+                                          "still and retry."}
+        quats[role] = nq
+
+    # Body-frame delta rotations from neutral.
+    dq_pitch = _qmul(_conj(quats["neutral"]), quats["pitch_forward"])
+    dq_yaw   = _qmul(_conj(quats["neutral"]), quats["yaw_left"])
+
+    pitch_axis, pitch_angle = _axis_angle(dq_pitch)
+    yaw_axis,   yaw_angle   = _axis_angle(dq_yaw)
+
+    # Reject if either gesture rotated < 10° — operator didn't move enough.
+    MIN_ANGLE_RAD = math.radians(10)
+    if pitch_angle < MIN_ANGLE_RAD:
+        return None, None, {"err": "insufficient_pitch",
+                            "detail": f"Pitch gesture rotated only "
+                                      f"{math.degrees(pitch_angle):.1f}° from "
+                                      "neutral. Tilt the phone further "
+                                      "forward and retry."}
+    if yaw_angle < MIN_ANGLE_RAD:
+        return None, None, {"err": "insufficient_yaw",
+                            "detail": f"Yaw gesture rotated only "
+                                      f"{math.degrees(yaw_angle):.1f}° from "
+                                      "neutral. Yaw the phone further left "
+                                      "and retry."}
+
+    # Reject near-parallel pitch/yaw axes (cross magnitude < 0.7
+    # implies the operator did similar gestures or sensor noise
+    # dominated). Both axes are unit vectors so |cross| ≤ 1.
+    fwd = _cross(yaw_axis, pitch_axis)
+    fwd_mag = _norm(fwd)
+    if fwd_mag < 0.7:
+        return None, None, {
+            "err": "degenerate_axes",
+            "detail": (f"Pitch and yaw gestures rotated around nearly-"
+                       f"parallel axes (cross magnitude {fwd_mag:.2f}). "
+                       "Please retry yaw — turn further from neutral, "
+                       "and make sure pitch and yaw are perpendicular.")}
+
+    forward_local = (fwd[0] / fwd_mag, fwd[1] / fwd_mag, fwd[2] / fwd_mag)
+    up_local      = yaw_axis
+
+    # Optional roll sanity check: roll axis should be ~co-linear with
+    # forward_local. |dot| > 0.85 → frame is orthogonal as expected.
+    if "roll_cw" in poses:
+        nq_roll, _ = _normq(poses["roll_cw"])
+        if nq_roll is not None:
+            dq_roll = _qmul(_conj(quats["neutral"]), nq_roll)
+            roll_axis, _ra = _axis_angle(dq_roll)
+            dot = sum(roll_axis[i] * forward_local[i] for i in range(3))
+            if abs(dot) < 0.85:
+                return None, None, {
+                    "err": "non_orthogonal_frame",
+                    "detail": (f"Roll-axis dot product with derived forward "
+                               f"is {dot:+.2f}; expected close to ±1. The "
+                               "captured frame isn't orthogonal — please "
+                               "retry the wizard.")}
+
+    return forward_local, up_local, None
+
+
+def _apply_aim_wizard_to_remote(remote, poses):
+    """Run the wizard math against `poses` and apply the result to
+    `remote`. Returns ``(ok, response_dict, http_status)``."""
+    fwd, up, err = _aim_wizard_compute(poses)
+    if err is not None:
+        return False, {"ok": False, **err}, 400
+    try:
+        remote.set_grip(forward_local=fwd, up_local=up)
+    except (TypeError, ValueError) as e:
+        return False, {"ok": False, "err": "set_grip_failed",
+                       "detail": str(e)}, 400
+    # #826 — invalidating the existing R_world_to_stage matches the
+    # `set_grip` semantics (axis change → cal stale). Operator must
+    # re-anchor against a known target after wizard runs.
+    return True, {"ok": True,
+                  "forwardLocal": list(fwd),
+                  "upLocal": list(up)}, 200
+
+
+def _parse_wizard_payload(body):
+    """Extract `{role: (w,x,y,z)}` from a wizard request body.
+    Body shape per #826:
+        {deviceId?, poses: [{role, quat: [w,x,y,z]}, ...]}
+    """
+    out = {}
+    for entry in (body.get("poses") or []):
+        if not isinstance(entry, dict):
+            continue
+        role = entry.get("role")
+        quat = entry.get("quat")
+        if not role or not isinstance(quat, (list, tuple)) or len(quat) != 4:
+            continue
+        try:
+            out[role] = tuple(float(c) for c in quat)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+@app.post("/api/remotes/<int:remote_id>/aim-wizard")
+def api_remote_aim_wizard(remote_id):
+    """#826 — empirical aim-axis wizard, by remote-row id."""
+    r = _remotes.get(remote_id)
+    if r is None:
+        return jsonify(ok=False, err="not_found"), 404
+    body = request.get_json(silent=True) or {}
+    poses = _parse_wizard_payload(body)
+    ok_, resp, status = _apply_aim_wizard_to_remote(r, poses)
+    if ok_:
+        _remotes.save()
+        log.info("Aim wizard: remote=%d device=%s forward=%s up=%s",
+                 remote_id, r.device_id, resp["forwardLocal"], resp["upLocal"])
+    return jsonify(resp), status
+
+
+@app.post("/api/remotes/aim-wizard")
+def api_remote_aim_wizard_by_device():
+    """#826 — deviceId-keyed sibling. Mirrors `/api/remotes/grip`'s
+    auto-register-on-first-use behaviour for phone clients that only
+    know their own deviceId, not the integer remote-row id."""
+    body = request.get_json(silent=True) or {}
+    did = (body.get("deviceId") or "").strip()
+    if not did:
+        return jsonify(ok=False, err="deviceId required"), 400
+    poses = _parse_wizard_payload(body)
+    r = _remotes.by_device(did) or _auto_register_remote(did, kind=KIND_PHONE)
+    ok_, resp, status = _apply_aim_wizard_to_remote(r, poses)
+    if ok_:
+        _remotes.save()
+        log.info("Aim wizard: device=%s remote=%d forward=%s up=%s",
+                 did, r.id, resp["forwardLocal"], resp["upLocal"])
+    return jsonify(resp), status
+
+
 @app.get("/api/remotes/live")
 def api_remotes_live():
-    return jsonify(remotes=_remotes.live_list())
+    """List live remotes (gyro pucks, phone-claim) plus #849 virtual
+    Auto Brightness entries derived from `_brightness_obs`. The dashboard
+    Remote Controllers card consumes this single endpoint and renders all
+    sources uniformly so the operator can see, at a glance, every
+    device that's currently driving the rig."""
+    snap = list(_remotes.live_list())
+    # #849 Part 2 — surface Android Auto Brightness as a virtual remote
+    # so the operator can see whether `/api/brightness` traffic is
+    # actually arriving and which IP is driving. Pre-fix the Android
+    # UI showed envelope animation locally even when no POST reached
+    # the orchestrator; the dashboard had no way to surface that.
+    now = time.time()
+    with _brightness_obs_lock:
+        # Prune entries dormant > 5 min so the registry doesn't
+        # accumulate every IP that ever POSTed once.
+        stale_keys = [ip for ip, st in _brightness_obs.items()
+                      if (now - st.get("last_log_ts", 0)) > 300]
+        for ip in stale_keys:
+            _brightness_obs.pop(ip, None)
+        for remote_ip, st in _brightness_obs.items():
+            last_age = now - st.get("last_log_ts", 0)
+            cur_value = st.get("last_log_value", -1)
+            ab_min = st.get("min_v", 0)
+            ab_max = st.get("max_v", 0)
+            # LOST if no POST seen in the last 3 s (issue thresholds:
+            # LIVE < 1 s, STALE 1-3 s, LOST > 3 s). The dashboard's
+            # `_remoteDashColor` consumes hardStale to render the grey
+            # LOST chip, mirroring the gyro-puck card vocabulary.
+            hard_stale = last_age > 3.0
+            snap.append({
+                "id": -1000 - hash(remote_ip) % 10000,
+                "kind": "auto-brightness",
+                "name": f"Android Auto Brightness ({remote_ip})",
+                "deviceId": remote_ip,
+                "pos": [0, 0, 0],
+                "rot": [0, 0, 0],
+                "calibrated": True,
+                "calibratedAt": None,
+                "calibratedAgainst": None,
+                "staleReason": "connection-lost" if hard_stale else None,
+                "softStale": False,
+                "hardStale": hard_stale,
+                "aim": None,
+                "up": None,
+                "connectionState": "streaming",
+                "lastDataAge": last_age if last_age < 1e6 else None,
+                "orientConvention": "n/a",
+                "autoBrightness": {
+                    "currentValue": cur_value if cur_value >= 0 else None,
+                    "min": ab_min, "max": ab_max,
+                    "globalBrightness": _settings.get("globalBrightness", 255),
+                },
+            })
+    return jsonify(remotes=snap)
 
 
 @app.post("/api/remotes/disconnect")
@@ -15922,6 +16194,13 @@ def _install_preset_show(preset_id):
     show = generate_show(preset_id, _fixtures, _layout, _stage, _profile_lib)
     if not show:
         return jsonify(ok=False, err="Failed to generate show"), 500
+    # #837 — `generate_show` now returns a {"error", "msg"} dict for
+    # missing-prerequisite themes (e.g. live_track preset on a rig
+    # without movers) instead of silently degrading to a non-tracking
+    # show that doesn't match the preset name.
+    if isinstance(show, dict) and show.get("error"):
+        return jsonify(ok=False, err=show.get("msg", show["error"]),
+                        code=show["error"]), 400
 
     with _lock:
         dur = show["durationS"]
@@ -18177,6 +18456,8 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
 
 
 

@@ -103,26 +103,43 @@ function _refreshRemotesDash(){
     var GUID_RX=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     remotes.forEach(function(r){
       var c=_remoteDashColor(r);
-      var kindLbl=r.kind==='phone'?'Phone':'Gyro puck';
-      var calLbl=r.calibrated?'<span style="color:#22c55e">calibrated</span>':'<span style="color:#64748b">uncalibrated</span>';
+      // #849 Part 2 \u2014 Auto Brightness entries render as their own
+      // kind. They control the global brightness scalar, not a mover,
+      // so the secondary line shows current envelope value + min/max
+      // instead of calibration status.
+      var isAutoBri=r.kind==='auto-brightness';
+      var kindLbl=isAutoBri?'Auto Brightness':(r.kind==='phone'?'Phone':'Gyro puck');
       var age=r.lastDataAge!=null?(r.lastDataAge.toFixed(1)+'s'):'-';
       var rawName=r.name||('Remote '+r.id);
       var displayName=GUID_RX.test(rawName)?'Phone (unknown host)':rawName;
+      var subline;
+      if(isAutoBri){
+        var ab=r.autoBrightness||{};
+        var cur=ab.currentValue!=null?ab.currentValue:'-';
+        var rng=(ab.min!=null&&ab.max!=null)?(ab.min+'\u2013'+ab.max):'-';
+        var glb=ab.globalBrightness!=null?ab.globalBrightness:'-';
+        subline=kindLbl+' \u00b7 cur '+cur+' \u00b7 range '+rng
+                +' \u00b7 globalBrightness '+glb+' \u00b7 last '+age;
+      } else {
+        var calLbl=r.calibrated?'<span style="color:#22c55e">calibrated</span>':'<span style="color:#64748b">uncalibrated</span>';
+        subline=kindLbl+' \u00b7 '+calLbl+' \u00b7 last '+age;
+      }
+      // Auto Brightness entries don't live in the registry \u2014 hide the
+      // delete \u00d7 button (no-op endpoint for them).
+      var deleteBtn=isAutoBri?'':
+        ('<button onclick="_removeRemoteDash('+r.id+',\''+escapeHtml(displayName).replace(/\x27/g,"\\x27")+'\')" '
+        +'title="Remove this remote from the registry" '
+        +'style="margin-left:.3em;background:transparent;border:none;color:#64748b;cursor:pointer;font-size:.95em;padding:0 .25em;line-height:1" '
+        +'onmouseover="this.style.color=\'#f87171\'" onmouseout="this.style.color=\'#64748b\'">\u00d7</button>');
       h+='<div style="background:#0f172a;border:1px solid '+c.border+';border-radius:6px;padding:.5em .8em;min-width:220px">'
         +'<div style="display:flex;align-items:center;gap:.4em;margin-bottom:.2em">'
         +'<span style="color:'+c.dot+';font-size:1.1em">\u25cf</span>'
         +'<span style="font-weight:bold;color:#e2e8f0;font-size:.82em;flex:1">'+escapeHtml(displayName)+'</span>'
         +'<span style="color:'+c.dot+';font-size:.7em;font-weight:bold;letter-spacing:.05em">'+c.lbl+'</span>'
-        // #690 \u2014 \u00d7 button removes a remote from the registry (gyro pucks
-        // and phones alike). Useful for orphan entries that registered
-        // via UDP but never sent live data.
-        +'<button onclick="_removeRemoteDash('+r.id+',\''+escapeHtml(displayName).replace(/\x27/g,"\\x27")+'\')" '
-        +'title="Remove this remote from the registry" '
-        +'style="margin-left:.3em;background:transparent;border:none;color:#64748b;cursor:pointer;font-size:.95em;padding:0 .25em;line-height:1" '
-        +'onmouseover="this.style.color=\'#f87171\'" onmouseout="this.style.color=\'#64748b\'">\u00d7</button>'
+        +deleteBtn
         +'</div>'
         +'<div style="color:#64748b;font-size:.72em;font-family:monospace">'
-        +kindLbl+' \u00b7 '+calLbl+' \u00b7 last '+age
+        +subline
         +'</div>'
         // Only surface the raw deviceId when it's meaningful (e.g.
         // "gyro-192.168.10.211"); hide the bare GUID from phones.
