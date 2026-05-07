@@ -2816,6 +2816,86 @@ def run():
         # with the legacy `aim-angles` endpoint. The new aim path is
         # `POST /api/mover/<fid>/aim` (see tests/aim/test_routes.py).
 
+        # ── #845 — DMX playback loop must write bake values to the wire ──
+        # Pre-fix `_dmx_playback_loop` called `_apply_handover_slew(fx,
+        # engine)` with 2 args but the function takes 5. The first
+        # fixture iteration raised TypeError, the daemon thread died
+        # silently, and not a single per-frame DMX write reached the
+        # universe — show start logged init but every channel stayed at
+        # zero. This regression test bakes a synthetic single-fixture
+        # timeline (RGB par, no pan/tilt/dimmer to keep the assertion
+        # surface small), runs `_dmx_playback_loop` directly to bypass
+        # the API's 5-second NTP wait, and asserts the universe buffer
+        # reflects the bake. Loop-dead → ch1 stays 0 → test fails.
+        import parent_server as _ps_pb
+        import threading as _thr_pb
+        import time as _time_pb
+
+        # Clean slate — earlier tests in this run may have set the stop
+        # flag (test_show_playlist stop, etc).
+        _ps_pb._dmx_playback_stop.set()
+        _time_pb.sleep(0.05)
+        _ps_pb._dmx_playback_stop.clear()
+
+        # Engine running so the loop's `if not engine.running` branch
+        # doesn't short-circuit before any write.
+        c.post('/api/dmx/start', json={'protocol': 'artnet'})
+
+        r = c.post('/api/fixtures', json={
+            'name': '#845 PB Test', 'type': 'point', 'fixtureType': 'dmx',
+            'dmxUniverse': 1, 'dmxStartAddr': 100, 'dmxChannelCount': 3,
+            'dmxProfileId': 'generic-rgb', 'rotation': [0, 0, 0],
+        })
+        ok('#845 setup fixture', r.status_code == 200)
+        pb_fid = r.get_json().get('id')
+
+        r = c.post('/api/timelines', json={'name': '#845 PB', 'durationS': 30})
+        ok('#845 setup timeline', r.status_code == 200)
+        pb_tid = r.get_json().get('id')
+
+        # Synthetic bake — bypass action/bake pipeline; the regression
+        # is purely in the playback-loop write path.
+        _ps_pb._bake_result[pb_tid] = {
+            'timelineId': pb_tid, 'bakedAt': int(_time_pb.time()),
+            'fixtures': {pb_fid: {'segments': [{
+                'startS': 0.0, 'durationS': 30.0, '_pri': 0,
+                'params': {'r': 255, 'g': 0, 'b': 0},
+            }]}},
+            'totalFrames': 0, 'fps': 40,
+        }
+
+        # Run the playback loop directly so go_epoch is in the past
+        # and the loop's NTP-wait short-circuits — keeps the test fast.
+        go_epoch_pb = _time_pb.time() - 0.05
+        _thr_pb.Thread(target=_ps_pb._dmx_playback_loop,
+                       args=(pb_tid, go_epoch_pb, 30, False),
+                       daemon=True).start()
+
+        # Allow ~10 frames at 40 Hz. If the thread died on iteration #1
+        # the buffer stays at zeros. (Pre-fix: zeros. Fixed: r=255.)
+        _time_pb.sleep(0.30)
+
+        r = c.get('/api/dmx/monitor/1')
+        ok('#845 monitor returns 200', r.status_code == 200)
+        chans = r.get_json().get('channels', [])
+        # generic-rgb @ start 100 → ch100 (index 99) = red, ch101 = green, ch102 = blue.
+        ok('#845 playback wrote red=255 to wire',
+           len(chans) >= 102 and chans[99] == 255,
+           f'ch100={chans[99] if len(chans) >= 100 else "?"} '
+           f'(expected 255 — loop dead if 0)')
+        ok('#845 playback wrote green=0',
+           len(chans) >= 102 and chans[100] == 0,
+           f'ch101={chans[100] if len(chans) >= 101 else "?"}')
+        ok('#845 playback wrote blue=0',
+           len(chans) >= 102 and chans[101] == 0,
+           f'ch102={chans[101] if len(chans) >= 102 else "?"}')
+
+        _ps_pb._dmx_playback_stop.set()
+        _time_pb.sleep(0.05)
+        c.delete(f'/api/timelines/{pb_tid}')
+        c.delete(f'/api/fixtures/{pb_fid}')
+        _ps_pb._bake_result.pop(pb_tid, None)
+
     # ── Print results ───────────────────────────────────────────────
     passed = sum(1 for _, v, _ in results if v)
     failed = sum(1 for _, v, _ in results if not v)

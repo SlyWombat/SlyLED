@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.84"
+VERSION = "1.7.86"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -14500,137 +14500,169 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
             elapsed = elapsed % duration
         elif elapsed > duration:
             break  # show ended
-        # #622 — skip DMX writes entirely when the engine is stopped.
-        # Previously we still iterated and called engine.get_universe(),
-        # which lazy-created keep-alive-active buffers that would emit
-        # ArtDMX as soon as the engine started later.
-        if not engine.running:
+        # #845 — silent-death guard around the per-frame body. Pre-fix
+        # any exception inside this block (e.g. wrong-arity call to
+        # `_apply_handover_slew`, missing channel-map key, etc.) killed
+        # the daemon thread before a single frame reached the universe,
+        # producing the symptom the issue describes: show starts cleanly,
+        # initialization is logged, but no per-frame writes occur. The
+        # log call below is rate-limited so a persistent failure surfaces
+        # in the log without producing 40 tracebacks per second.
+        try:
+            # #622 — skip DMX writes entirely when the engine is stopped.
+            # Previously we still iterated and called engine.get_universe(),
+            # which lazy-created keep-alive-active buffers that would emit
+            # ArtDMX as soon as the engine started later.
+            if not engine.running:
+                frame_count += 1
+                continue
+            # #763 — claim-arbiter snapshot, frozen for the duration of
+            # this ~25 ms frame so every per-fixture decision sees a
+            # consistent set.
+            claim_snap = _claim_arbiter.snapshot()
+            # #843 — snapshot the master-brightness setting once per
+            # frame so all per-fixture writes in this iteration see the
+            # same value (immune to a /api/brightness write landing
+            # mid-iteration).
+            with _lock:
+                g_bri = _settings.get("globalBrightness", 255)
+            # Evaluate each DMX fixture — merge ALL matching segments
+            # per-channel. Higher-priority segments (_pri) override lower
+            # ones per-channel, allowing e.g. a PT sweep to control
+            # pan/tilt while a base wash controls color independently.
+            for fx in dmx_fixtures:
+                # #511 — skip playback for fixtures mid-calibration.
+                if _fixture_is_calibrating(fx.get("id")):
+                    continue
+                # #763 — skip show writes for fixtures held by mover-
+                # control. Bake values are still computed (above) but
+                # never reach the universe buffer. Mover-control writes
+                # through unchanged.
+                if _claim_arbiter.is_muted(fx["fid"], claim_snap):
+                    continue
+                # #763 — smooth-handover slew window: cap pan-tilt-speed
+                # for ~750 ms after release so motors ease toward the
+                # show's pose instead of snapping. Released once when
+                # the window expires.
+                # #845 — must use the same 5-arg signature as the call
+                # at `_show_playback_loop` (and the function def). The
+                # 2-arg form raised TypeError on every first-fixture
+                # iteration, killing the daemon thread before any DMX
+                # write.
+                _apply_handover_slew(fx["fid"], fx["uni"], fx["addr"],
+                                     fx["ch_map"], engine)
+                # Collect per-channel values: {channel_name: (value, priority)}
+                ch_vals = {}
+                for seg in fx["segs"]:
+                    ss = seg.get("startS", 0)
+                    sd = seg.get("durationS", 1)
+                    if ss <= elapsed < ss + sd:
+                        p = seg.get("params", {})
+                        pri = seg.get("_pri", 0)
+                        for k, v in p.items():
+                            if v is not None and (k not in ch_vals or pri >= ch_vals[k][1]):
+                                ch_vals[k] = (v, pri)
+                r = ch_vals.get("r", (0, 0))[0]
+                g = ch_vals.get("g", (0, 0))[0]
+                b = ch_vals.get("b", (0, 0))[0]
+                pan = ch_vals.get("pan", (None, 0))[0]
+                tilt = ch_vals.get("tilt", (None, 0))[0]
+                dimmer = ch_vals.get("dimmer", (None, 0))[0]
+                strobe = ch_vals.get("strobe", (None, 0))[0]
+                gobo = ch_vals.get("gobo", (None, 0))[0]
+                color_wheel = ch_vals.get("colorWheel", (None, 0))[0]
+                prism = ch_vals.get("prism", (None, 0))[0]
+                focus = ch_vals.get("focus", (None, 0))[0]
+                zoom = ch_vals.get("zoom", (None, 0))[0]
+                profile = {"channel_map": fx["ch_map"], "channels": fx.get("channels", [])} if fx["ch_map"] else None
+                uni_buf = engine.get_universe(fx["uni"])
+                # #842 — set_fixture_rgb handles RGB, hybrid, and
+                # wheel-only. The baked frame's explicit `colorWheel`
+                # override (only set by type-17 Colour Wheel actions,
+                # #841) still wins for wheel-only profiles where the
+                # operator picked a slot.
+                cm = fx["ch_map"] or {}
+                # #843 — apply global brightness. Master-dimmer fixtures
+                # scale the dimmer channel; RGB-only fixtures (no
+                # dimmer) scale the RGB triple. Bake outputs are
+                # unchanged — scaling happens here at render time, so
+                # brightness slewing during a show needs no re-bake.
+                if "dimmer" in cm:
+                    r_out, g_out, b_out = r, g, b
+                else:
+                    r_out = _scale_for_brightness(r, g_bri)
+                    g_out = _scale_for_brightness(g, g_bri)
+                    b_out = _scale_for_brightness(b, g_bri)
+                if (color_wheel is not None and "color-wheel" in cm
+                        and not any(c in cm for c in ("red", "green", "blue"))):
+                    uni_buf.set_channel(fx["addr"] + cm["color-wheel"], color_wheel)
+                elif cm and (r or g or b
+                             or any(c in cm for c in ("red", "green", "blue"))):
+                    uni_buf.set_fixture_rgb(fx["addr"], r_out, g_out, b_out, profile)
+                # Dimmer
+                if fx["ch_map"] and "dimmer" in fx["ch_map"]:
+                    dim = dimmer if dimmer is not None else (255 if (r or g or b) else 0)
+                    dim = _scale_for_brightness(dim, g_bri)
+                    uni_buf.set_fixture_dimmer(fx["addr"], dim, profile)
+                # Pan/Tilt
+                if pan is not None and tilt is not None and profile:
+                    uni_buf.set_fixture_pan_tilt(fx["addr"], pan, tilt, profile)
+                    # #806 phase 2 — record canonical aim_stage for this
+                    # baked-playback write so calibrate-end during a
+                    # running show observes the head's true direction
+                    # without an inverse-IK round-trip on the read path.
+                    try:
+                        _f_full = next((_x for _x in _fixtures
+                                        if _x.get("id") == fx["fid"]), None)
+                        _prof_full = (_profile_lib.channel_info(_f_full.get("dmxProfileId"))
+                                      if _f_full and _f_full.get("dmxProfileId") else None)
+                        if _f_full is not None:
+                            _aim_v = _canonical_aim_from_pan_tilt(
+                                _f_full, _prof_full, pan, tilt)
+                            if _aim_v is not None:
+                                _set_canonical_aim_stage(fx["fid"], _aim_v)
+                    except Exception:
+                        pass
+                # Extra DMX channels via set_fixture_channels.
+                # Channel types use hyphenated names (color-wheel, gobo-rotation).
+                extra_ch = {}
+                if strobe is not None:
+                    extra_ch["strobe"] = strobe
+                if gobo is not None:
+                    extra_ch["gobo"] = gobo
+                if color_wheel is not None:
+                    extra_ch["color-wheel"] = color_wheel
+                if prism is not None:
+                    extra_ch["prism"] = prism
+                if focus is not None:
+                    extra_ch["focus"] = focus
+                if zoom is not None:
+                    extra_ch["zoom"] = zoom
+                if extra_ch and profile:
+                    uni_buf.set_fixture_channels(fx["addr"], extra_ch, profile)
+            # ── Object patrols: update moving object positions ──
+            _evaluate_object_patrols(elapsed)
+            # ── Track action: real-time pan/tilt for moving heads
+            #    following objects ──
+            if frame_count % 40 == 0:  # reap temporals every 1s
+                _reap_temporal_objects()
+            _evaluate_track_actions(elapsed, engine, dmx_fixtures,
+                                     timeline_track_fids=timeline_track_fids,
+                                     tl_action_ids=tl_action_ids)
             frame_count += 1
-            continue
-        # #763 — claim-arbiter snapshot, frozen for the duration of this
-        # ~25 ms frame so every per-fixture decision sees a consistent set.
-        claim_snap = _claim_arbiter.snapshot()
-        # #843 — snapshot the master-brightness setting once per frame so
-        # all per-fixture writes in this iteration see the same value
-        # (immune to a /api/brightness write landing mid-iteration).
-        with _lock:
-            g_bri = _settings.get("globalBrightness", 255)
-        # Evaluate each DMX fixture — merge ALL matching segments per-channel.
-        # Higher-priority segments (_pri) override lower ones per-channel,
-        # allowing e.g. a PT sweep to control pan/tilt while a base wash
-        # controls color independently.
-        for fx in dmx_fixtures:
-            # #511 — skip playback for fixtures mid-calibration.
-            if _fixture_is_calibrating(fx.get("id")):
-                continue
-            # #763 — skip show writes for fixtures held by mover-control.
-            # Bake values are still computed (above) but never reach the
-            # universe buffer. Mover-control writes through unchanged.
-            if _claim_arbiter.is_muted(fx["fid"], claim_snap):
-                continue
-            # #763 — smooth-handover slew window: cap pan-tilt-speed for
-            # ~750 ms after release so motors ease toward the show's pose
-            # instead of snapping. Released once when the window expires.
-            _apply_handover_slew(fx, engine)
-            # Collect per-channel values: {channel_name: (value, priority)}
-            ch_vals = {}
-            for seg in fx["segs"]:
-                ss = seg.get("startS", 0)
-                sd = seg.get("durationS", 1)
-                if ss <= elapsed < ss + sd:
-                    p = seg.get("params", {})
-                    pri = seg.get("_pri", 0)
-                    for k, v in p.items():
-                        if v is not None and (k not in ch_vals or pri >= ch_vals[k][1]):
-                            ch_vals[k] = (v, pri)
-            r = ch_vals.get("r", (0, 0))[0]
-            g = ch_vals.get("g", (0, 0))[0]
-            b = ch_vals.get("b", (0, 0))[0]
-            pan = ch_vals.get("pan", (None, 0))[0]
-            tilt = ch_vals.get("tilt", (None, 0))[0]
-            dimmer = ch_vals.get("dimmer", (None, 0))[0]
-            strobe = ch_vals.get("strobe", (None, 0))[0]
-            gobo = ch_vals.get("gobo", (None, 0))[0]
-            color_wheel = ch_vals.get("colorWheel", (None, 0))[0]
-            prism = ch_vals.get("prism", (None, 0))[0]
-            focus = ch_vals.get("focus", (None, 0))[0]
-            zoom = ch_vals.get("zoom", (None, 0))[0]
-            profile = {"channel_map": fx["ch_map"], "channels": fx.get("channels", [])} if fx["ch_map"] else None
-            uni_buf = engine.get_universe(fx["uni"])
-            # #842 — set_fixture_rgb handles RGB, hybrid, and wheel-only.
-            # The baked frame's explicit `colorWheel` override (only set
-            # by type-17 Colour Wheel actions, #841) still wins for
-            # wheel-only profiles where the operator picked a slot.
-            cm = fx["ch_map"] or {}
-            # #843 — apply global brightness. Master-dimmer fixtures
-            # scale the dimmer channel; RGB-only fixtures (no dimmer)
-            # scale the RGB triple. Bake outputs are unchanged — scaling
-            # happens here at render time, so brightness slewing during
-            # a show needs no re-bake.
-            if "dimmer" in cm:
-                r_out, g_out, b_out = r, g, b
-            else:
-                r_out = _scale_for_brightness(r, g_bri)
-                g_out = _scale_for_brightness(g, g_bri)
-                b_out = _scale_for_brightness(b, g_bri)
-            if (color_wheel is not None and "color-wheel" in cm
-                    and not any(c in cm for c in ("red", "green", "blue"))):
-                uni_buf.set_channel(fx["addr"] + cm["color-wheel"], color_wheel)
-            elif cm and (r or g or b
-                         or any(c in cm for c in ("red", "green", "blue"))):
-                uni_buf.set_fixture_rgb(fx["addr"], r_out, g_out, b_out, profile)
-            # Dimmer
-            if fx["ch_map"] and "dimmer" in fx["ch_map"]:
-                dim = dimmer if dimmer is not None else (255 if (r or g or b) else 0)
-                dim = _scale_for_brightness(dim, g_bri)
-                uni_buf.set_fixture_dimmer(fx["addr"], dim, profile)
-            # Pan/Tilt
-            if pan is not None and tilt is not None and profile:
-                uni_buf.set_fixture_pan_tilt(fx["addr"], pan, tilt, profile)
-                # #806 phase 2 — record canonical aim_stage for this
-                # baked-playback write so calibrate-end during a running
-                # show observes the head's true direction without an
-                # inverse-IK round-trip on the read path.
-                try:
-                    _f_full = next((_x for _x in _fixtures
-                                    if _x.get("id") == fx["fid"]), None)
-                    _prof_full = (_profile_lib.channel_info(_f_full.get("dmxProfileId"))
-                                  if _f_full and _f_full.get("dmxProfileId") else None)
-                    if _f_full is not None:
-                        _aim_v = _canonical_aim_from_pan_tilt(
-                            _f_full, _prof_full, pan, tilt)
-                        if _aim_v is not None:
-                            _set_canonical_aim_stage(fx["fid"], _aim_v)
-                except Exception:
-                    pass
-            # Extra DMX channels via set_fixture_channels
-            # Channel types use hyphenated names (color-wheel, gobo-rotation)
-            extra_ch = {}
-            if strobe is not None:
-                extra_ch["strobe"] = strobe
-            if gobo is not None:
-                extra_ch["gobo"] = gobo
-            if color_wheel is not None:
-                extra_ch["color-wheel"] = color_wheel
-            if prism is not None:
-                extra_ch["prism"] = prism
-            if focus is not None:
-                extra_ch["focus"] = focus
-            if zoom is not None:
-                extra_ch["zoom"] = zoom
-            if extra_ch and profile:
-                uni_buf.set_fixture_channels(fx["addr"], extra_ch, profile)
-        # ── Object patrols: update moving object positions ──
-        _evaluate_object_patrols(elapsed)
-        # ── Track action: real-time pan/tilt for moving heads following objects ──
-        if frame_count % 40 == 0:  # reap temporals every 1s
-            _reap_temporal_objects()
-        _evaluate_track_actions(elapsed, engine, dmx_fixtures,
-                                 timeline_track_fids=timeline_track_fids,
-                                 tl_action_ids=tl_action_ids)
-        frame_count += 1
-        if frame_count == 1:
-            log.info("DMX playback: first frame sent at elapsed=%.1fs", elapsed)
+            if frame_count == 1:
+                log.info("DMX playback: first frame sent at elapsed=%.1fs", elapsed)
+        except Exception:
+            # #845 — surface any per-frame failure in the log instead
+            # of letting the daemon thread die silently. Rate-limited
+            # to ~once/sec at 40 Hz so a persistent failure (e.g.
+            # malformed profile, missing arbiter API) doesn't spam 40
+            # tracebacks per second. The first failure always logs
+            # because (frame_count % 40 == 0) is true at frame_count=0.
+            if frame_count % 40 == 0:
+                log.exception("DMX playback frame failed (frame=%d, elapsed=%.1fs)",
+                              frame_count, elapsed)
+            frame_count += 1
     log.info("DMX playback: stopped after %d frames", frame_count)
     # Timeline end (#800 idle definition): each mover the timeline was
     # driving snaps to home + lamp off, so the head doesn't sit at the
@@ -17855,6 +17887,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
