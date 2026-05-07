@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.87"
+VERSION = "1.7.88"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -16189,26 +16189,193 @@ def api_show_export():
                     "actions": _actions, "spatialEffects": _spatial_fx,
                     "timelines": _timelines})
 
+# #838 — content-based merge keys for `/api/show/import`. Pre-fix
+# the import endpoint replaced the entire actions / spatialEffects /
+# timelines lists with the file's contents, destroying every operator-
+# created record that wasn't in the imported file. The fix merges by
+# content: each incoming action/effect is checked against the existing
+# library; if a record with matching name + type + key params exists,
+# its id is reused (and the record is NOT overwritten, so operator-
+# tweaked fields aren't silently mutated). New records get fresh ids
+# and timeline clip refs are remapped to the resolved targets.
+
+# Action key params per type. All types match on (name, type) plus the
+# type-specific extras below. Lists are converted to tuples and dicts
+# to sorted tuple-of-tuples by `_freeze` so the resulting key is hashable.
+_ACTION_KEY_PARAMS_LED = (
+    "r", "g", "b", "speedMs", "periodMs", "paletteId",
+    "cooling", "sparking", "direction", "density",
+    "fadeSpeed", "spawnMs", "minBri", "tailLen",
+    "decay", "spacing",
+)
+_ACTION_KEY_PARAMS_DMX_SCENE = ("dimmer", "pan", "tilt",
+                                  "strobe", "gobo", "colorWheel")
+_ACTION_KEY_PARAMS_DMX_PT = ("panStart", "panEnd",
+                               "tiltStart", "tiltEnd",
+                               "ptStartPos", "ptEndPos")
+_ACTION_KEY_PARAMS_TRACK = ("trackObjectType", "trackDimmer",
+                              "trackFixtureIds", "trackObjectIds",
+                              "trackMode", "trackOffset",
+                              "trackCycleMs")
+
+
+def _freeze(v):
+    """Recursively convert a value to a hashable form for content-key
+    matching. Lists → tuples; dicts → sorted tuple of (k, frozen_v).
+    """
+    if isinstance(v, dict):
+        return tuple(sorted((k, _freeze(vv)) for k, vv in v.items()))
+    if isinstance(v, list):
+        return tuple(_freeze(x) for x in v)
+    return v
+
+
+def _action_content_key(action):
+    """#838 — hashable content key for show-import action dedup.
+
+    Matches actions on `name + type + type-specific params`. Two
+    actions with identical content (same name, same type, same
+    behaviour-driving params) collapse to one library record on
+    import. The operator's fields aren't overwritten — match means
+    reuse, not update.
+    """
+    a_type = action.get("type")
+    keys = ["name", "type"]
+    if isinstance(a_type, int):
+        if 1 <= a_type <= 13:
+            keys.extend(_ACTION_KEY_PARAMS_LED)
+        elif a_type == 14:  # DMX_SCENE — color + DMX scene channels
+            keys.extend(_ACTION_KEY_PARAMS_LED)
+            keys.extend(_ACTION_KEY_PARAMS_DMX_SCENE)
+        elif a_type == 15:  # DMX_PT_MOVE
+            keys.extend(_ACTION_KEY_PARAMS_DMX_PT)
+        elif a_type == 16:  # Gobo Select — gobo channel
+            keys.append("gobo")
+        elif a_type == 17:  # Colour Wheel — wheel slot
+            keys.append("colorWheel")
+        elif a_type == 18:  # Track
+            keys.extend(_ACTION_KEY_PARAMS_TRACK)
+    return tuple((k, _freeze(action.get(k))) for k in keys)
+
+
+def _effect_content_key(effect):
+    """#838 — hashable content key for spatial effect dedup. Matches on
+    name, category, shape, size, motion (per the issue's spec)."""
+    return tuple((k, _freeze(effect.get(k)))
+                 for k in ("name", "category", "shape", "size", "motion"))
+
+
 @app.post("/api/show/import")
 def api_show_import():
-    """Replace all actions, spatial effects, and timelines from a show file."""
-    global _actions, _spatial_fx, _timelines, _nxt_a, _nxt_sfx, _nxt_tl
+    """Merge actions, spatial effects, and timelines from a show file
+    into the operator's library (#838).
+
+    Pre-fix this endpoint replaced the entire library with the file's
+    contents, destroying every operator-created record that wasn't in
+    the imported show. The new behaviour matches incoming
+    actions/effects against existing records by content key (see
+    `_action_content_key` / `_effect_content_key`):
+
+    - **Match found** → reuse the existing id; the existing record is
+      NOT overwritten (operator fields are preserved).
+    - **No match** → append with a fresh id and remap timeline clip
+      references to that fresh id.
+
+    Timelines themselves are always added with fresh ids; never
+    overwrite an existing timeline by id. Clip ``actionId`` /
+    ``effectId`` references are remapped to the resolved (existing or
+    new) target ids.
+
+    `/api/project/import` is intentionally a different scope — it is
+    a full project-state restore (fixtures, layout, calibrations,
+    settings) so replacement semantics are correct there.
+    """
+    global _nxt_a, _nxt_sfx, _nxt_tl
     data = request.get_json(silent=True) or {}
     if data.get("type") != "slyled-show":
         return jsonify(ok=False, err="not a slyled-show file"), 400
+
+    in_actions = data.get("actions") or []
+    in_effects = data.get("spatialEffects") or []
+    in_timelines = data.get("timelines") or []
+
+    actions_reused = 0
+    actions_created = 0
+    effects_reused = 0
+    effects_created = 0
+    timelines_created = 0
+
     with _lock:
-        _actions = data.get("actions", [])
-        _spatial_fx = data.get("spatialEffects", [])
-        _timelines = data.get("timelines", [])
-        _nxt_a = max((a["id"] for a in _actions), default=-1) + 1
-        _nxt_sfx = max((f["id"] for f in _spatial_fx), default=-1) + 1
-        _nxt_tl = max((t["id"] for t in _timelines), default=-1) + 1
+        # Build content-key indices over the existing library so each
+        # incoming record is an O(1) lookup.
+        existing_actions_by_key = {_action_content_key(a): a
+                                    for a in _actions}
+        existing_effects_by_key = {_effect_content_key(e): e
+                                    for e in _spatial_fx}
+
+        action_id_remap = {}  # incoming id → resolved id
+        for in_a in in_actions:
+            key = _action_content_key(in_a)
+            existing = existing_actions_by_key.get(key)
+            in_id = in_a.get("id")
+            if existing is not None:
+                action_id_remap[in_id] = existing["id"]
+                actions_reused += 1
+            else:
+                new_a = {**in_a, "id": _nxt_a}
+                _actions.append(new_a)
+                existing_actions_by_key[key] = new_a
+                action_id_remap[in_id] = _nxt_a
+                _nxt_a += 1
+                actions_created += 1
+
+        effect_id_remap = {}
+        for in_e in in_effects:
+            key = _effect_content_key(in_e)
+            existing = existing_effects_by_key.get(key)
+            in_id = in_e.get("id")
+            if existing is not None:
+                effect_id_remap[in_id] = existing["id"]
+                effects_reused += 1
+            else:
+                new_e = {**in_e, "id": _nxt_sfx}
+                _spatial_fx.append(new_e)
+                existing_effects_by_key[key] = new_e
+                effect_id_remap[in_id] = _nxt_sfx
+                _nxt_sfx += 1
+                effects_created += 1
+
+        for in_t in in_timelines:
+            new_t = {**in_t, "id": _nxt_tl}
+            # Remap clip references to the resolved (existing or new)
+            # action / effect ids. Tracks/clips are nested dicts; copy
+            # them so we don't mutate the caller's payload.
+            remapped_tracks = []
+            for tr in (in_t.get("tracks") or []):
+                new_clips = []
+                for cl in (tr.get("clips") or []):
+                    new_cl = dict(cl)
+                    if "actionId" in new_cl and new_cl["actionId"] in action_id_remap:
+                        new_cl["actionId"] = action_id_remap[new_cl["actionId"]]
+                    if "effectId" in new_cl and new_cl["effectId"] in effect_id_remap:
+                        new_cl["effectId"] = effect_id_remap[new_cl["effectId"]]
+                    new_clips.append(new_cl)
+                remapped_tracks.append({**tr, "clips": new_clips})
+            new_t["tracks"] = remapped_tracks
+            _timelines.append(new_t)
+            _nxt_tl += 1
+            timelines_created += 1
+
         _save("actions", _actions)
         _save("spatial_fx", _spatial_fx)
         _save("timelines", _timelines)
-    return jsonify(ok=True, actions=len(_actions), spatialEffects=len(_spatial_fx),
-                   timelines=len(_timelines),
-                   runners=0, flights=0, shows=0)
+
+    return jsonify(ok=True,
+                   actions={"reused": actions_reused,
+                            "created": actions_created},
+                   spatialEffects={"reused": effects_reused,
+                                    "created": effects_created},
+                   timelines={"created": timelines_created})
 
 #  "  "  Project file (complete save/load)  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
@@ -17876,6 +18043,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 

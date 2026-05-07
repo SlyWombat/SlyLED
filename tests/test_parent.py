@@ -2896,6 +2896,278 @@ def run():
         c.delete(f'/api/fixtures/{pb_fid}')
         _ps_pb._bake_result.pop(pb_tid, None)
 
+        # ── #835 — orphan Track actions must not blackout movers in
+        # timelines that don't reference them ────────────────────────
+        # Pre-fix: any type-18 entry in `_actions` was evaluated every
+        # DMX frame regardless of whether the running timeline used
+        # it. With no targets (no detected people, no patrol props of
+        # the action's type), the unassigned-heads blackout zeroed the
+        # master Dimmer on every mover the timeline drove, leaving
+        # the rig dark while pan/tilt continued to animate.
+        # Fix landed in v1.7.82 (commit d1e5d75): `_evaluate_track_actions`
+        # filters `track_actions` by the `tl_action_ids` set passed
+        # from `_dmx_playback_loop` — only Track actions whose id is
+        # referenced by a clip in the running timeline evaluate. The
+        # operator couldn't verify on the rig because #845 had the
+        # playback loop dead (no DMX writes at all). Now the loop is
+        # alive, this regression test exercises the v1.7.82 fix.
+        _ps_pb._dmx_playback_stop.set()
+        _time_pb.sleep(0.05)
+        _ps_pb._dmx_playback_stop.clear()
+
+        # Mover fixture — must have panRange/tiltRange > 0 so
+        # `_evaluate_track_actions`'s fx_lookup picks it up.
+        r = c.post('/api/fixtures', json={
+            'name': '#835 Orphan Test Mover', 'type': 'point',
+            'fixtureType': 'dmx',
+            'dmxUniverse': 1, 'dmxStartAddr': 200,
+            'dmxChannelCount': 12,
+            'dmxProfileId': 'movinghead-150w-12ch',
+            'rotation': [0, 0, 0],
+        })
+        ok('#835 setup mover', r.status_code == 200)
+        m_fid = r.get_json().get('id')
+
+        # Position the mover so the Track-action evaluator's pos_map
+        # lookup succeeds.
+        _ps_pb._layout.setdefault('children', []).append(
+            {'id': m_fid, 'x': 0, 'y': 0, 'z': 2000})
+
+        # Orphan Track action: type 18 in `_actions`, no clip references it.
+        # `trackObjectIds=[]` and `trackFixtureIds=[]` so it falls back
+        # to the timeline-track scope (#829) — which pre-fix would
+        # cover the timeline's mover and trigger the blackout.
+        r = c.post('/api/actions', json={
+            'name': '#835 Orphan Track', 'type': 18,
+            'trackObjectType': 'person',
+            'trackObjectIds': [], 'trackFixtureIds': [],
+        })
+        orphan_aid = r.get_json().get('id')
+
+        # Timeline assigned to the mover but with NO Track-action clips.
+        r = c.post('/api/timelines', json={'name': '#835 NoTrack',
+                                            'durationS': 30})
+        nt_tid = r.get_json().get('id')
+        c.put(f'/api/timelines/{nt_tid}', json={
+            'name': '#835 NoTrack', 'durationS': 30,
+            'tracks': [{'fixtureId': m_fid, 'clips': []}],
+        })
+
+        # Synthetic bake — dimmer=200 so the bake's wash is non-zero.
+        # If the orphan Track action regresses to its pre-fix
+        # behaviour, the unassigned-heads blackout will stomp this to
+        # 0 every frame and the assertion will fail.
+        _ps_pb._bake_result[nt_tid] = {
+            'timelineId': nt_tid, 'bakedAt': int(_time_pb.time()),
+            'fixtures': {m_fid: {'segments': [{
+                'startS': 0.0, 'durationS': 30.0, '_pri': 0,
+                'params': {'dimmer': 200, 'pan': 0.5, 'tilt': 0.5},
+            }]}},
+            'totalFrames': 0, 'fps': 40,
+        }
+
+        go_epoch_835 = _time_pb.time() - 0.05
+        _thr_pb.Thread(target=_ps_pb._dmx_playback_loop,
+                       args=(nt_tid, go_epoch_835, 30, False),
+                       daemon=True).start()
+        _time_pb.sleep(0.30)
+
+        r = c.get('/api/dmx/monitor/1')
+        ok('#835 monitor returns 200', r.status_code == 200)
+        chans = r.get_json().get('channels', [])
+        prof = _ps_pb._profile_lib.channel_info('movinghead-150w-12ch') or {}
+        dim_off = (prof.get('channel_map') or {}).get('dimmer')
+        ok('#835 mover profile has dimmer mapping', dim_off is not None)
+        if dim_off is not None:
+            # 1-based DMX address 200 → 0-based array index 199, plus
+            # the profile's dimmer offset.
+            dim_idx = 200 - 1 + dim_off
+            ok('#835 orphan Track action did NOT blackout dimmer',
+               chans[dim_idx] == 200,
+               f'ch{dim_idx+1}={chans[dim_idx]} '
+               f'(expected 200; 0 means orphan-blackout regressed)')
+
+        _ps_pb._dmx_playback_stop.set()
+        _time_pb.sleep(0.05)
+        c.delete(f'/api/timelines/{nt_tid}')
+        c.delete(f'/api/fixtures/{m_fid}')
+        c.delete(f'/api/actions/{orphan_aid}')
+        _ps_pb._bake_result.pop(nt_tid, None)
+        _ps_pb._layout['children'] = [
+            ch for ch in _ps_pb._layout.get('children', [])
+            if ch.get('id') != m_fid]
+
+        # ── #838 — show-import must merge by content, not replace ────
+        # Pre-fix: `/api/show/import` replaced _actions / _spatial_fx /
+        # _timelines wholesale with the file's contents, destroying
+        # every operator-created record. Post-fix: incoming
+        # actions/effects are matched against the existing library by
+        # `(name, type, key params)`; matches reuse the existing id
+        # without overwriting; non-matches get fresh ids and timeline
+        # clip refs are remapped.
+        # `/api/project/import` is intentionally a different scope
+        # (full state restore) and is unaffected.
+
+        # Reset library so we control the seed state precisely.
+        c.post('/api/reset', headers={'X-SlyLED-Confirm': 'true'})
+
+        # Seed: two operator actions, one operator spatial effect, one
+        # operator timeline that uses the first action.
+        r = c.post('/api/actions', json={
+            'name': 'Op Solid Red', 'type': 1,
+            'r': 255, 'g': 0, 'b': 0,
+        })
+        op_act_red_id = r.get_json().get('id')
+
+        r = c.post('/api/actions', json={
+            'name': 'Op Solid Blue', 'type': 1,
+            'r': 0, 'g': 0, 'b': 255,
+        })
+        op_act_blue_id = r.get_json().get('id')
+
+        r = c.post('/api/spatial-effects', json={
+            'name': 'Op Sphere', 'category': 'spatial-field',
+            'shape': 'sphere', 'r': 100, 'g': 150, 'b': 200,
+            'size': {'radius': 1500},
+            'motion': {'startPos': [0, 0, 0], 'endPos': [3000, 0, 0],
+                       'durationS': 5, 'easing': 'linear'},
+            'blend': 'replace',
+        })
+        op_eff_id = r.get_json().get('id')
+
+        r = c.post('/api/timelines', json={
+            'name': 'Op Timeline', 'durationS': 10,
+            'tracks': [{'fixtureId': 0, 'clips': [
+                {'actionId': op_act_red_id, 'startS': 0, 'durationS': 5},
+            ]}],
+        })
+        op_tl_id = r.get_json().get('id')
+
+        # Build a synthetic show-file payload representing a colleague's
+        # export. Note: the source-project IDs are arbitrary; the merge
+        # must remap clip refs to the resolved (existing or new) ids.
+        import_payload = {
+            'type': 'slyled-show', 'version': 1,
+            'actions': [
+                # Identical content to "Op Solid Red" — must reuse op id.
+                {'id': 100, 'name': 'Op Solid Red', 'type': 1,
+                 'r': 255, 'g': 0, 'b': 0},
+                # Same name as "Op Solid Blue" but different params —
+                # must create a NEW record (operator's blue untouched).
+                {'id': 101, 'name': 'Op Solid Blue', 'type': 1,
+                 'r': 100, 'g': 100, 'b': 255},
+                # Brand-new action, no match — must create.
+                {'id': 102, 'name': 'Imported Green', 'type': 1,
+                 'r': 0, 'g': 255, 'b': 0},
+            ],
+            'spatialEffects': [
+                # Identical content to operator's effect — must reuse.
+                {'id': 200, 'name': 'Op Sphere', 'category': 'spatial-field',
+                 'shape': 'sphere', 'r': 100, 'g': 150, 'b': 200,
+                 'size': {'radius': 1500},
+                 'motion': {'startPos': [0, 0, 0],
+                             'endPos': [3000, 0, 0],
+                             'durationS': 5, 'easing': 'linear'},
+                 'blend': 'replace'},
+                # New effect.
+                {'id': 201, 'name': 'Imported Cube', 'category': 'spatial-field',
+                 'shape': 'cube', 'r': 50, 'g': 50, 'b': 50,
+                 'size': {'edge': 1000},
+                 'motion': {'startPos': [0, 0, 0],
+                             'endPos': [0, 0, 0],
+                             'durationS': 3, 'easing': 'linear'},
+                 'blend': 'add'},
+            ],
+            'timelines': [
+                # Imported timeline references the source-project ids
+                # 100 (matches existing red), 101 (new blue variant),
+                # 102 (new green), 200 (matches existing sphere), 201
+                # (new cube). All five must remap to the resolved ids.
+                {'id': 300, 'name': 'Imported Timeline',
+                 'durationS': 12,
+                 'tracks': [{'fixtureId': 0, 'clips': [
+                     {'actionId': 100, 'startS': 0, 'durationS': 3},
+                     {'actionId': 101, 'startS': 3, 'durationS': 3},
+                     {'actionId': 102, 'startS': 6, 'durationS': 3},
+                     {'effectId': 200, 'startS': 9, 'durationS': 1.5},
+                     {'effectId': 201, 'startS': 10.5, 'durationS': 1.5},
+                 ]}]},
+            ],
+        }
+        r = c.post('/api/show/import', json=import_payload)
+        ok('#838 import returns 200', r.status_code == 200)
+        body = r.get_json()
+        ok('#838 import ok', body.get('ok') is True)
+        # Reused: 1 action (red) + 1 effect (sphere). Created: 2 actions
+        # (variant blue, green) + 1 effect (cube). Timelines: 1 created.
+        ok('#838 actions reused = 1', body.get('actions', {}).get('reused') == 1,
+           f'got {body.get("actions")}')
+        ok('#838 actions created = 2', body.get('actions', {}).get('created') == 2,
+           f'got {body.get("actions")}')
+        ok('#838 effects reused = 1',
+           body.get('spatialEffects', {}).get('reused') == 1,
+           f'got {body.get("spatialEffects")}')
+        ok('#838 effects created = 1',
+           body.get('spatialEffects', {}).get('created') == 1,
+           f'got {body.get("spatialEffects")}')
+        ok('#838 timelines created = 1',
+           body.get('timelines', {}).get('created') == 1,
+           f'got {body.get("timelines")}')
+
+        # Verify operator records preserved with original ids.
+        all_acts = c.get('/api/actions').get_json()
+        ok('#838 op red action preserved with id',
+           any(a.get('id') == op_act_red_id and a.get('name') == 'Op Solid Red'
+               and a.get('r') == 255 for a in all_acts),
+           f'red id={op_act_red_id} not found in {[a.get("id") for a in all_acts]}')
+        ok('#838 op blue action preserved untouched',
+           any(a.get('id') == op_act_blue_id and a.get('name') == 'Op Solid Blue'
+               and a.get('b') == 255 and a.get('r') == 0
+               for a in all_acts),
+           f'blue id={op_act_blue_id} mutated by import')
+
+        # Verify content-match reused id (only ONE "Op Solid Red" record).
+        red_count = sum(1 for a in all_acts if a.get('name') == 'Op Solid Red')
+        ok('#838 content-match reused (no duplicate red)', red_count == 1,
+           f'expected 1 "Op Solid Red", got {red_count}')
+
+        # Verify same-name-different-params created a NEW record.
+        blue_records = [a for a in all_acts if a.get('name') == 'Op Solid Blue']
+        ok('#838 same-name-different-params created new record',
+           len(blue_records) == 2,
+           f'expected 2 "Op Solid Blue" records, got {len(blue_records)}')
+
+        # Verify imported timeline's clip refs are remapped.
+        all_tls = c.get('/api/timelines').get_json()
+        imp_tl = next((t for t in all_tls if t.get('name') == 'Imported Timeline'), None)
+        ok('#838 imported timeline present', imp_tl is not None)
+        if imp_tl:
+            clips = imp_tl.get('tracks', [{}])[0].get('clips', [])
+            # The red clip (source actionId=100) must now reference op_act_red_id.
+            red_clip = clips[0] if clips else {}
+            ok('#838 timeline red-clip remapped to existing op id',
+               red_clip.get('actionId') == op_act_red_id,
+               f'got actionId={red_clip.get("actionId")}, expected {op_act_red_id}')
+            # The variant blue clip (source actionId=101) must reference
+            # the NEW blue record (not op_act_blue_id).
+            new_blue_id = next((a['id'] for a in blue_records
+                                if a.get('r') == 100), None)
+            blue_clip = clips[1] if len(clips) > 1 else {}
+            ok('#838 timeline variant-blue clip remapped to new id',
+               blue_clip.get('actionId') == new_blue_id and
+               new_blue_id != op_act_blue_id,
+               f'got actionId={blue_clip.get("actionId")}, '
+               f'expected {new_blue_id} (new), not {op_act_blue_id} (op)')
+
+        # Verify operator's spatial effect untouched + only one Sphere.
+        all_eff = c.get('/api/spatial-effects').get_json()
+        sphere_count = sum(1 for e in all_eff if e.get('name') == 'Op Sphere')
+        ok('#838 effect content-match reused (one sphere)', sphere_count == 1,
+           f'expected 1 sphere, got {sphere_count}')
+        ok('#838 op timeline preserved',
+           any(t.get('id') == op_tl_id and t.get('name') == 'Op Timeline'
+               for t in all_tls))
+
     # ── Print results ───────────────────────────────────────────────
     passed = sum(1 for _, v, _ in results if v)
     failed = sum(1 for _, v, _ in results if not v)
