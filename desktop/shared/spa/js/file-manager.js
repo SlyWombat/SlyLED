@@ -127,10 +127,38 @@ function _projRecentAdd(name,filename){
   localStorage.setItem('slyled-recent-projects',JSON.stringify(list));
 }
 
-function _projUpdateName(name){
+// #850 — track the last-saved/-opened filename alongside the project
+// name so the header can surface BOTH. Pre-fix the header showed only
+// `settings.name` ("TestLED" in the operator's report) and silently
+// ignored a Save As to a different filename, leaving the operator
+// guessing whether the rename took. Now the header shows
+// "<project-name> · <filename>" when both are known.
+var _projFilename='';
+
+function _projUpdateName(name, filename){
   _projName=name||'SlyLED';
+  // Filename is only updated when explicitly passed (Save As / Open
+  // with a chosen file). Calls that don't carry a filename — e.g. the
+  // bootstrap GET /api/project/name on load, or a settings.name edit
+  // — leave the existing filename half intact, so renaming the
+  // project doesn't blank out the filename label.
+  if(filename!==undefined){
+    _projFilename=filename||'';
+  }
   var el=document.getElementById('proj-name-display');
-  if(el)el.textContent=_projName==='SlyLED'?'':_projName;
+  if(el){
+    if(_projName==='SlyLED'){
+      el.textContent=_projFilename||'';
+    }else if(_projFilename){
+      // Two-tone separator: bright project name + muted filename so
+      // the operator's eye reads them as distinct concepts (#850).
+      el.innerHTML=escapeHtml(_projName)
+        +' <span style="color:#64748b;font-weight:normal">· '
+        +escapeHtml(_projFilename)+'</span>';
+    }else{
+      el.textContent=_projName;
+    }
+  }
   document.title=_projName+' — SlyLED';
 }
 
@@ -145,7 +173,10 @@ function _fmNewProject(){
     try{var r=JSON.parse(x.responseText);}catch(e){return;}
     if(r&&r.ok){
       _projFileHandle=null;
-      _projUpdateName('SlyLED');
+      // #850 — clear the filename half too on New Project; otherwise a
+      // stale filename from the prior session lingers next to the
+      // default "SlyLED" name.
+      _projUpdateName('SlyLED', '');
       document.getElementById('hs').textContent='New project created';
       loadAll();
     }
@@ -175,7 +206,10 @@ function _fmSaveAs(){
         _projFileHandle=handle;
         var name=handle.name.replace(/\.(slyshow|json)$/i,'');
         _projRecentAdd(d.name||name,handle.name);
-        _projUpdateName(d.name||name);
+        // #850 — pass the chosen filename so the header shows it
+        // alongside the project name; pre-fix the filename change was
+        // silently invisible.
+        _projUpdateName(d.name||name, handle.name);
         return handle.createWritable().then(function(w){return w.write(blob).then(function(){return w.close();});});
       }).then(function(){
         document.getElementById('hs').textContent='Project saved';
@@ -250,7 +284,9 @@ function _fmImportJson(txt,filename){
   ra('POST','/api/project/import',data,function(r){
     if(r&&r.ok){
       _projRecentAdd(r.name||data.name||'Untitled',filename);
-      _projUpdateName(r.name||data.name);
+      // #850 — pass the opened filename so the header reflects what
+      // the operator just opened, not just the embedded settings.name.
+      _projUpdateName(r.name||data.name, filename);
       toastSuccess('Project "'+r.name+'" loaded — '+r.children+' children, '+r.fixtures+' fixtures, '+r.actions+' actions');
       // #534 — seed the stale-profile set from the server's post-import
       // community check + toast the count so the operator knows to open
