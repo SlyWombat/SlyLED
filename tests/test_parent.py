@@ -3168,6 +3168,294 @@ def run():
            any(t.get('id') == op_tl_id and t.get('name') == 'Op Timeline'
                for t in all_tls))
 
+        # ── #840 — looping single-item playlist must not blackout
+        # at the wrap boundary ─────────────────────────────────────
+        # Pre-fix: `_show_playback_loop` iterated `_dmx_playback_single`
+        # per timeline; that function ran a #364-era zero-sweep at
+        # `elapsed > duration`, blanking every channel for at least
+        # one DMX frame (25 ms at 40 Hz, often longer due to Python
+        # overhead) at every wrap. With a 30 s timeline operators saw
+        # a visible "blink" twice a minute.
+        # Fix landed in v1.7.82: when the playlist is a single item
+        # with `loopAll=True`, route directly to `_dmx_playback_loop(
+        # loop=True)` which uses `elapsed % duration` and never runs
+        # the wrap blackout. This regression test could not be
+        # exercised before #845 (loop was dead).
+        _ps_pb._dmx_playback_stop.set()
+        _time_pb.sleep(0.05)
+        _ps_pb._dmx_playback_stop.clear()
+        c.post('/api/dmx/start', json={'protocol': 'artnet'})
+
+        r = c.post('/api/fixtures', json={
+            'name': '#840 Loop Test', 'type': 'point', 'fixtureType': 'dmx',
+            'dmxUniverse': 1, 'dmxStartAddr': 300,
+            'dmxChannelCount': 12,
+            'dmxProfileId': 'movinghead-150w-12ch',
+            'rotation': [0, 0, 0],
+        })
+        loop_fid = r.get_json().get('id')
+
+        r = c.post('/api/timelines', json={'name': '#840 Loop',
+                                            'durationS': 0.4})
+        loop_tid = r.get_json().get('id')
+
+        # Constant-dimmer bake. If the wrap blackout regresses the
+        # buffer will read 0 at iteration boundaries.
+        _ps_pb._bake_result[loop_tid] = {
+            'timelineId': loop_tid, 'bakedAt': int(_time_pb.time()),
+            'fixtures': {loop_fid: {'segments': [{
+                'startS': 0.0, 'durationS': 0.4, '_pri': 0,
+                'params': {'dimmer': 200, 'pan': 0.5, 'tilt': 0.5},
+            }]}},
+            'totalFrames': 0, 'fps': 40,
+        }
+
+        # Drive `_show_playback_loop` directly with the single-item
+        # loop_all path — exercises the v1.7.82 routing fix.
+        _thr_pb.Thread(target=_ps_pb._show_playback_loop,
+                       args=([loop_tid], True, _time_pb.time(), 0),
+                       daemon=True).start()
+
+        prof = _ps_pb._profile_lib.channel_info('movinghead-150w-12ch') or {}
+        dim_off = (prof.get('channel_map') or {}).get('dimmer')
+        dim_idx = 300 - 1 + dim_off if dim_off is not None else None
+
+        # Sample every 25 ms for 1.0 s — covers 2.5 wrap boundaries.
+        # Pre-fix at least one sample would land on the blackout
+        # frame at each wrap and read dimmer=0.
+        zero_samples = 0
+        sample_count = 0
+        if dim_idx is not None:
+            for _ in range(40):  # 40 × 25 ms = 1.0 s
+                _time_pb.sleep(0.025)
+                rr = c.get('/api/dmx/monitor/1')
+                if rr.status_code != 200:
+                    continue
+                cs = rr.get_json().get('channels', [])
+                if len(cs) > dim_idx:
+                    sample_count += 1
+                    if cs[dim_idx] == 0:
+                        zero_samples += 1
+
+        ok('#840 sampled ≥ 30 frames across wraps', sample_count >= 30,
+           f'sample_count={sample_count}')
+        ok('#840 single-item loop_all has NO wrap blackout',
+           zero_samples == 0,
+           f'{zero_samples}/{sample_count} samples read dimmer=0')
+
+        _ps_pb._dmx_playback_stop.set()
+        _time_pb.sleep(0.1)
+        c.delete(f'/api/timelines/{loop_tid}')
+        c.delete(f'/api/fixtures/{loop_fid}')
+        _ps_pb._bake_result.pop(loop_tid, None)
+
+        # ── #848 — claim-aware blackout: stop must NOT zero claimed
+        # fixtures' channels ───────────────────────────────────────
+        # Pre-fix: `api_show_stop` and `api_timeline_stop` called
+        # `_artnet.blackout()` which zeroed every channel of every
+        # universe, including the active claim's pan/tilt/dimmer
+        # mid-claim. Claim writer had to fight back next frame,
+        # producing a visible "head dark, then snap to claim pose"
+        # window operators perceived as multi-second latency.
+        # Fix: replace `_artnet.blackout()` with
+        # `_blackout_unclaimed_fixtures()` which iterates fixtures
+        # and applies `lamp_off` only to non-claimed ones (mirroring
+        # `_dmx_playback_loop`'s per-frame mute check, #763).
+        _ps_pb._dmx_playback_stop.set()
+        _time_pb.sleep(0.05)
+
+        # Two fixtures: one will be claimed, one will not.
+        r = c.post('/api/fixtures', json={
+            'name': '#848 Claimed Mover', 'type': 'point',
+            'fixtureType': 'dmx',
+            'dmxUniverse': 1, 'dmxStartAddr': 400,
+            'dmxChannelCount': 12,
+            'dmxProfileId': 'movinghead-150w-12ch',
+            'rotation': [0, 0, 0],
+        })
+        cl_fid = r.get_json().get('id')
+        r = c.post('/api/fixtures', json={
+            'name': '#848 Free Mover', 'type': 'point',
+            'fixtureType': 'dmx',
+            'dmxUniverse': 1, 'dmxStartAddr': 420,
+            'dmxChannelCount': 12,
+            'dmxProfileId': 'movinghead-150w-12ch',
+            'rotation': [0, 0, 0],
+        })
+        free_fid = r.get_json().get('id')
+
+        # Pre-stage: write a non-zero dimmer to both via dmx-test.
+        c.post('/api/dmx/start', json={'protocol': 'artnet'})
+        # set_fixture_dimmer uses the profile's dimmer offset (5 for
+        # movinghead-150w-12ch) so addr 400 → ch405.
+        prof_meta = _ps_pb._profile_lib.channel_info('movinghead-150w-12ch') or {}
+        cmap_meta = prof_meta.get('channel_map') or {}
+        cl_dim_idx = 400 - 1 + cmap_meta.get('dimmer', 5)
+        free_dim_idx = 420 - 1 + cmap_meta.get('dimmer', 5)
+        # Set both to non-zero via /api/dmx/monitor/1/set
+        c.post('/api/dmx/monitor/1/set', json={'channels': [
+            {'addr': cl_dim_idx + 1, 'value': 200},
+            {'addr': free_dim_idx + 1, 'value': 200},
+        ]})
+
+        # Acquire a claim on cl_fid through the engine. Use a long
+        # smoothing so the claim survives the test window.
+        ok_c, reason = _ps_pb._mover_engine.claim(
+            cl_fid, '#848-test-device', 'TestPuck', 'gyro',
+            smoothing=0.5, convention='puck-up')
+        ok('#848 claim acquired', ok_c, f'reason={reason}')
+
+        # Confirm claim is muted in the arbiter snapshot.
+        snap_check = _ps_pb._claim_arbiter.snapshot()
+        ok('#848 arbiter reports claim muted',
+           _ps_pb._claim_arbiter.is_muted(cl_fid, snap_check))
+
+        # Trigger /api/show/stop — pre-fix this would zero both
+        # fixtures' dimmers via _artnet.blackout(); post-fix it must
+        # zero only the unclaimed one.
+        r = c.post('/api/show/stop')
+        ok('#848 show stop ok', r.status_code == 200)
+
+        # Sample DMX immediately after stop.
+        _time_pb.sleep(0.05)
+        rr = c.get('/api/dmx/monitor/1')
+        chans_after = rr.get_json().get('channels', [])
+        ok('#848 claimed fixture dimmer preserved',
+           chans_after[cl_dim_idx] == 200,
+           f'ch{cl_dim_idx+1}={chans_after[cl_dim_idx]} '
+           f'(expected 200 — claim should survive stop)')
+        ok('#848 unclaimed fixture dimmer zeroed',
+           chans_after[free_dim_idx] == 0,
+           f'ch{free_dim_idx+1}={chans_after[free_dim_idx]} '
+           f'(expected 0 — non-claim should blackout)')
+
+        # Cleanup.
+        try:
+            _ps_pb._mover_engine.release(cl_fid, '#848-test-device')
+        except Exception:
+            pass
+        c.delete(f'/api/fixtures/{cl_fid}')
+        c.delete(f'/api/fixtures/{free_fid}')
+
+        # ── #847 — claim must trust cross-session puck calibration ──
+        # Pre-fix: every claim started with `calibrated_here=False`,
+        # the orient → pan/tilt path was gated on it, and DMX writes
+        # were dropped until the operator ran calibrate-end this
+        # session. A puck already calibrated against the mover (with
+        # `R_world_to_stage` set, `calibrated_against.objectId ==
+        # mover_id`) showed `calibrated:false`, panNorm/tiltNorm
+        # stuck at 0.5, and `droppedWrites` ticking at 40 Hz.
+        # Fix: in `MoverControlEngine.claim`, if the puck's persisted
+        # cal targets THIS mover and the mover has Home + Secondary
+        # anchors (so AimSphere can resolve), set `calibrated_here =
+        # True` immediately. Cross-session cal is now trusted.
+
+        # Mover with Home + Secondary anchors so AimSphere can resolve.
+        r = c.post('/api/fixtures', json={
+            'name': '#847 Cal Test Mover', 'type': 'point',
+            'fixtureType': 'dmx',
+            'dmxUniverse': 1, 'dmxStartAddr': 450,
+            'dmxChannelCount': 12,
+            'dmxProfileId': 'movinghead-150w-12ch',
+            'rotation': [0, 0, 0],
+        })
+        cal_fid = r.get_json().get('id')
+        # Set Home + Secondary anchors. /api/fixtures/<fid>/home
+        # accepts a primary panDmx16/tiltDmx16; the secondary needs
+        # the direction-only shape (#730).
+        c.post(f'/api/fixtures/{cal_fid}/home', json={
+            'panDmx16': 32768, 'tiltDmx16': 16384,
+            'secondary': {
+                'panOffsetDmx16': 16384, 'tiltOffsetDmx16': 16384,
+                'panMovedDirection': 'right', 'tiltMovedDirection': 'up',
+            },
+        })
+
+        # Path A — puck with R_world_to_stage set against this mover →
+        # claim should be calibrated immediately.
+        from remote_orientation import KIND_PUCK as _KIND_PUCK_847
+        cal_dev_id = '#847-cross-session-puck'
+        cal_remote = _ps_pb._remotes.add(
+            name='Cross-session puck', kind=_KIND_PUCK_847,
+            device_id=cal_dev_id)
+        cal_remote.R_world_to_stage = (1.0, 0.0, 0.0, 0.0)  # identity quat
+        cal_remote.calibrated_against = {'kind': 'mover',
+                                          'objectId': cal_fid}
+        cal_remote.stale_reason = None
+        cal_remote.calibrated = True
+        cal_remote.calibrated_at = _time_pb.time()
+        _ps_pb._remotes.save()
+
+        ok_c, reason = _ps_pb._mover_engine.claim(
+            cal_fid, cal_dev_id, 'Cross-session puck', 'gyro',
+            smoothing=0.5, convention='puck-up')
+        ok('#847 claim acquired (puck pre-cal)', ok_c, f'reason={reason}')
+
+        # `get_claim` returns the to_dict() shape; the operator-facing
+        # `calibrated` field is what /api/mover-control/status surfaces.
+        cal_claim = _ps_pb._mover_engine.get_claim(cal_fid)
+        ok('#847 to_dict reports calibrated:true after claim',
+           cal_claim is not None and cal_claim.get('calibrated') is True,
+           f'calibrated={cal_claim.get("calibrated") if cal_claim else "no claim"}')
+
+        try:
+            _ps_pb._mover_engine.release(cal_fid, cal_dev_id)
+        except Exception:
+            pass
+
+        # Negative — puck without R_world_to_stage. Same mover, no
+        # cross-session cal → claim should NOT be calibrated.
+        neg_dev_id = '#847-uncalibrated-puck'
+        neg_remote = _ps_pb._remotes.add(
+            name='Uncalibrated puck', kind=_KIND_PUCK_847,
+            device_id=neg_dev_id)
+        neg_remote.R_world_to_stage = None  # explicit: no cal
+        neg_remote.calibrated_against = None
+        _ps_pb._remotes.save()
+
+        ok_c2, _ = _ps_pb._mover_engine.claim(
+            cal_fid, neg_dev_id, 'Uncalibrated puck', 'gyro',
+            smoothing=0.5, convention='puck-up')
+        ok('#847 negative claim acquired', ok_c2)
+        neg_claim = _ps_pb._mover_engine.get_claim(cal_fid)
+        ok('#847 uncalibrated puck → calibrated:false',
+           neg_claim is not None and neg_claim.get('calibrated') is False,
+           f'calibrated={neg_claim.get("calibrated") if neg_claim else "no claim"}')
+
+        try:
+            _ps_pb._mover_engine.release(cal_fid, neg_dev_id)
+        except Exception:
+            pass
+
+        # Negative — puck calibrated against a DIFFERENT mover.
+        # Should NOT trust the cal for this mover.
+        other_dev_id = '#847-other-mover-puck'
+        other_remote = _ps_pb._remotes.add(
+            name='Other-mover puck', kind=_KIND_PUCK_847,
+            device_id=other_dev_id)
+        other_remote.R_world_to_stage = (1.0, 0.0, 0.0, 0.0)
+        other_remote.calibrated_against = {'kind': 'mover',
+                                            'objectId': 99999}
+        _ps_pb._remotes.save()
+
+        _ps_pb._mover_engine.claim(
+            cal_fid, other_dev_id, 'Other-mover puck', 'gyro',
+            smoothing=0.5, convention='puck-up')
+        wrong_claim = _ps_pb._mover_engine.get_claim(cal_fid)
+        ok('#847 puck cal against different mover → calibrated:false',
+           wrong_claim is not None and wrong_claim.get('calibrated') is False)
+
+        try:
+            _ps_pb._mover_engine.release(cal_fid, other_dev_id)
+        except Exception:
+            pass
+
+        # Cleanup
+        c.delete(f'/api/fixtures/{cal_fid}')
+        _ps_pb._remotes.remove(cal_remote.id)
+        _ps_pb._remotes.remove(neg_remote.id)
+        _ps_pb._remotes.remove(other_remote.id)
+
     # ── Print results ───────────────────────────────────────────────
     passed = sum(1 for _, v, _ in results if v)
     failed = sum(1 for _, v, _ in results if not v)

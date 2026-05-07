@@ -14803,9 +14803,10 @@ def api_timeline_stop(tid):
             if _attempt == 0:
                 stopped += 1
 
-    # Blackout all DMX universes (#405)
-    if _artnet.running:
-        _artnet.blackout()
+    # #848 — claim-aware blackout (was `_artnet.blackout()` per #405);
+    # operator-claimed fixtures keep their commanded output through stop.
+    if _artnet.running or _sacn.running:
+        _blackout_unclaimed_fixtures()
 
     with _lock:
         _settings["runnerRunning"] = False
@@ -15242,9 +15243,79 @@ def api_show_start():
     return jsonify(ok=True, started=started, goEpoch=go_epoch, timelines=len(order))
 
 
+def _blackout_unclaimed_fixtures():
+    """#848 — lamp-off every UNCLAIMED DMX fixture, leaving operator-
+    claimed fixtures (gyro press-Start, mover-control, calibration-in-
+    progress) at their claim writer's commanded values.
+
+    Mirrors the per-frame mute check `_dmx_playback_loop` and
+    `_evaluate_track_actions` already use (#763). Pre-fix the show-stop
+    paths called `_artnet.blackout()` which zeroed every channel of
+    every universe — including the claim's pan/tilt/dimmer mid-claim,
+    producing the multi-second "head took several seconds to move"
+    perception the operator reported.
+
+    `lamp_off` (from `dmx_profiles`) writes only intensity-class
+    channels (dimmer, intensity, strobe-Open) to off — pan/tilt and
+    other non-intensity channels are preserved per #781/#782.
+
+    Returns the count of fixtures muted (skipped because claimed) so
+    callers can log diagnostic context.
+    """
+    from dmx_profiles import lamp_off
+    snap = _claim_arbiter.snapshot()
+    engines = []
+    if _artnet.running:
+        engines.append(_artnet)
+    if _sacn.running:
+        engines.append(_sacn)
+    if not engines:
+        return 0
+    muted = 0
+    for engine in engines:
+        for f in _fixtures:
+            if f.get("fixtureType") != "dmx":
+                continue
+            fid = f.get("id")
+            if _claim_arbiter.is_muted(fid, snap):
+                muted += 1
+                continue
+            try:
+                uni = int(f.get("dmxUniverse", 1) or 1)
+                addr = int(f.get("dmxStartAddr", 1) or 1)
+                pid = f.get("dmxProfileId")
+                info = _profile_lib.channel_info(pid) if pid else None
+                if not info:
+                    continue
+                profile = {"channel_map": info.get("channel_map", {}),
+                           "channels":    info.get("channels", [])}
+                buf = engine.get_universe(uni)
+                # Stage current intensity-channel bytes into a scratch
+                # buffer, run lamp_off on that, push changed bytes back
+                # via set_channel (the supported per-byte write that
+                # marks the buffer dirty for the engine's transmit loop).
+                tmp = bytearray(512)
+                for ch in (profile.get("channels") or []):
+                    off = ch.get("offset", 0)
+                    if 0 <= addr - 1 + off < 512:
+                        try:
+                            tmp[addr - 1 + off] = int(buf.get_channel(addr + off))
+                        except Exception:
+                            tmp[addr - 1 + off] = 0
+                lamp_off(profile, tmp, addr, color=None)
+                for ch in (profile.get("channels") or []):
+                    if ch.get("type") in ("dimmer", "intensity", "strobe"):
+                        off = ch.get("offset", 0)
+                        if 0 <= addr - 1 + off < 512:
+                            buf.set_channel(addr + off, tmp[addr - 1 + off])
+            except Exception:
+                continue
+    return muted
+
+
 @app.post("/api/show/stop")
 def api_show_stop():
-    """Stop sequential show playback + blackout all output."""
+    """Stop sequential show playback + blackout all unclaimed output (#848)."""
     _dmx_playback_stop.set()
     pkt_stop = _hdr(CMD_RUNNER_STOP)
     pkt_off = _hdr(CMD_ACTION_STOP)
@@ -15252,9 +15323,13 @@ def api_show_stop():
         if child.get("ip"):
             _send(child["ip"], pkt_stop)
             _send(child["ip"], pkt_off)
-    # Blackout all DMX universes (#405)
-    if _artnet.running:
-        _artnet.blackout()
+    # #848 — claim-aware blackout. Pre-fix this called `_artnet.blackout()`
+    # which zeroed every channel of every universe, including the
+    # active claim's pan/tilt/dimmer; the claim writer's next frame
+    # had to fight back, producing a visible "head dark, then snap"
+    # window that operators perceived as multi-second latency.
+    if _artnet.running or _sacn.running:
+        _blackout_unclaimed_fixtures()
     with _lock:
         _settings["runnerRunning"] = False
         _settings["activeTimeline"] = -1
@@ -15447,6 +15522,59 @@ def _broadcast_brightness(value):
         _send(ip, pkt)
 
 
+# #849 Part 1 — rate-limited observability for /api/brightness traffic.
+# Pre-fix the endpoint logged nothing, so when Android Auto Brightness
+# silently stopped POSTing (e.g. lastBrightnessJob.isActive in-flight
+# guard wedged) there was no orchestrator-side signal at all — operators
+# had to inject test values via curl to detect "the feed died." Now:
+# first hop in any 5 s window logs at INFO with source IP + value;
+# delta ≥10 from previously-logged value also logs (catches floor /
+# ceiling transitions); every 30 s a summary entry rolls up
+# hops + min/max/mean per source so a steady stream is visible without
+# flooding at 20 Hz × N clients.
+_brightness_obs_lock = threading.Lock()
+_brightness_obs = {}   # remote_ip → {last_log_ts, last_log_value, hops,
+                       #               min_v, max_v, sum_v, summary_ts}
+
+
+def _log_brightness_hop(remote, value, prev):
+    """#849 — record a /api/brightness POST and emit log entries when
+    one of the rate-limit conditions fires (first-in-window, delta,
+    summary)."""
+    now = time.time()
+    with _brightness_obs_lock:
+        st = _brightness_obs.get(remote)
+        if st is None:
+            st = {"last_log_ts": 0.0, "last_log_value": -1,
+                  "hops": 0, "min_v": value, "max_v": value, "sum_v": 0,
+                  "summary_ts": now}
+            _brightness_obs[remote] = st
+        st["hops"] += 1
+        st["min_v"] = min(st["min_v"], value)
+        st["max_v"] = max(st["max_v"], value)
+        st["sum_v"] += value
+        emit_first = (now - st["last_log_ts"]) >= 5.0
+        emit_delta = (st["last_log_value"] >= 0
+                      and abs(value - st["last_log_value"]) >= 10)
+        emit_summary = (now - st["summary_ts"]) >= 30.0 and st["hops"] > 1
+        if emit_first or emit_delta:
+            log.info("/api/brightness from %s: value=%d (prev=%d, delta=%+d)",
+                     remote, value, prev, value - prev)
+            st["last_log_ts"] = now
+            st["last_log_value"] = value
+        if emit_summary:
+            mean = st["sum_v"] // max(1, st["hops"])
+            log.info("/api/brightness summary from %s: %d hops in %.1fs, "
+                     "range %d-%d, mean ~%d",
+                     remote, st["hops"], now - st["summary_ts"],
+                     st["min_v"], st["max_v"], mean)
+            st["summary_ts"] = now
+            st["hops"] = 0
+            st["min_v"] = value
+            st["max_v"] = value
+            st["sum_v"] = 0
+
+
 # #804 — fast-path master brightness for Android auto-brightness (mic-driven).
 # Updates the live in-memory value at high cadence (~20 Hz) without rewriting
 # settings.json on every call. Manual slider keeps using POST /api/settings.
@@ -15454,11 +15582,16 @@ def _broadcast_brightness(value):
 # #843 — additionally broadcasts CMD_SET_BRIGHTNESS to all LED children on
 # every change so the value actually reaches the lights. Pre-fix the value
 # stashed in _settings was never read by any output path.
+#
+# #849 — log rate-limited so operators can diagnose "is Android actually
+# sending?" without injecting test values via curl.
 @app.post("/api/brightness")
 def api_brightness_fast():
     body = request.get_json(silent=True) or {}
     v = body.get("value")
     if not isinstance(v, (int, float)):
+        log.warning("/api/brightness invalid body from %s: %r",
+                    request.remote_addr, body)
         return jsonify(ok=False, err="value must be 0..255"), 400
     iv = int(max(0, min(255, v)))
     with _lock:
@@ -15466,6 +15599,7 @@ def api_brightness_fast():
         _settings["globalBrightness"] = iv
     if iv != prev:
         _broadcast_brightness(iv)
+    _log_brightness_hop(request.remote_addr or "?", iv, prev)
     return jsonify(ok=True, value=iv)
 
 @app.post("/api/logging/start")

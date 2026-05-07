@@ -299,6 +299,44 @@ class MoverControlEngine:
             if remote is not None and remote.convention != resolved_conv:
                 claim._prior_remote_convention = remote.convention
                 remote.set_convention(resolved_conv)
+
+        # #847 — trust cross-session puck calibration. Pre-fix every
+        # claim started with `calibrated_here = False` and the tick
+        # loop's `if … claim.calibrated_here …` gate at the orient →
+        # pan/tilt path silently dropped every DMX write until the
+        # operator ran calibrate-end this session. Operators with a
+        # puck already calibrated against this mover (R_world_to_stage
+        # set, calibrated_against.objectId == mover_id) saw a claim
+        # that reported `calibrated: false`, panNorm/tiltNorm stuck at
+        # 0.5, and `droppedWrites` ticking at 40 Hz — even though
+        # AimSphere had everything it needed to resolve.
+        # Now: if the puck's persisted cal matches this mover and the
+        # mover has Home + Secondary anchors so AimSphere can resolve,
+        # accept the cross-session cal as the calibration-of-record.
+        # The original "don't trust persisted calibration" rationale
+        # was a 2026-01 conservative default; the operator's explicit
+        # request (#847) is to trust it. A bad cross-session
+        # calibration now manifests as the head pointing at the wrong
+        # target — re-calibrate to fix; mid-session calibrate-end
+        # still works as before.
+        mover = self._get_mover(mover_id)
+        remote_post = self._get_remote(device_id)
+        cal_against = (remote_post.calibrated_against
+                       if remote_post is not None else None)
+        if (mover is not None
+                and remote_post is not None
+                and remote_post.R_world_to_stage is not None
+                and remote_post.stale_reason is None
+                and isinstance(cal_against, dict)
+                and cal_against.get("kind") == "mover"
+                and int(cal_against.get("objectId", -1)) == int(mover_id)
+                and mover.get("homePanDmx16") is not None
+                and mover.get("homeTiltDmx16") is not None
+                and mover.get("homeSecondary")):
+            claim.calibrated_here = True
+            log.info("Mover %d: trusted cross-session puck cal from %s "
+                     "(calibrated_against mover, R_world_to_stage set)",
+                     mover_id, device_id)
         return True, "ok"
 
     def _resolve_convention(self, mover_id, device_id, requested=None):

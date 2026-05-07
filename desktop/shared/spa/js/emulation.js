@@ -187,6 +187,18 @@ function _emu3dAttach(containerId){
   _emu3d.controls.enabled=true;
   _emu3d.activeTab=true;
   _emu3d.activeContainer=cid;
+  // #846 — hide the layout-tab fixture nodes while the runtime tab is
+  // active. Pre-fix BOTH `_s3d.nodes` (layout, updated at 5 Hz by
+  // `s3dPollFixturesLive`) AND `_emu3d.nodes` (runtime, updated at
+  // 60 Hz via `emu3dAnimate` → `emu3dUpdateColors`) lived in the
+  // same THREE scene at the same fixture positions, with independent
+  // pollers driving their beam cones. The 5/60 Hz update rate
+  // mismatch — and the layout cone defaulting to home-pose at init —
+  // produced the visible "blink between bake-pose and home-pose"
+  // operators reported. Restored on detach.
+  if(_s3d.nodes&&_s3d.nodes.length){
+    _s3d.nodes.forEach(function(n){if(n)n.visible=false;});
+  }
   // Remove layout click/dblclick listeners from canvas
   _s3d.renderer.domElement.removeEventListener('click',s3dClick);
   _s3d.renderer.domElement.removeEventListener('dblclick',s3dDblClick);
@@ -205,6 +217,11 @@ function _emu3dDetach(){
   _emu3d.controls.enabled=false;
   // Stop runtime render loop
   if(_emu3d.animId){cancelAnimationFrame(_emu3d.animId);_emu3d.animId=null;}
+  // #846 — restore layout-tab fixture node visibility for the layout
+  // view; runtime nodes are about to be cleared.
+  if(_s3d.nodes&&_s3d.nodes.length){
+    _s3d.nodes.forEach(function(n){if(n)n.visible=true;});
+  }
   // Remove runtime fixture nodes from scene
   _emu3dClearNodes();
   // Move canvas back
