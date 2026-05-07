@@ -1,6 +1,13 @@
-## Appendix B — Moving-Head Calibration Pipeline (DRAFT)
+## Appendix B — Moving-Head Calibration Pipeline
 
-> ⚠ **DRAFT — assumes all in-flight work is merged.** This appendix describes the moving-head-calibration pipeline as if issues #610, #651–#661, #653–#655, #658–#661, and #357 are fully implemented. Some features documented below are **partially merged** today (notably global per-phase time budgets per #653, full held-out parametric gating of the `moverCalibrated` flag per #654, adaptive battleship density scaling per #661, and the floor-view polygon target filter per #659). See `docs/DOCS_MAINTENANCE.md` for the current merge status and the criteria for removing this banner. Issue [#662](https://github.com/SlyWombat/SlyLED/issues/662).
+> Updated for orchestrator v1.7.83. The pipeline described here is
+> the post-#784 architecture: a single canonical aim-vector
+> (`aim_stage`, #806) is the source of truth for every head, the
+> `ParametricFixtureModel` + Levenberg–Marquardt fit (#488) is the
+> primary IK, and the legacy SMART pipeline that powered earlier
+> calibration releases has been retired. The phase-by-phase content
+> below has been ground-truthed against the current
+> `mover_calibrator.py` and `parametric_mover.py`.
 
 Moving-head calibration runs per [DMX](#glossary) moving-head fixture after the camera(s) covering its reachable region have been calibrated (Appendix A). It produces a sample set + parametric 6-[DOF](#glossary) [kinematic model](#glossary) that lets the orchestrator translate stage-space targets into exact pan/tilt DMX values, enabling [IK](#glossary) (inverse kinematics) for the Track action and spatial effects.
 

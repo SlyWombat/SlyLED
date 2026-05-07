@@ -23,8 +23,10 @@
 18. [Exemples](#18-examples)
 19. [Référence rapide de l'API](#19-api)
 20. [Glossaire](#glossary)
-21. [Annexe A — Chaîne d'étalonnage des caméras (BROUILLON)](#appendix-a)
-22. [Annexe B — Chaîne d'étalonnage des projecteurs motorisés (BROUILLON)](#appendix-b)
+21. [Annexe A — Chaîne d'étalonnage des caméras](#appendix-a)
+22. [Annexe B — Chaîne d'étalonnage des projecteurs motorisés](#appendix-b)
 23. [Annexe C — Maintenance de la documentation](#appendix-c)
+24. [Annexe D — Comportement au repos](#appendix-d)
+25. [Annexe E — Télécommande : téléphone Android et palet gyro](#appendix-e)
 
 ---

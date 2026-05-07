@@ -23,9 +23,11 @@
 18. [Exemples](#18-examples)
 19. [Référence rapide de l'API](#19-api)
 20. [Glossaire](#glossary)
-21. [Annexe A — Chaîne d'étalonnage des caméras (BROUILLON)](#appendix-a)
-22. [Annexe B — Chaîne d'étalonnage des projecteurs motorisés (BROUILLON)](#appendix-b)
+21. [Annexe A — Chaîne d'étalonnage des caméras](#appendix-a)
+22. [Annexe B — Chaîne d'étalonnage des projecteurs motorisés](#appendix-b)
 23. [Annexe C — Maintenance de la documentation](#appendix-c)
+24. [Annexe D — Comportement au repos](#appendix-d)
+25. [Annexe E — Télécommande : téléphone Android et palet gyro](#appendix-e)
 
 ---
 
@@ -459,44 +461,123 @@ Le canevas de disposition possède deux modes d'interaction, basculés avec des 
 
 ---
 
-## 5. Objets de scene
+<!-- review-status: pending -->
 
-Les objets representent des elements physiques sur la scene — murs, sols, ponts d'eclairage, ecrans et accessoires/artistes.
+## 6. Objets de plateau
+
+Les objets représentent les éléments physiques d'un plateau — murs,
+sols, ponts d'éclairage, écrans et accessoires ou artistes — et les
+« cibles » abstraites que les actions de suivi poursuivent. Tout ce
+qu'un projecteur motorisé doit viser vit dans l'onglet Objets.
+
+> L'onglet s'appelait auparavant « Surfaces » ; le renommage en
+> **Objets** a été livré avec la v1.7.30. Les anciens fichiers de
+> projet s'importent sans problème.
 
 ### Types d'objets
-| Type | Mobilite par defaut | Description |
-|------|---------------------|-------------|
-| **Mur** | Statique | Mur de fond, verrouille aux dimensions de la scene (largeur x hauteur) |
-| **Sol** | Statique | Sol de scene, verrouille aux dimensions de la scene (largeur x (profondeur + 1 m)) |
-| **Pont** | Statique | Pont d'eclairage |
-| **Ecran** | Statique | Surface de projection |
-| **Accessoire** | Mobile | Artiste, element de decor ou element mobile |
-| **Personnalise** | Mobile | Objet defini par l'utilisateur |
 
-### Objets verrouilles a la scene
-Les objets mur et sol peuvent etre verrouilles aux dimensions de la scene. Lorsque vous modifiez la taille de la scene dans les Parametres, les objets verrouilles se redimensionnent automatiquement.
+| Type | Mobilité par défaut | Description |
+| --- | --- | --- |
+| **Mur** | Statique | Mur de fond, verrouillé aux dimensions du plateau (largeur × hauteur) |
+| **Sol** | Statique | Sol du plateau, verrouillé aux dimensions du plateau (largeur × (profondeur + 1 m)) |
+| **Pont** | Statique | Pont d'éclairage |
+| **Écran** | Statique | Surface de projection |
+| **Accessoire** | Mobile | Artiste, élément de décor ou élément mobile |
+| **Personnalisé** | Mobile | Objet défini par l'utilisateur |
+| **Cible ruban** | Mobile | Ancre en coordonnées plateau qui voyage, utilisée par le préréglage Aurora Curtain (#839) — un rig coordonné passe par le même point le long de l'axe choisi |
 
-### Mobilite
-- **Statique** : Position fixe. Ne peut pas etre suivi par les lyres.
-- **Mobile** : La position peut changer pendant la lecture. Peut etre suivi par les lyres DMX via l'action Track.
+### Objets verrouillés au plateau
 
-### Mouvement de patrouille
-Les objets mobiles peuvent patrouiller (osciller) d'avant en arriere pendant la lecture :
-- **Axe** : Gauche-droite (X), avant-arriere (Z), ou diagonal (X+Z)
-- **Preselections de vitesse** : Lent (cycle de 20 s), Moyen (10 s), Rapide (5 s), ou Personnalise
-- **Plage** : Pourcentage de debut/fin de la dimension de la scene (par defaut 10 %--90 %)
-- **Lissage** : Sinusoidal ou Lineaire
+Les objets mur et sol peuvent être verrouillés aux dimensions du
+plateau. Lorsque vous modifiez la taille du plateau dans
+Paramètres → Plateau, les objets verrouillés se redimensionnent
+automatiquement.
 
-La patrouille est evaluee a 40 Hz dans la boucle de lecture DMX, avant que les actions Track ne lisent les positions des objets.
+### Mobilité
+
+- **Statique** — position fixe. Ne peut pas être suivi par les
+  projecteurs motorisés.
+- **Mobile** — la position peut changer pendant l'exécution.
+  Peut être suivi par les projecteurs motorisés DMX via l'action
+  de suivi (chapitre 8).
+
+### Patrouille
+
+Les objets mobiles peuvent patrouiller pendant l'exécution. Chaque
+patrouille porte un **motif**, un axe ou une forme, un temps de
+cycle, et une courbe de lissage facultative. L'évaluateur de
+patrouille tourne à 40 Hz dans la boucle de lecture DMX,
+immédiatement avant que les actions de suivi ne lisent les
+positions des objets ; la pose d'une cible patrouillée a donc
+toujours une frame d'avance quand un projecteur motorisé la lit.
+
+#### Motifs
+
+| Motif | Géométrie | Usage |
+| --- | --- | --- |
+| **Ping-pong** | Va d'un coin de la boîte englobante au coin opposé, puis fait demi-tour | Le trajet prévu d'un artiste de côté de scène |
+| **Cercle** | Boucle à rayon constant autour du centre de la boîte | Une plate-forme tournante ou un effet rotatif |
+| **Figure-8** | Lemniscate (deux lobes) à l'intérieur de la boîte | Un trajet complexe visitant deux foyers — utile pour les croisements de scène |
+| **Carré** | Quatre segments rectilignes le long du bord de la boîte | Un effet « périmètre de patrouille » utilisé dans les thèmes industriels / sécurité |
+| **Ruban** *(nouveau en v1.7.83)* | Une ancre voyageuse unique sur l'axe choisi (gauche-droite, avant-arrière, haut-bas, croisé, figure-8) ; plusieurs projecteurs motorisés montent sur le ruban à des décalages de phase, le balayage voyage donc visiblement le rig au lieu que toutes les têtes bougent à l'unisson | L'effet de rideau coordonné du préréglage Aurora Curtain |
+
+#### Vitesse
+
+- **Lent** — cycle de 20 s.
+- **Moyen** — cycle de 10 s.
+- **Rapide** — cycle de 5 s.
+- **Personnalisé** — réglez `cycleS` directement. Le `speedPreset`
+  par défaut est `medium` ; les objets de patrouille ruban sont
+  livrés avec `speedPreset: "custom"` pour que le `cycleS: 12` du
+  préréglage l'emporte sur la valeur medium par défaut.
+
+#### Plage
+
+Pourcentage de la boîte englobante (par défaut 10 %–90 %). La
+patrouille reste dans la boîte ; les cibles près d'un mur n'entraînent
+pas un projecteur motorisé dans un blocage cardanique de l'IK.
+
+#### Lissage
+
+- **Sinus** — accélération / décélération douce (par défaut).
+- **Linéaire** — vitesse constante.
+
+#### `patrolMode`
+
+Les objets de patrouille peuvent être réglés sur :
+
+- `always` *(par défaut)* — la patrouille tourne tant que
+  l'orchestrateur est en route. Utile pour « l'accessoire est vivant
+  même avant le début du spectacle ».
+- `on-demand` — la patrouille est suspendue jusqu'à ce qu'une
+  chronologie active référence cet objet via une action de suivi.
+  Dès que le clip référençant démarre, la patrouille reprend là où
+  elle aurait été si elle avait tourné en continu (l'action de suivi
+  qui s'attend à une cible mobile en voit donc une immédiatement,
+  pas un accessoire immobile). Les opérateurs sont parfois surpris
+  de voir un accessoire de patrouille `on-demand` immobile sur la
+  vue plateau — c'est le comportement voulu.
 
 ### Objets temporels
-Les systemes externes peuvent creer des objets ephemeres via `POST /api/objects/temporal` :
-- Toujours en memoire (jamais enregistres sur disque)
-- Necessitent `ttl` > 0 (duree de vie en secondes)
-- Expirent automatiquement a la fin du TTL
-- Les mises a jour de position actualisent le TTL
-- Affiches dans le visualiseur d'execution avec contour en pointilles et badge de compte a rebours
-- Utiles pour l'integration de suivi par camera
+
+Les systèmes externes peuvent créer des objets éphémères via
+`POST /api/objects/temporal` :
+
+- Toujours en mémoire ; jamais enregistrés sur disque.
+- Nécessitent `ttl > 0` (durée de vie en secondes).
+- Expirent automatiquement quand le TTL est écoulé.
+- Les mises à jour de position rafraîchissent le TTL.
+- Affichés dans le visualiseur d'exécution avec un contour en
+  pointillés et un badge de compte à rebours.
+- Le suiveur caméra pousse les personnes détectées par cette
+  route — chaque détection devient un objet temporel que l'action
+  de suivi du préréglage Spotlight Follow Person poursuit.
+
+L'échelle des objets temporels suit l'ordre du moteur de rendu
+`[largeur, hauteur (Z), profondeur (Y)]` — les sites d'appel qui
+veulent une détection « en forme de personne » doivent envoyer
+`[0,6, 1,8, 0,6]` (60 cm de large, 1,8 m de haut, 60 cm de
+profondeur), pas `[0,6, 0,6, 1,8]`.
 
 ---
 
@@ -529,31 +610,109 @@ Naviguez vers l'onglet **Actions** puis **+ Nouvel effet spatial**.
 
 ---
 
-## 7. Action Track
+<!-- review-status: pending -->
 
-### Action Track (Type 18)
-Fait suivre les objets mobiles par les lyres DMX en temps reel pendant la lecture.
+## 8. Action de suivi
 
-**Fonctionnement :**
-1. Creez des objets mobiles (accessoires/artistes) dans l'onglet Mise en page
-2. Creez une action Track dans l'onglet Actions
-3. Selectionnez les objets cibles et configurez l'assignation
-4. Pendant la lecture, la boucle a 40 Hz calcule le pan/tilt pour chaque lyre
+L'action de suivi (type 18) est le pont entre l'onglet Objets
+(chapitre 6) et le rig de projecteurs motorisés : tant qu'un clip
+contenant une action de suivi est en lecture, chaque projecteur
+motorisé assigné calcule sa visée pan / tilt à partir de la
+position en direct d'une ou plusieurs cibles, à chaque frame
+(40 Hz). Quand le clip se termine — ou que le dernier clip
+référençant l'action se termine — les projecteurs motorisés assignés
+se garent sur leur pose Home (#807).
 
-**Algorithme d'assignation :**
-- Nombre egal de lyres et d'objets : correspondance 1:1
-- Plus de lyres que d'objets : repartition uniforme entre les objets
-- Plus d'objets que de lyres : cycle a travers les objets (2 s par cible par defaut)
+### Comment se déroule une action de suivi
 
-**Champs :**
-| Champ | Description |
-|-------|-------------|
-| trackObjectIds | ID des objets cibles (vide = tous les objets mobiles) |
-| trackCycleMs | Temps de cycle lors du cyclage (par defaut 2000 ms) |
-| trackOffset | Decalage global [x,y,z] en mm |
-| trackFixtureIds | ID de projecteurs specifiques (vide = toutes les lyres) |
-| trackFixtureOffsets | Surcharges [x,y,z] par projecteur |
-| trackAutoSpread | Repartir plusieurs lyres sur la largeur de l'objet |
+1. Placez les objets mobiles à poursuivre dans l'onglet
+   **Disposition / Objets** (chapitre 6) — accessoires, objets
+   personnalisés mobiles, cibles ruban, ou personnes détectées par
+   caméra arrivant comme objets temporels.
+2. Créez une action de suivi dans l'onglet **Actions**. Définissez
+   son nom, sa portée et sa liste de cibles.
+3. Déposez un clip sur une piste de la **Chronologie** qui
+   référence l'action de suivi.
+4. Pendant l'exécution, la boucle DMX 40 Hz lit la position
+   actuelle de chaque cible, choisit (ou assigne) un ou plusieurs
+   projecteurs motorisés, exécute l'IK canonique du vecteur de
+   visée (#806 / #809), et écrit pan / tilt dans le tampon
+   d'univers. Le cône de la visualisation 3D est piloté depuis le
+   même vecteur de visée — la visualisation correspond donc
+   toujours au comportement physique.
+
+### Algorithme d'assignation
+
+L'assignation est recalculée à chaque frame depuis
+`trackFixtureIds` (les projecteurs motorisés en portée) et la liste
+de cibles résolue :
+
+| Situation | Comportement |
+| --- | --- |
+| Nombre égal de projecteurs motorisés et d'objets | Correspondance 1 : 1 par index |
+| Plus de projecteurs que d'objets, **trackAutoSpread = false** | Chaque objet est poursuivi par exactement un projecteur ; les projecteurs surnuméraires restent inactifs (allumés mais sans cible). |
+| Plus de projecteurs que d'objets, **trackAutoSpread = true** | Répartit les projecteurs sur la largeur de chaque objet — utile pour laver une seule cible avec plusieurs projecteurs. |
+| Plus d'objets que de projecteurs, défaut | Les projecteurs cyclent à travers les objets ; chacun saute sur une cible différente toutes les `trackCycleMs` (par défaut 2000 ms). |
+| Plus d'objets que de projecteurs, **trackFixedAssignment = true** | Chaque projecteur s'accroche à une cible par index ; les surnuméraires sont ignorés jusqu'à ce qu'un projecteur se libère. |
+
+Les décalages par projecteur (`trackFixtureOffsets`) permettent à
+des rigs asymétriques de viser chaque projecteur sur un point
+légèrement différent de la même cible — par exemple, un projecteur
+côté cour vise la tête de l'artiste tandis qu'un projecteur côté
+jardin vise les pieds.
+
+### Éditeur d'action — section Avancé (#811)
+
+Les volets DMX Scene de l'éditeur d'action regroupent les champs
+simples (nom, portée, RVB, gradateur) en haut, avec une section
+extensible **Avancé** en dessous contenant les contrôles fins par
+action. Pour les actions de suivi, la section Avancé expose :
+
+| Champ | Ce qu'il contrôle | Plage |
+| --- | --- | --- |
+| **Cycle Time (ms)** | `trackCycleMs` — utilisé seulement quand il y a plus d'objets que de projecteurs motorisés | 100 – 10 000 ms (borné) |
+| **Offset X / Y / Z (mm)** | Décalage de visée global ajouté à chaque cible. Utile pour « viser 30 cm au-dessus du sol où se trouve le marqueur » ou « viser à hauteur de tête plutôt qu'au centre de masse ». | ± 10 000 mm |
+| **Auto-spread** | Active `trackAutoSpread` pour le cas plus-de-projecteurs-que-d'objets | — |
+| **Fixed assignment** | Active `trackFixedAssignment` — désactive le cyclage et accroche chaque projecteur à une cible | — |
+| **Track dimmer** | `trackDimmer` — surcharge le gradateur des projecteurs pendant que l'action de suivi est active. Vaut 255 (plein) par défaut ; les opérateurs le baissent parfois pour que le faisceau suiveur n'écrase pas le reste du rig. | 0 – 255 |
+
+### Sélection des objets cibles
+
+| Champ | Effet |
+| --- | --- |
+| **`trackObjectIds`** | Liste explicite d'ID d'objets à suivre. L'emporte sur `trackObjectType` quand renseigné. Cherche dans l'**ensemble** des objets mobiles (y compris les accessoires de patrouille) ; un id d'accessoire de patrouille `on-demand` se résout donc proprement ici. |
+| **`trackObjectType`** | Filtre les objets mobiles par type — par exemple `"prop"`, `"ribbon-target"`, `"custom"`. Utile quand l'ensemble cible est « toutes les cibles ruban » sans lister les ID. |
+| **`trackMode`** | Consulté seulement quand `trackObjectIds` et `trackObjectType` sont tous deux vides. `"camera-moving"` *(défaut)* — suivre seulement les personnes détectées par caméra (objets temporels). `"all-moving"` — suivre les accessoires de patrouille **et** les détections caméra ensemble. |
+
+Si une action de suivi a un `trackObjectIds` explicite mais que tous
+les objets listés ont été supprimés, l'action ignore la frame
+entièrement plutôt que d'éteindre les projecteurs assignés —
+avant le correctif (v1.7.78 et plus anciennes) le cas cible-
+manquante mettait à zéro le gradateur de chaque projecteur en
+portée.
+
+### Coopération avec les spectacles et les télécommandes (#763 / #835)
+
+Les actions de suivi sont des citoyens à part entière de la
+chronologie de spectacle :
+
+- Une action de suivi orpheline (qui vit dans `_actions` mais
+  qu'aucun clip de la chronologie en cours ne référence)
+  **n'évalue pas** (#835). Cela évite qu'une action préréglée
+  laissée éteigne des projecteurs sur des chronologies sans
+  rapport.
+- Quand une télécommande (téléphone Android ou palet gyro)
+  revendique un projecteur via l'arbitre de revendication
+  mover-control (chapitre Télécommande), le projecteur revendiqué
+  est silencié de l'action de suivi pour la durée de la
+  revendication — les gestes opérateur priment sur le spectacle.
+  Le relâchement de la revendication remet le projecteur dans le
+  spectacle sans précalcul.
+- Les actions de suivi écrivent le vecteur de visée canonique via
+  le même chemin `_set_canonical_aim_stage` que le reste de
+  l'orchestrateur ; un étalonnage en cours pendant un spectacle
+  piloté par suivi observe donc la vraie direction du projecteur
+  sans aller-retour d'IK inverse.
 
 ---
 
@@ -668,8 +827,29 @@ projecteur DMX en cliquant sur le nom du profil sous le bouton
   Mis a jour automatiquement en ajoutant des canaux ; aussi reglable
   explicitement.
 - **Mode couleur** — `rgb`, `cmy`, `rgbw`, `rgba`, `single` (variateur
-  monochrome) ou `color-wheel-only`. Pilote la maniere dont le moteur
-  de spectacles resout une couleur demandee.
+  monochrome), `color-wheel-only` ou **hybride RVB + roue de
+  couleurs**. Pilote la manière dont le moteur résout une couleur
+  demandée :
+
+  - **Famille RVB** — l'orchestrateur écrit le triplet R / V / B
+    demandé sur les canaux correspondants.
+  - **Roue de couleurs uniquement** — l'orchestrateur choisit
+    l'emplacement de roue le plus proche de la couleur RVB demandée
+    via le résolveur par distance euclidienne décrit sous
+    Capacités. Les emplacements sans annotation hexadécimale sont
+    ignorés ; un préréglage qui devrait correspondre (par exemple)
+    au rouge mais qui ne le fait pas a un attribut `color` manquant
+    sur sa capacité WheelSlot rouge.
+  - **Hybride RVB + roue** — le préréglage porte À LA FOIS un
+    triplet rouge/vert/bleu ET un canal `color-wheel`. Depuis
+    v1.7.83 (#842), l'orchestrateur pilote le RVB directement **et**
+    gare la roue à l'emplacement 0 (open / blanc) automatiquement,
+    pour que l'emplacement par défaut coloré de la roue ne filtre
+    pas le faisceau. Avant v1.7.83, les appareils hybrides
+    paraissaient souvent « faux » parce que l'emplacement home de
+    la roue teintait une couleur pilotée en RVB ; c'est désormais
+    géré au plus bas niveau (`set_fixture_rgb`) et chaque chemin de
+    rendu en bénéficie.
 - **Plage pan** / **Plage tilt** — balayage mecanique maximal en
   degres. Utilise par la calibration des lyres pour normaliser
   DMX vers angle.
@@ -760,6 +940,49 @@ deroulante, definir `min`/`max`, ajouter un libelle et (pour
   vraiment ni dans OFL ni dans la communaute. Quand vous avez
   termine, partagez-le pour que personne d'autre n'ait a le refaire.
 
+### Mise à l'échelle de la luminosité globale (#843)
+
+La luminosité maître atteint les appareils DMX par une passe de
+mise à l'échelle par frame au moment du rendu, et non par le
+précalcul. Cela garde les précalculs valides à travers les
+changements de luminosité — l'opérateur peut faire glisser le
+curseur pendant un spectacle sans re-précalculer — et laisse le
+chemin rapide Auto-luminosité Android piloter le maître à ~20 Hz
+avec l'enveloppe en direct du son scénique.
+
+Deux cas :
+
+- **Appareils avec gradateur maître** — quand le préréglage
+  expose un canal `dimmer`, l'octet du gradateur est mis à
+  l'échelle. La mise à l'échelle est corrigée gamma (LUT γ = 2,2),
+  un réglage maître à 50 % se lit donc sur un PAR DMX comme il se
+  lit sur un bandeau LED (que FastLED corrige en gamma en
+  interne).
+- **Appareils RVB seuls** — quand il n'y a pas de canal `dimmer`,
+  c'est le triplet RVB qui est mis à l'échelle gamma. Les
+  appareils à roue seule retombent sur la mise à l'échelle du
+  gradateur (les indices d'emplacement sont catégoriels, pas
+  d'intensité).
+
+L'orchestrateur diffuse `CMD_SET_BRIGHTNESS` à chaque nœud LED à
+chaque changement, et renvoie la valeur courante à un nœud la
+première fois qu'il apparaît dans PONG après un cycle
+d'alimentation, pour qu'un nœud fraîchement démarré n'affiche pas sa
+première frame de spectacle à pleine intensité.
+
+### Bornage du cône de visée (#803)
+
+Les requêtes de visée sur un projecteur motorisé sont bornées au
+cône atteignable de l'appareil, et non rejetées. Si une action de
+suivi ou un appel `/api/mover/<fid>/aim` cible un point hors du
+balayage pan / tilt, l'orchestrateur fait glisser la visée le long
+du bord du cône vers la cible plutôt que de renvoyer une erreur
+400. L'opérateur voit la tête atteindre aussi loin qu'elle le peut
+mécaniquement ; le cône de la visualisation 3D reflète la visée
+bornée, pas celle qui aurait été rejetée. Avant v1.7.30, la route
+opérateur direct refusait l'écriture, laissant le rig dans un état
+de demi-visée.
+
 ### Reference rapide heritee
 
 Onglet Parametres puis **Profils** puis **Nouveau profil** ou **Modifier** :
@@ -799,26 +1022,89 @@ Serveur communautaire : https://electricrv.ca/api/profiles/
 
 ---
 
-## 12. Spectacles predefinis
+<!-- review-status: pending -->
 
-14 spectacles preconstruits disponibles depuis l'onglet Execution puis **Charger un spectacle** puis **Predefinis** :
+## 13. Spectacles préréglés
 
-| Predefini | Description |
-|-----------|-------------|
-| Rainbow Up | Plan arc-en-ciel montant du sol au plafond |
-| Rainbow Across | Sphere arc-en-ciel balayant de gauche a droite |
-| Slow Fire | Effet de feu chaud sur tous les projecteurs |
-| Disco | Etincelles pastel scintillantes |
-| Ocean Wave | Vague bleue avec teinte sarcelle |
-| Sunset Glow | Respiration chaude avec balayage dore |
-| Police Lights | Stroboscope rouge avec flash bleu balayant |
-| Starfield | Etincelles blanches sur fond sombre |
-| Aurora Borealis | Rideau vert avec miroitement violet |
-| Spotlight Sweep | Orbe chaud — les lyres le suivent |
-| Concert Wash | Projecteur magenta + spot ambre suiveur |
-| Figure Eight | Orbes croises — les lyres tracent des chemins en X |
-| Thunderstorm | Eclairs — les lyres poursuivent les impacts |
-| Dance Floor | Spots orbitaux rapides — suivi rapide |
+Les spectacles préréglés sont une façon de mettre n'importe quel rig
+dans une ambiance soignée en un clic — utile pour les balances,
+l'ambiance d'avant-spectacle ou une réinitialisation rapide entre
+deux cues. Ouvrez-les depuis **Exécution → Charger un spectacle →
+Préréglages**.
+
+Le générateur de spectacle inspecte le rig au moment de
+l'installation (bandeaux LED, projecteurs motorisés, nœuds caméra)
+et adapte chaque thème à ce qui est réellement présent sur le
+plateau. Les thèmes incluant une chorégraphie de projecteurs
+motorisés auto-classifient tout appareil DMX dont
+`panRange > 0` et `tiltRange > 0` comme candidat, puis émettent soit
+des balayages coordonnés (mouvement en coordonnées plateau via
+`ptStartPos` / `ptEndPos`), soit du suivi de cible en direct via une
+action de suivi.
+
+### Thèmes disponibles
+
+| Préréglage | Description | Les projecteurs motorisés font |
+| --- | --- | --- |
+| **Rainbow Up** | Plan arc-en-ciel montant du sol au plafond | Balayage en coordonnées plateau le long de l'axe Z (#837) |
+| **Rainbow Across** | Sphère arc-en-ciel balayant de cour à jardin | Balayage en coordonnées plateau le long de X |
+| **Slow Fire** | Effet de feu chaud sur chaque appareil | Faisceau statique, gradateur scintillant |
+| **Disco** | Étincelles pastel scintillantes | Course en coordonnées plateau au milieu du plateau |
+| **Ocean Wave** | Vague bleue avec teinte sarcelle | Balayage lent avant-arrière |
+| **Sunset Glow** | Respiration chaude avec balayage doré | Visée statique, gradateur respirant |
+| **Police Lights** | Stroboscope rouge avec flash bleu balayant | Stroboscope + balayage côté lent |
+| **Starfield** | Étincelles blanches sur fond sombre | Faisceau statique, gradateur scintillant |
+| **Aurora Borealis** | Rideau vert avec miroitement violet | Balayage lent avant-arrière |
+| **Aurora Curtain** *(nouveau en v1.7.83)* | Rideau voyageur coordonné — chaque projecteur motorisé monte sur la même cible ruban à un décalage de phase, le rideau voyage donc visiblement le rig au lieu que toutes les têtes bougent à l'unisson. Inclut une couche d'étincelles et des fondus d'entrée / sortie pour que l'effet s'ouvre et se referme proprement. | Suit une cible ruban, ping-pong sur l'axe choisi |
+| **Spotlight Follow Person** | Orbe chaud que les personnes détectées par caméra héritent | Action de suivi — les projecteurs poursuivent la personne détectée |
+| **Concert Wash** | Inondation magenta + balayage ambre | Balayage en coordonnées plateau, sans suivi |
+| **Figure Eight** | Orbes croisés — les projecteurs tracent des chemins en X | Action de suivi — les projecteurs poursuivent des accessoires de patrouille croisés |
+| **Thunderstorm** | Éclairs frappant le rig de haut en bas | Éclairs en coordonnées plateau (Z descendant, #837) |
+| **Dance Floor** | Spots orbitaux rapides | Course en coordonnées plateau, sans suivi |
+
+### Action de suivi vs balayage
+
+La colonne description vous dit si les projecteurs poursuivent une
+cible (« Action de suivi ») ou suivent un trajet de balayage
+précalculé (« balayage en coordonnées plateau »). Avant v1.7.83,
+plusieurs thèmes promettaient du suivi dans leur description mais
+n'émettaient qu'un balayage — corrigé dans #837 et le tableau est
+désormais honnête : seuls **Spotlight Follow Person**, **Figure
+Eight** et **Aurora Curtain** créent une action de suivi à
+l'installation.
+
+### Personnaliser un préréglage installé
+
+L'installation d'un préréglage l'écrit dans l'état régulier
+Actions / Chronologie / Objets ; chaque partie est donc éditable
+sur place :
+
+- **Recolorier un balayage** — ouvrez l'action sous **Actions**,
+  changez RVB. Le précalcul se régénère à la prochaine lecture de
+  la chronologie ; pas besoin de réinstaller le préréglage.
+- **Limiter une action de suivi à des projecteurs spécifiques** —
+  ouvrez la section Avancé de l'action de suivi (chapitre 8),
+  réglez `trackFixtureIds` aux projecteurs voulus, laissez vide
+  pour la portée tous-projecteurs-motorisés.
+- **Ajuster le cycle du suiveur** — Cycle Time (ms) dans la section
+  Avancé contrôle la fréquence à laquelle un projecteur saute sur
+  une nouvelle cible quand il y en a plus que de projecteurs.
+- **Remplacer la cible de patrouille** — pour Aurora Curtain ou
+  Figure Eight, l'objet de patrouille sous-jacent est dans
+  l'onglet **Disposition / Objets**. Changez son axe, son
+  speedPreset ou son motif ; la frame de lecture suivante prend en
+  compte le nouveau mouvement.
+
+### Comportement hors lecture
+
+Les spectacles préréglés respectent le même contrat de
+comportement au repos que toute autre chronologie (chapitre 17 →
+« Comportement au repos ») : le rig se gare en home et la lampe se
+ferme à la fin du spectacle, au relâchement de la revendication ou
+quand l'opérateur arrête la lecture. L'objet de patrouille de
+l'Aurora Curtain s'arrête automatiquement en fin de chronologie
+puisque le préréglage l'installe avec
+`patrolMode: on-demand` (chapitre 6).
 
 ---
 
@@ -881,9 +1167,27 @@ Pendant une calibration, le projecteur est verrouille : timelines, pucks gyro, t
 
 ## 14. Nœuds caméra
 
-Les nœuds caméra sont des ordinateurs monocartes Orange Pi ou Raspberry Pi équipés de **caméras USB**. Ils fournissent des captures d'image en direct et de la détection d'objets par IA pour la préparation de la scène.
+Les nœuds caméra sont des ordinateurs monocartes Orange Pi ou
+Raspberry Pi équipés de **caméras USB**. Ils fournissent des
+captures d'image en direct et de la détection d'objets par IA pour
+la préparation du plateau, l'étalonnage des projecteurs motorisés
+et le suivi de personnes en direct via le préréglage Spotlight
+Follow Person.
 
-> **Remarque :** seules les caméras USB sont prises en charge. Les caméras à nappe CSI du Pi (p. ex. Pi Camera Module, Freenove FNK0056) ne sont pas prises en charge en v1.x. Utilisez des webcams USB à la place.
+Le firmware caméra de production courant est **v1.6.3** (apparié
+avec l'orchestrateur v1.7.83). Les nœuds déjà déployés peuvent
+être mis à jour sur place depuis l'onglet Firmware — le chemin de
+déploiement SSH récupère le nouveau bundle depuis
+`dist/camera-firmware-v1.6.3.zip` et remplace le service caméra
+sans redémarrer le SBC.
+
+> **Remarque :** seules les caméras USB sont prises en charge. Les
+> caméras à nappe CSI du Pi (p. ex. Pi Camera Module, Freenove
+> FNK0056) ne sont pas prises en charge. Utilisez des webcams USB à
+> la place. La matrice de compatibilité des SBC et des capteurs USB
+> vit dans `docs/SUPPORTED_HARDWARE.md` — Orange Pi 4A est la cible
+> principale ; RPi 3B+ / 4 / 5 et Orange Pi Zero 3/5 sont confirmés
+> fonctionnels.
 
 ### Ajouter un nœud caméra
 1. Flashez un Orange Pi avec l'image OS prise en charge
@@ -1014,21 +1318,102 @@ Avant de lancer l'étalonnage complet, utilisez le test d'orientation pour confi
 
 ---
 
-## 14. Firmware et mises a jour OTA
+<!-- review-status: pending -->
+
+## 15. Firmware et mises à jour OTA
+
+L'onglet **Firmware** est la fenêtre unique de l'opérateur sur tous
+les périphériques flashables du rig : nœuds exécutants LED, pont
+DMX, palet gyro, et nœuds caméra. Chaque périphérique flashable
+remonte sa version de micrologiciel courante à l'orchestrateur sur
+chaque cycle PING/PONG ; un périphérique périmé apparaît donc comme
+« obsolète » dans les secondes qui suivent le démarrage de
+l'orchestrateur.
+
+### Versions de production courantes (orchestrateur v1.7.83)
+
+| Périphérique | Piste | Courante | Canal |
+| --- | --- | --- | --- |
+| Orchestrateur (Windows / macOS) | app | **v1.7.83** | installateur (`SlyLED-Setup.exe`) |
+| Application Android opérateur | app | suit la piste de l'orchestrateur | sideload de l'APK depuis `dist/slyled-android.apk` |
+| Nœud exécutant LED (ESP32) | `child-led-esp32` | **v7.5.11** | OTA |
+| Nœud exécutant LED (D1 Mini) | `child-led-d1mini` | **v7.5.10** | OTA |
+| Nœud exécutant LED (Giga enfant) | `child-led-giga` | **v7.5.2** | OTA |
+| Pont DMX (ESP32) | `dmx-bridge-esp32` | **v7.5.20** | OTA |
+| Pont DMX (Giga R1) | `dmx-bridge-giga` | **v7.5.20** | OTA |
+| Firmware parent (Giga R1) | `parent-giga` | **v7.5.24** *(en attente — l'orchestrateur de bureau est l'exécution recommandée)* | USB seulement |
+| Contrôleur Gyro (ESP32-S3) | `gyro-esp32s3` | **v1.2.8** | OTA |
+| Nœud caméra (Linux SBC) | `camera-node` | **v1.6.3** | déploiement SSH depuis l'onglet Firmware |
+
+L'onglet Firmware interroge `firmware/registry.json` pour connaître
+la version « courante » ; ce tableau est donc régénéré
+automatiquement à chaque release et l'opérateur n'a jamais à le
+garder en tête.
 
 ### Flash USB
-1. Allez dans l'onglet **Firmware**
-2. Selectionnez le port COM et le binaire du firmware
-3. Cliquez sur **Flasher** — la progression affiche le pourcentage
 
-### OTA (mise a jour sans fil)
-1. Definissez les identifiants WiFi dans l'onglet Firmware
-2. Cliquez sur **Verifier les mises a jour** — affiche la comparaison de version par appareil
-3. Cliquez sur **Mettre a jour** sur tout Performer obsolete
-4. L'appareil redemarre automatiquement apres le flash
+1. Ouvrez l'onglet **Firmware**.
+2. Cliquez sur la carte **Flash USB**. La liste déroulante affiche
+   chaque binaire connu du registre pour les cartes flashables par
+   USB (LED ESP32 / D1 Mini / Giga enfant / variantes du pont DMX /
+   Contrôleur Gyro).
+3. Branchez la carte cible et choisissez son port COM dans la
+   seconde liste déroulante.
+4. Cliquez sur **Flasher** — la progression montre un pourcentage
+   et un « vérification OK » final avant que la carte redémarre
+   sous le nouveau micrologiciel.
 
-### Registre du firmware
-`firmware/registry.json` liste les binaires disponibles avec le type de carte et la version. Le systeme OTA compare la version du registre avec le firmware signale par chaque Performer.
+Le Contrôleur Gyro (ESP32-S3) embarque un port série USB-CDC dans
+son firmware. Si une compilation défaillante laisse le palet
+incapable d'énumérer en USB, maintenez le bouton **BOOT** appuyé en
+branchant le câble pour entrer dans le bootloader ROM manuel ;
+l'onglet Firmware re-flashe alors via le chemin de récupération
+esptool.
+
+### OTA (Over-the-Air)
+
+1. Configurez les identifiants WiFi sur l'onglet Firmware — ils
+   sont poussés sur chaque périphérique nouvellement flashé.
+2. Cliquez sur **Vérifier les mises à jour**. L'onglet affiche une
+   comparaison par périphérique : version remontée → version du
+   registre, avec un bouton **Mettre à jour** sur tout ce qui est
+   obsolète.
+3. Cliquez sur **Mettre à jour** sur tout exécutant obsolète. Le
+   statut en cours de flash revient en direct ; le périphérique
+   redémarre automatiquement après vérification.
+4. Nouveau depuis v1.7.83 : lorsqu'un SHA-256 du registre ne
+   correspond pas au binaire sur disque (téléchargement
+   interrompu ou registre édité à la main), l'orchestrateur retombe
+   sur la release GitHub correspondant au `releaseTag` plutôt que
+   de refuser le flash.
+
+Les builds de diagnostic / développement du gyro
+(`esp32s3-gyro-test-firmware.bin`) sont volontairement masqués de
+l'UI OTA opérateur — l'onglet Firmware ne propose que les builds de
+production. Le binaire de diagnostic reste présent dans `dist/` pour
+les ingénieurs effectuant un débogage en cartes appairées.
+
+### Registre Firmware
+
+`firmware/registry.json` est la source de vérité unique de la
+version que l'orchestrateur croit livrée à chaque release. Chaque
+entrée porte :
+
+- `id` et `name` pour le libellé de l'UI OTA.
+- `version` (semver 3 segments) — ce que doit exécuter le
+  périphérique de l'opérateur.
+- `releaseTag` et `releaseAsset` — le tag de release GitHub et le
+  nom de fichier de l'asset à l'intérieur, utilisés par le repli
+  OTA.
+- `sha256` — hachage de vérification que l'orchestrateur valide
+  avant et après flashage.
+
+L'édition manuelle de `registry.json` n'est pas recommandée ;
+`build_release.ps1` le maintient en synchronisation avec les
+empreintes des binaires à chaque release. L'onglet Firmware
+rafraîchit le registre depuis GitHub à la demande via le bouton
+**Rafraîchir** ; un installateur fraîchement récupéré voit donc
+immédiatement les versions correspondant à son tag de release.
 
 ---
 
@@ -1052,18 +1437,40 @@ Voir `docs/STRESS_TEST.md` pour les donnees de benchmark completes.
 
 ---
 
-## 16. Depannage
+<!-- review-status: pending -->
 
-| Probleme | Solution |
-|----------|----------|
-| **Vue d'execution vide** | Verifiez que les projecteurs sont positionnes dans la Mise en page. Les installations DMX uniquement s'affichent desormais (correctif v8.1). |
-| **Cone de faisceau dans la mauvaise direction** | aimPoint[1] est la hauteur (Y), pas la profondeur (Z). Verifiez les valeurs du point de visee. |
-| **Crash JSON sur Android** | Mettez a jour vers la v8.1 — aimPoint est passe de Int a Double. Reinitialisation d'usine : necessite desormais un en-tete de confirmation. |
-| **Erreur de sauvegarde de spectacle** | Mettez a jour vers la v8.1 — le point de terminaison `/api/show/export` etait manquant. |
-| **Echec de la verification du firmware** | Mettez a jour vers la v8.1 — bugs corriges pour le BOM UTF-8 et l'iteration de dictionnaire dans registry.json. |
-| **Fenetre 3D ne s'affiche pas** | Utilisez Chrome/Firefox/Edge avec le support WebGL. |
-| **Performers non synchronises** | Verifiez que tous les appareils sont sur le meme reseau WiFi. Actualisez dans l'onglet Configuration. |
-| **Taille du canevas incorrecte** | Les dimensions de la scene (Parametres) determinent la taille du canevas : canvasW = scene.w x 1000. |
+## 17. Dépannage
+
+Le tableau ci-dessous couvre les symptômes que les opérateurs
+remontent le plus souvent. Chaque ligne pointe vers la version de
+l'orchestrateur où le comportement sous-jacent a été modifié pour la
+dernière fois ; un opérateur sur une version plus ancienne peut
+ainsi décider de mettre à jour ou de contourner.
+
+| Problème | Ce que vous voyez | Correctif ou version |
+| --- | --- | --- |
+| **Vue d'exécution vide** | L'onglet Exécution 3D affiche le plateau mais aucun appareil. | Vérifiez que les appareils sont positionnés dans l'onglet **Disposition**. Les installations DMX seules s'affichent correctement depuis v1.7.30. |
+| **Cône de faisceau dans la mauvaise direction** | Le cône de la visualisation 3D vise le mauvais mur. | La direction du faisceau provient de la `rotation = [rx, ry, rz]` de l'appareil dans l'espace plateau. Z est vers le haut ; rx > 0 vise vers le bas. Voir le chapitre 4 pour la convention complète. |
+| **Le cône de la visualisation 3D ne correspond pas au projecteur physique** | Le cône dans la visualisation pointe à gauche du plateau alors que le projecteur motorisé vise à droite. | Corrigé en v1.7.52 (#806/#809) : le vecteur de visée canonique est la source de vérité, et l'IK physique en dérive. Si la divergence persiste sur v1.7.52+, sauvegardez à nouveau les positions Home et Secondaire de l'appareil dans l'assistant Set Home. |
+| **Saut de pan à la fin de l'étalonnage** | Au relâchement de l'étalonnage, le projecteur saute vers une pose différente de celle que le palet remontait. | Corrigé en v1.7.52 (#805). Avant le correctif, le repli vers l'IK historique capturait le mauvais vecteur de visée au relâchement. Les opérateurs sur v1.7.52+ qui voient encore un saut doivent le signaler avec la version du firmware du palet gyro (≥ v1.2.4 requis). |
+| **L'appui sur Démarrer clignote vers « start » sur le palet** | L'opérateur appuie sur Démarrer après une coupure WiFi, l'UI du palet clignote l'accusé de revendication pendant une frame, puis revient à IDLE pendant que l'orchestrateur conserve une revendication orpheline. | Corrigé en v1.7.83 (#812 / #813 / #825). L'appui sur Démarrer utilise désormais un nonce 16 bits + CLAIM_ACK, avec des battements de cœur HB_REP pour réconcilier les états divergents. Si vous voyez le symptôme sur v1.7.83+, vérifiez que le firmware du palet est ≥ v1.2.7 (le registre vous le signale). |
+| **L'auto-luminosité n'a aucun effet sur les lumières** | L'UI Auto-luminosité Android montre le maître qui glisse avec la musique, mais les têtes DMX et les bandeaux LED ne s'estompent pas. | Corrigé en v1.7.83 (#843). Le POST rapide diffuse désormais `CMD_SET_BRIGHTNESS` aux nœuds LED et applique une mise à l'échelle gamma au gradateur DMX / RVB au moment du rendu. Les opérateurs sur d'anciennes versions peuvent se rabattre sur le curseur manuel Paramètres → Luminosité globale en attendant la mise à jour. |
+| **La playlist en boucle s'éteint entre chaque itération** | Une playlist mono- ou multi-élément en mode **Loop All** flashe tout à zéro pendant une frame à chaque bouclage. | Corrigé en v1.7.83 (#840). Les boucles mono-élément passent par le chemin de lecture modulo, et les boucles multi-éléments passent `is_final=False` pour supprimer le balayage de blackout de fin naturelle jusqu'à ce que la playlist s'arrête réellement. |
+| **L'action de suivi éteint des projecteurs motorisés sur des chronologies sans rapport** | Une chronologie qui ne référence pas une action de suivi voit quand même ses projecteurs s'éteindre dès que l'action existe dans la bibliothèque. | Corrigé en v1.7.83 (#835). Les actions de suivi n'évaluent plus que sur les chronologies qui les référencent ; les actions orphelines restent dormantes. |
+| **Un préréglage promet « les têtes suivent X » mais elles ne le font pas** | Une description de thème promet du suivi, mais le rig se contente de balayer. | Corrigé en v1.7.83 (#837). Les descriptions des thèmes correspondent désormais à l'implémentation réelle : seuls Figure Eight et Spotlight Follow Person émettent une action de suivi ; les autres balayent. |
+| **Le champ Roue de couleurs apparaît dans l'éditeur d'action DMX Scene** | Les volets DMX Scene / PT-Move / Gobo Select de l'éditeur d'action présentaient un champ « Roue de couleurs » qui ne faisait pas ce que l'opérateur attendait sur les appareils hybrides RVB+roue. | Corrigé en v1.7.83 (#841 / #842). L'emplacement de roue est désormais réservé au type 17 ; le moteur de précalcul / rendu dérive l'emplacement à partir du RVB via `rgb_to_wheel_slot` pour tous les autres types d'action. Une migration unique retire les champs `colorWheel: 0` périmés au premier démarrage de v1.7.83+. |
+| **Visualisation 3D ne s'affiche pas** | Canevas noir là où le plateau devrait être. | Utilisez Chrome / Firefox / Edge avec le support WebGL. Vérifiez `chrome://gpu` pour l'accélération matérielle. |
+| **Exécutants non synchronisés** | Un nœud enfant apparaît hors-ligne dans Configuration alors qu'il est sous tension. | Vérifiez que l'orchestrateur et le nœud enfant sont sur le même sous-réseau WiFi. Le bouton **Rafraîchir** de l'onglet Configuration relance le scan via mDNS + diffusion UDP. |
+| **Canevas de mauvaise taille** | Le canevas Disposition est beaucoup plus petit ou plus grand que la pièce. | Les dimensions du plateau (Paramètres → Plateau) déterminent la taille du canevas : `canvasW = stage.w × 1000`. Ajustez la largeur / hauteur du plateau en mètres plutôt que les pixels du canevas. |
+| **Flash OTA refusé pour incohérence de SHA** | L'onglet Firmware refuse la mise à jour avec `sha256 mismatch`. | Corrigé en v1.7.61 (#814). L'orchestrateur retombe désormais sur la release GitHub du `releaseTag` enregistré quand le binaire sur disque diffère du registre. Si vous voyez encore l'erreur, cliquez sur **Rafraîchir** dans l'onglet Firmware pour récupérer `registry.json` depuis GitHub. |
+| **Verrou de stale-reason gyro qui ne s'efface pas** | « Connexion perdue » reste affiché sur la ligne de statut d'un palet alors qu'il a repris l'envoi. | Corrigé en v1.7.62 (#821) puis à nouveau en v1.7.63 (#823). L'appui sur Démarrer efface la stale_reason distante ; le cache s'auto-détruit sur un échec de lecture transitoire. |
+
+Si vous rencontrez quelque chose qui n'est pas dans ce tableau, le
+journal de l'orchestrateur (Paramètres → Journalisation → activer
+le journal fichier) capture chaque envoi UDP et chaque décision de
+rendu DMX taggués par numéro d'issue — ouvrez une issue GitHub avec
+la section pertinente jointe et une description de ce que faisait
+le rig au moment du symptôme.
 
 ---
 
@@ -1938,9 +2345,16 @@ flowchart LR
 
 <a id="appendix-b"></a>
 
-## Annexe B — Pipeline d'étalonnage de projecteur motorisé (EBAUCHE)
+## Annexe B — Pipeline d'étalonnage de projecteur motorisé
 
-> ⚠ **EBAUCHE — suppose que tout le travail en vol est fusionné.** Cette annexe décrit le pipeline d'étalonnage des projecteurs motorisés comme si les issues #610, #651–#661, #653–#655, #658–#661 et #357 étaient entièrement implémentées. Certaines fonctionnalités documentées ci-dessous sont **partiellement fusionnées** aujourd'hui (notamment les budgets globaux de temps par phase par #653, le filtrage paramétrique tenu de côté complet du drapeau `moverCalibrated` par #654, la mise à l'échelle adaptative de densité battleship par #661 et le filtre polygonal de vue sol par #659). Voir `docs/DOCS_MAINTENANCE.md` pour le statut de fusion actuel et les critères de retrait de cette bannière. Issue [#662](https://github.com/SlyWombat/SlyLED/issues/662).
+> Mis à jour pour l'orchestrateur v1.7.83. Le pipeline décrit ici
+> est l'architecture post-#784 : un vecteur de visée canonique
+> unique (`aim_stage`, #806) est la source de vérité pour chaque
+> projecteur motorisé, le `ParametricFixtureModel` + l'ajustement
+> Levenberg–Marquardt (#488) sont l'IK principale, et l'ancien
+> pipeline SMART qui pilotait les versions d'étalonnage antérieures
+> a été retiré. Le contenu phase par phase ci-dessous a été vérifié
+> contre le `mover_calibrator.py` et `parametric_mover.py` actuels.
 
 L'étalonnage de projecteur motorisé s'exécute par appareil projecteur motorisé [DMX](#glossary) après que la/les caméra(s) couvrant sa région atteignable ont été étalonnées (annexe A). Il produit un ensemble d'échantillons + un [modèle cinématique](#glossary) paramétrique à 6 [DOF](#glossary) qui permet à l'orchestrateur de traduire les cibles dans l'espace scène en valeurs DMX pan/tilt exactes, activant l'[IK](#glossary) (cinématique inverse) pour l'action Track et les effets spatiaux.
 
@@ -1958,7 +2372,7 @@ flowchart TD
     Coarse --> MapConv
     MapConv --> Grid[4 — Grid build<br/>&lt;1s]
     Grid --> Verify[5 — Verification sweep<br/>3-5s advisory]
-    Verify --> Fit[6 — LM model fit<br/>4 sign combos + verify_signs<br/>&lt;1s]
+    Verify --> Fit[6 — LM model fit<br/>verify_signs → single-combo LM<br/>&lt;1s]
     Fit --> HoldOut{7 — Held-out<br/>parametric gate<br/>#654}
     HoldOut -->|pass| Save[8 — Save +<br/>moverCalibrated=true]
     HoldOut -->|fail| OperatorRetry[Accept / Retry prompt]
@@ -1984,7 +2398,7 @@ flowchart TD
 | 3′ | Convergence (v2) | `sampling` | 30–60 s (N cibles × ~1 s chacune) | 30–70 | Abandonner si la convergence échoue sur plusieurs cibles |
 | 4 | Construction de grille | `grid` | <1 s | ~80 | Abandonner si dispersion d'échantillons insuffisante |
 | 5 | Balayage de vérification | `verification` | 3–5 s (3 points tenus de côté) | ~90 | **Consultatif seulement** — ne bloque pas la sauvegarde |
-| 6 | Ajustement du modèle (LM) | `fitting` | <1 s | 85–95 | Abandonner si les 4 combinaisons de signes échouent |
+| 6 | Ajustement du modèle (LM) | `fitting` | <1 s | 85–95 | verify_signs d'abord → LM à combinaison unique ; repli complet à quatre combinaisons si une sonde de signe rate |
 | 7 | Porte paramétrique tenue de côté (#654) | `holdout` | 2–5 s (N cibles non vues) | 95–98 | Présenter une invite Accept/Retry |
 | 8 | Sauvegarde | `complete` | <1 s | 100 | Erreur d'écriture journalisée mais n'affecte pas le drapeau moverCalibrated |
 
@@ -2068,7 +2482,7 @@ sequenceDiagram
 
     Note over Orch: Grid build (<1s, sync)
     Note over Orch,Cam: Verification sweep (3-5s)
-    Note over Orch: LM fit — 4 sign combos + verify_signs
+    Note over Orch: verify_signs probes → single-combo LM fit
     Note over Orch,Cam: Held-out parametric gate (#654)
 
     alt within tolerance
@@ -2105,7 +2519,7 @@ Deux chemins de code existent. Le chemin battleship est préféré quand l'homog
 **Legacy (statut `discovery`) :**
 
 - Sonde initiale à la visée de démarrage à chaud (prédiction du modèle ou estimation géométrique d'après le FOV caméra).
-- Grille grossière 10×7 : bins pan `0,02 + 0,96·i/9`, bins tilt `0,1 + 0,85·j/6` — 70 sondes. Settle par sonde `SETTLE = 0,6 s` (la découverte legacy utilise la constante fixe ; la machinerie de settle adaptatif #655 documentée en phase de cartographie ne s'applique pas ici).
+- Grille grossière 10×7 : bins pan `0,02 + 0,96·i/9`, bins tilt `0,1 + 0,85·j/6` — 70 sondes. Chaque sonde passe par `_wait_settled`, qui réutilise la même machinerie de settle adaptatif (`SETTLE_BASE = 0,4 s` avec escalade `[0,4, 0,8, 1,5] s`) que la phase de cartographie — pas une constante `SETTLE` fixe séparée.
 - Si le balayage grossier rate, spiraler vers l'extérieur depuis la visée de démarrage à chaud en coquilles rectangulaires à `STEP = 0,05`, jusqu'à `MAX_PROBES = 80` sondes totales.
 - **Durée attendue** — 45–55 s dans le pire cas.
 - **Repli en cas d'échec** — abandonner avec `error` ; appeler `_cal_blackout()`.
@@ -2124,7 +2538,7 @@ Deux chemins de code existent. Le chemin battleship est préféré quand l'homog
 **Convergence v2 (statut `sampling`) :**
 
 - Pour chaque cible issue de `pick_calibration_targets` (filtrée à travers le polygone de vue sol caméra par #659), faire converger le faisceau sur le pixel cible via `converge_on_target_pixel`.
-- **Raffinement par bracket-and-retry (#660)** — `bracket_step = 0,08` initial. Quand le faisceau est perdu, diviser par deux le pas et revenir vers le meilleur offset connu dans la direction de l'erreur. Plancher de bracket `BRACKET_FLOOR = 0,002`. Réinitialiser `bracket_step` à 0,08 à la ré-acquisition du faisceau. Convergence typique : 5–10 itérations ; max 25.
+- **Raffinement par bracket-and-retry (#660)** — `bracket_step = 0,08` initial. Quand le faisceau est perdu, diviser par deux le pas et revenir vers le meilleur offset connu dans la direction de l'erreur. `BRACKET_FLOOR` dépend maintenant du fixture : `1 / (2^pan_bits − 1)` — environ `0,0039` en pan 8 bits et `0,0000153` en 16 bits, donc la boucle s'épuise à la résolution DMX réelle du fixture plutôt qu'à l'ancien plancher `1/255` réservé au 8 bits (#679). Réinitialiser `bracket_step` à 0,08 à la ré-acquisition du faisceau. Convergence typique : 5–10 itérations ; max 25.
 - **Durée attendue** — 30–60 s (N cibles × ~1 s chacune).
 
 **Repli** — si moins de 6 échantillons sont collectés, abandonner avec `error`.
@@ -2144,10 +2558,11 @@ Deux chemins de code existent. Le chemin battleship est préféré quand l'homog
 
 #### 6. Ajustement du modèle (paramétrique, Levenberg-Marquardt)
 
-- Essayer les quatre combinaisons de signes `(pan_sign, tilt_sign) ∈ {±1}²`. Pour chaque combinaison, exécuter `scipy.optimize.least_squares` avec perte `soft_l1` (`f_scale=0.05`) sur cinq paramètres continus (mount yaw/pitch/roll + offsets pan/tilt) ; jusqu'à 120 itérations.
-- Trier les candidats par erreur RMS ; choisir le meilleur. Si les deux premiers candidats s'accordent à 0,2° près, journaliser un avertissement d'ambiguïté miroir.
-- **Vérification de signes (§8.1)** — après ajustement, nudger pan de +0,02 et détecter le décalage pixel ; nudger tilt de +0,02 et faire de même. Calculer le signe de `Δpx · pan_axis_sign_in_frame` (défaut +1) → pan_sign ; et `Δpy · tilt_axis_sign_in_frame` (défaut −1) → tilt_sign. Ré-ajuster avec `force_signs=(pan_sign, tilt_sign)` pour résoudre le miroir.
-- **Durée attendue** — <1 s y compris les sondes verify_signs.
+- **La vérification de signes (#652 / §8.1) s'exécute AVANT l'ajustement LM.** Juste après que la découverte renvoie `(pan, tilt, pixel)`, le thread émet deux sondes supplémentaires (`pan + 0,02`, `tilt + 0,02`) et appelle `verify_signs` sur les deltas pixel pour calculer `(pan_sign, tilt_sign)`. Ces signes alimentent `fit_model(..., force_signs=(ps, ts))` de sorte que la LM n'effectue **qu'un seul** ajustement au lieu de quatre.
+- Repli — si une sonde de signe ne détecte pas de faisceau, `force_signs` reste `None` et `fit_model` exécute la recherche complète à quatre combinaisons et choisit le candidat de plus faible RMS.
+- Lorsque les deux meilleurs candidats s'accordent à 0,2° RMS près ET que l'appelant n'a pas fourni `force_signs`, `FitQuality.mirror_ambiguity` est mis à True et exposé par l'endpoint de statut (#679) afin que l'UI puisse marquer la calibration pour un nouvel essai manuel.
+- `scipy.optimize.least_squares` avec perte `soft_l1` (`f_scale=0.05`) ajuste cinq paramètres continus (mount yaw/pitch/roll + offsets pan/tilt) ; jusqu'à 120 itérations.
+- **Durée attendue** — <1 s au total (verify_signs + ajustement LM unique).
 - **Repli** — si les 4 combinaisons ne convergent pas, lever `RuntimeError` ; l'appelant abandonne avec `error`.
 
 #### 7. Porte paramétrique tenue de côté (#654)
@@ -2209,6 +2624,19 @@ L'annulation peut provenir de trois sources : opérateur (`POST /api/calibration
 
 ### B.7 Référence des paramètres de réglage
 
+**Réglable par l'opérateur (#680) — Réglages → Avancé → Délais de calibration.**
+Les constantes ci-dessous sont les valeurs par défaut livrées ; l'opérateur
+peut les surcharger via le panneau Avancé, qui persiste dans
+`desktop/shared/data/settings.json` sous `calibrationTuning`. Les
+surcharges sont lues au début de chaque phase, donc un changement prend
+effet à la prochaine calibration sans redémarrage du serveur. La
+validation est centralisée dans `CAL_TUNING_SPEC`
+(`parent_server.py`) ; POST /api/settings rejette les valeurs hors
+plage avec un 400. Chaque constante ci-dessous a une entrée
+correspondante dans `CAL_TUNING_SPEC` sauf celles marquées « fixe »
+(p. ex. `STEP`, `MAX_SAMPLES` est exposé sous `bfsMaxSamples`,
+`BRACKET_FLOOR` est dérivé par fixture et non réglable selon #679).
+
 Constantes dans `desktop/shared/mover_calibrator.py` :
 
 | Constante | Défaut | Rôle |
@@ -2222,13 +2650,27 @@ Constantes dans `desktop/shared/mover_calibrator.py` :
 | `MAX_SAMPLES` | 80 | Plafond dur sur les échantillons BFS |
 | `COARSE_PAN` | 10 | Bins pan de grille grossière legacy |
 | `COARSE_TILT` | 7 | Bins tilt de grille grossière legacy |
-| `BRACKET_FLOOR` | 0,002 | Plancher de raffinement de convergence (~1° sur 540° de pan) |
+| `BRACKET_FLOOR` | `1 / (2^pan_bits − 1)` | Plancher de raffinement de convergence — dépend du fixture (8 bits → `≈0,0039`, 16 bits → `≈0,0000153`) (#679) |
 
 Constantes dans `desktop/shared/mover_control.py` :
 
 | Constante | Défaut | Rôle |
 |-----------|--------|------|
-| Claim TTL | 15 s | Libération automatique si la réservation n'est pas rafraîchie |
+| Claim TTL (`moverClaimTtlS`, #680) | 15 s | Libération automatique si la réservation n'est pas rafraîchie |
+
+Budgets de temps par phase (depuis `CAL_TUNING_SPEC` dans `desktop/shared/parent_server.py`, #680) :
+
+| Clé | Défaut | Plage | Rôle |
+|-----|--------|-------|------|
+| `discoveryBattleshipS` | 60 s | 20 – 300 | Budget du scan grille grossière |
+| `discoveryColourFallbackS` | 90 s | 30 – 300 | Budget du repli colorimétrique legacy |
+| `mappingS` | 120 s | 30 – 600 | Budget de cartographie BFS (plafond souple) |
+| `fitS` | 10 s | 5 – 60 | LM + construction de grille |
+| `verificationS` | 30 s | 5 – 120 | Vérification grille + paramétrique tenue de côté |
+| `warmupSeconds` | 30 s | 0 – 120 | Balayage de chauffe des moteurs avant calibration |
+| `bfsMaxSamples` | 80 | 20 – 300 | Plafond dur sur les échantillons BFS |
+| `convergeMaxIterations` | 25 | 5 – 100 | Boucle bracket-and-retry par cible |
+| `battleshipPan/TiltStepsMin/Max` | 3 / 8 / 3 / 6 | voir spec | Bornes de grille adaptative (#661) |
 
 ### B.8 Fonctionnalités associées
 
@@ -2283,4 +2725,251 @@ Ces mesures nécessitent des modifications dans `.github/` et sont suivies comme
 ### C.5 Retrait de la bannière BROUILLON
 
 Les bannières BROUILLON sur les annexes A et B devront être retirées une fois que les éléments en cours listés dans `docs/DOCS_MAINTENANCE.md §"When to bump the DRAFT banner"` seront tous confirmés comme fusionnés. Au moment de la rédaction de cette annexe (2026-04-23), les éléments suivants sont connus pour être partiels ou pas encore en code : #653 budgets de temps, #654 porte paramétrique mise de côté, #655 suréchantillonnage médian complet, #658 confirmation par clignotement hors chemin battleship, #659 filtre de cible par polygone de vue du sol, #661 densité battleship adaptative.
+
+<!-- review-status: pending -->
+
+## Annexe D — Comportement au repos
+
+Un rig « solide comme un roc » est un rig où, à tout moment où aucun
+spectacle ne joue et aucun opérateur ne pilote activement une tête,
+chaque projecteur motorisé se gare sur une pose connue avec la
+lampe fermée. Les opérateurs attendent ce contrat parce que
+l'alternative — une tête plantée sur la pose que le dernier
+écrivain a laissée — paraît cassée même quand rien ne va mal. Cette
+annexe est la liste canonique des moments où l'orchestrateur gare,
+ne gare pas, et de ce que « garé » signifie en pratique.
+
+### Ce que signifie « garé »
+
+Un projecteur motorisé garé :
+
+- Vise sa pose **Home** (la pose enregistrée dans l'assistant Set
+  Home ; repli au centre mécanique en l'absence de Home).
+- Tient son **gradateur à 0** pour que la lampe ne bave pas sur le
+  rig.
+- Ferme le **shutter** si le préréglage porte un canal strobe avec
+  une capacité `Closed` — les appareils à shutter mécanique
+  bénéficient de la fermeture explicite.
+- Libère tout emplacement de roue de couleurs qu'il tenait, en le
+  remettant à l'emplacement 0 (open / blanc), pour que la frame de
+  spectacle suivante n'hérite pas d'un filtre périmé.
+
+### Quand l'orchestrateur gare une tête
+
+| Déclencheur | Chemin | Notes |
+| --- | --- | --- |
+| **Démarrage à froid** | Boot orchestrateur | Chaque appareil DMX se gare une fois que le moteur démarre. Évite la surprise « la tête a été laissée pointée vers le mur du fond hier soir ». |
+| **Fin naturelle de chronologie** | Sortie de `_dmx_playback_loop` | Les têtes pilotées par le précalcul de la chronologie se garent à la fin du spectacle. Les têtes pilotées par action de suivi se garent aussi (#807) — avant le correctif, seules les têtes pilotées par précalcul se garaient, laissant les projecteurs revendiqués par un suiveur bloqués sur leur dernière pose. |
+| **L'opérateur appuie sur Stop** | `_dmx_playback_stop` armé | Identique à la fin naturelle. Le balayage de blackout ne s'applique qu'à l'arrêt ou à la fin de l'itération finale (#840), pas entre les itérations de boucle. |
+| **Relâchement de revendication** | Arbitre de revendication mover-control | Quand un téléphone Android ou un palet gyro relâche une revendication, la tête revient au spectacle si un spectacle est en cours, sinon elle se gare. Le relâchement est instantané — pas de lissage en v1.7.83+. |
+| **Re-stabilisation après cycle d'alimentation** | Premier PONG d'un nœud après boot | Quand la carte enfant d'un appareil refait un cycle d'alimentation, l'orchestrateur renvoie la luminosité globale courante (#843) et la frame de spectacle suivante écrit une pose connue. Avant v1.7.83, le nœud pouvait apparaître à pleine luminosité pendant une frame ; le renvoi à la réception du PONG ferme cette fenêtre. |
+
+### Ce qui ne déclenche PAS de garage
+
+Ces actions ne garent volontairement pas les têtes — les
+opérateurs s'y attendent parfois, mais garer à chaque coup ferait
+voler la tête au spectacle.
+
+- **Coups uniques `/api/mover/<fid>/aim`** — ces appels sont des
+  pulsations de test opérateur direct ; le rig garde la pose
+  écrite par la route jusqu'à la prochaine frame de spectacle.
+- **Curseurs de test DMX dans l'onglet Paramètres** — même
+  logique. Les curseurs surchargent la sortie du spectacle tant
+  que l'opérateur les pilote.
+- **Coupures brèves dans une revendication active** — un
+  téléphone ou un palet qui perd brièvement le WiFi pendant une
+  seconde ne libère pas la revendication. Le TTL de revendication
+  est de 15 s ; une tête ne se gare que quand le TTL s'écoule
+  sans battement de cœur (#813 §6.3 « silence total des
+  communications »).
+- **Sondages d'étalonnage** — les balayages de découverte de
+  faisceau et de convergence tiennent la tête là où le sondage
+  arrive. La session d'étalonnage gare la tête explicitement
+  quand elle se termine (succès ou abandon).
+
+### Comment vérifier sur votre rig
+
+1. Garez un projecteur motorisé sur un mur connu (Set Home →
+   sauvegarder).
+2. Arrêtez tout spectacle en cours.
+3. Visez la tête vers le sol avec `/api/mover/<fid>/aim`.
+4. Lancez la lecture d'une chronologie blanche de 5 s. La tête NE
+   doit PAS bouger (règle 3 : les coups uniques tiennent).
+5. Arrêtez la chronologie. La tête doit revenir à Home avec la
+   lampe fermée en moins de ~50 ms.
+
+Si l'étape 5 ne se produit pas, vérifiez (a) que l'appareil a une
+pose Home enregistrée, (b) que la chronologie s'est terminée
+naturellement plutôt que par un crash, (c) qu'aucune revendication
+n'est tenue sur l'appareil (l'onglet Configuration affiche l'état
+de revendication par appareil).
+
+---
+
+<!-- review-status: pending -->
+
+## Annexe E — Télécommande : téléphone Android et palet gyro
+
+Deux télécommandes peuvent piloter des projecteurs motorisés en
+direct en parallèle d'un spectacle en cours : un téléphone Android
+exécutant l'application opérateur SlyLED et un palet gyro Waveshare
+ESP32-S3 à écran rond. Tous deux passent par le même arbitre de
+revendication sur l'orchestrateur, suivent le même protocole de
+poignée de main et coopèrent avec la chronologie de spectacle via
+l'arbitre de revendication mover-control. Cette annexe décrit le
+cycle de vie complet, les gestes, et l'interaction entre arbitrage
+de revendication et spectacles préréglés.
+
+### Cycle de vie d'une revendication
+
+La revendication est le verrou « cette télécommande possède
+actuellement le projecteur N » de l'orchestrateur. Elle porte un
+nonce 16 bits, un TTL et une pose courante, ce qui permet au
+système de réconcilier l'état UI du palet avec l'état arbitre de
+l'orchestrateur quand l'un ou l'autre redémarre ou perd un paquet.
+
+```
+1. IDLE sur la télécommande.
+2. L'opérateur appuie sur Démarrer (palet) ou Revendiquer (Android).
+3. La télécommande émet CMD_GYRO_START / une requête de
+   revendication avec un nouveau nonce 16 bits.
+4. L'orchestrateur alloue un projecteur motorisé, répond par un
+   CLAIM_ACK avec le nonce + le moverId assigné. La télécommande
+   avance l'UI vers ACTIVE seulement sur un ACK correspondant ;
+   CLAIM_DENIED revient en arrière ; un timeout d'environ 1,5 s
+   revient avec « PAS DE RÉPONSE ».
+5. La télécommande envoie des quaternions d'orientation à ~50 Hz ;
+   l'orchestrateur les convertit en aim-stage et écrit pan / tilt
+   sur la tête.
+6. Les deux extrémités échangent des battements de cœur 2 s
+   (HB_REP porte uiState + claimNonce + seq) pour réconcilier les
+   états divergents.
+7. L'opérateur appuie sur Stop / Relâcher ; la télécommande envoie
+   le nonce ; l'orchestrateur répond par STOP_ACK et relâche la
+   revendication.
+```
+
+La spec complète de la machine d'état vit dans
+`docs/gyro-claim-lifecycle.md` et fait foi pour toute modification
+du protocole.
+
+#### Ce que voit l'opérateur
+
+- **Appui sur Démarrer sur le palet** — la page avance vers
+  « ACTIVE » en ~150 ms. Si l'orchestrateur ne peut revendiquer
+  aucun projecteur (aucun en ligne, aucun disponible), la page
+  revient à IDLE avec une raison de refus.
+- **Appui sur Stop sur le palet** — la page revient à IDLE ; la
+  tête revient à ce que pilotait le spectacle (ou se gare si
+  aucun spectacle ne joue).
+- **Étalonnage** — maintenez le bouton **Étalonner** (palet ou
+  Android) aussi longtemps que nécessaire ; relâchez pour
+  capturer la nouvelle pose de référence. L'écran avance vers la
+  page sélecteur de couleurs sur le palet ; l'application
+  Android avance vers la page gestes.
+- **Connexion perdue** — les deux télécommandes affichent un
+  badge stale-reason si l'orchestrateur cesse d'entendre les
+  battements de cœur. Le palet s'auto-efface quand il reprend
+  l'envoi (#812 / #821 / #823) ; l'opérateur peut aussi forcer
+  l'effacement via `POST /api/remotes/<id>/clear-stale`.
+
+### Gestes
+
+Une fois actives, les deux télécommandes pilotent la même
+sémantique `aim_stage` — le faisceau de la tête vise un point en
+coordonnées plateau calculé à partir de l'orientation de la
+télécommande.
+
+#### Téléphone (Android)
+
+- **Pitch** (incliner le téléphone vers l'avant / arrière) — le
+  faisceau monte / descend sur la tête.
+- **Roll** (incliner le téléphone gauche / droite) — le faisceau
+  pan à travers le plateau.
+- **Yaw** (tourner le téléphone autour de la verticale) — le
+  faisceau pan à travers le plateau.
+- **Boutons de volume** — gradateur fin haut / bas (configurable
+  dans l'app opérateur Android).
+- **Auto-luminosité** (chapitre Luminosité) — l'app peut piloter
+  la luminosité maître de l'orchestrateur depuis l'enveloppe du
+  micro local à ~20 Hz, avec mise à l'échelle gamma sur le rig
+  (#820, #843).
+
+L'axe yaw spécifique au téléphone est inversé par rapport au palet
+(#824) parce que l'orientation portrait naturelle du téléphone
+place la « gauche » de l'opérateur à 90 ° du repère du palet.
+L'opérateur n'a jamais à y penser ; le `_apply_quat` de
+l'orchestrateur pour `KIND_PHONE` gère la négation.
+
+#### Palet gyro
+
+- **Pitch** (incliner le palet vers l'avant / arrière) — le
+  faisceau monte / descend.
+- **Yaw** (tourner autour de l'axe vertical du palet) — le
+  faisceau pan.
+- **Roll** (incliner gauche / droite) — sélection d'emplacement
+  de roue de couleurs sur les préréglages avec roue ; ignoré sur
+  les préréglages RVB seuls.
+- **Appui sur Démarrer** — revendiquer un projecteur motorisé et
+  démarrer l'envoi.
+- **Appui sur Stop** — relâcher la revendication.
+- **Appui sur Étalonner** — capturer une nouvelle pose de
+  référence.
+
+### Arbitrage de revendication avec les spectacles (#763)
+
+Les revendications priment sur la chronologie de spectacle :
+
+- Une tête revendiquée est **silenciée** de
+  `_evaluate_track_actions` et des écritures
+  `set_fixture_dimmer` / `set_fixture_pan_tilt` pilotées par le
+  précalcul. L'écrivain de revendication possède la tête jusqu'au
+  relâchement.
+- Les autres têtes du rig continuent à jouer le spectacle
+  normalement — la revendication n'affecte que le projecteur
+  assigné.
+- Au relâchement, la tête **rejoint le spectacle en une frame** :
+  pas de lissage, pas de fondu. Si le spectacle a avancé, la
+  tête saute là où le spectacle est actuellement. C'est un choix
+  délibéré de #763 — le lissage en retour sortait l'opérateur du
+  moment ; le retour instantané est ce que font les vraies
+  consoles.
+- Les actions de suivi évaluent à chaque frame ; une tête qui
+  était revendiquée pendant un balayage retourne donc là où le
+  balayage est **en ce moment**, pas là où il aurait été en cours
+  de revendication.
+
+### Couleur et gradateur pendant une revendication (#814)
+
+Une revendication ne reprend pas la couleur ni le gradateur :
+
+- Les gestes de la télécommande pilotent **uniquement pan / tilt**
+  (et la roue de couleurs pour l'axe roll du palet sur les
+  préréglages qui le supportent).
+- Le gradateur et le RVB de la tête restent sous le contrôle du
+  spectacle. Si le spectacle est sombre, la tête revendiquée
+  reste sombre — l'opérateur choisit pan et tilt ; le spectacle
+  peint la couleur et l'intensité.
+- C'est valable pour la luminosité globale (#843) de la même
+  manière : une revendication pendant l'Auto-luminosité hérite du
+  maître piloté en automatique.
+
+### Récupération depuis un état divergent
+
+Les battements de cœur du protocole incluent l'état des deux
+extrémités, les combinaisons divergentes sont donc réconciliées :
+
+| UI palet | Orchestrateur | Comportement |
+| --- | --- | --- |
+| ACTIVE | revendication tenue | Normal — les battements de cœur gardent le TTL en vie. |
+| ACTIVE | aucune revendication | L'orchestrateur reconstruit la revendication (chemin de bootstrap après redémarrage de l'orchestrateur). |
+| IDLE | revendication tenue | Revendication orpheline — l'orchestrateur la relâche. |
+| IDLE | aucune revendication | Repos normal. |
+
+La garde anti-revendication-orpheline se déclenche 1,5 s après
+CLAIM_ACK si aucune orientation n'arrive, relâchant la
+revendication pour qu'une télécommande figée ne puisse pas
+squatter un projecteur motorisé indéfiniment.
+
+---
 

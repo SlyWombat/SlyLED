@@ -23,9 +23,11 @@
 18. [Examples](#18-examples)
 19. [API Quick Reference](#19-api)
 20. [Glossary](#glossary)
-21. [Appendix A — Camera Calibration Pipeline (DRAFT)](#appendix-a)
-22. [Appendix B — Moving-Head Calibration Pipeline (DRAFT)](#appendix-b)
+21. [Appendix A — Camera Calibration Pipeline](#appendix-a)
+22. [Appendix B — Moving-Head Calibration Pipeline](#appendix-b)
 23. [Appendix C — Documentation Maintenance](#appendix-c)
+24. [Appendix D — Idle Behaviour](#appendix-d)
+25. [Appendix E — Remote Control: Android Phone & Gyro Puck](#appendix-e)
 
 ---
 
@@ -466,42 +468,110 @@ The layout canvas has two interaction modes, toggled with keyboard shortcuts or 
 
 ## 6. Stage Objects
 
-Objects represent physical elements on the stage — walls, floors, trusses, screens, and props/performers.
+Objects represent physical elements on the stage — walls, floors,
+trusses, screens, and props or performers — plus the abstract
+"targets" that Track actions chase. Anything a moving head needs to
+aim at lives in the Objects tab.
+
+> The tab was previously called "Surfaces"; the rename to **Objects**
+> shipped with v1.7.30. Old project files import cleanly.
 
 ### Object Types
-| Type | Default Mobility | Description |
-|------|-----------------|-------------|
-| **Wall** | Static | Back wall, stage-locked to stage width x height |
-| **Floor** | Static | Stage floor, stage-locked to stage width x (depth + 1m) |
+
+| Type | Default mobility | Description |
+| --- | --- | --- |
+| **Wall** | Static | Back wall, stage-locked to stage width × height |
+| **Floor** | Static | Stage floor, stage-locked to stage width × (depth + 1 m) |
 | **Truss** | Static | Lighting truss bar |
 | **Screen** | Static | Projection surface |
 | **Prop** | Moving | Performer, set piece, or mobile element |
 | **Custom** | Moving | User-defined object |
+| **Ribbon target** | Moving | Travelling stage-coord anchor used by the Aurora Curtain template (#839) — a coordinated rig moves through the same point along a chosen axis |
 
 ### Stage-Locked Objects
-Wall and floor objects can be locked to stage dimensions. When you change the stage size in Settings, locked objects automatically resize.
+
+Wall and floor objects can be locked to stage dimensions. When you
+change the stage size in Settings → Stage, locked objects resize
+automatically.
 
 ### Mobility
-- **Static**: Fixed position. Cannot be tracked by moving heads.
-- **Moving**: Position can change at runtime. Trackable by DMX moving heads via Track action.
+
+- **Static** — fixed position. Cannot be tracked by moving heads.
+- **Moving** — position can change at runtime. Trackable by DMX moving
+  heads via the Track action (chapter 8).
 
 ### Patrol Motion
-Moving objects can patrol (oscillate) back and forth during playback:
-- **Axis**: Side-to-side (X), front-to-back (Z), or diagonal (X+Z)
-- **Speed presets**: Slow (20s cycle), Medium (10s), Fast (5s), or Custom
-- **Range**: Start/end percentage of stage dimension (default 10%--90%)
-- **Easing**: Smooth (sine) or Linear
 
-Patrol is evaluated at 40Hz in the DMX playback loop, before Track actions read object positions.
+Moving objects can patrol during playback. Each patrol carries a
+**pattern**, an axis or shape, a cycle time, and an optional easing
+curve. The patrol evaluator runs at 40 Hz inside the DMX playback
+loop, immediately before Track actions read object positions, so a
+patrolling target's pose is always one frame fresh by the time a
+mover reads it.
+
+#### Patterns
+
+| Pattern | Geometry | Use it for |
+| --- | --- | --- |
+| **Ping-pong** | Travels from one bounding-box corner to the opposite, then reverses | A side-stage performer's predicted path |
+| **Circle** | Constant-radius loop around the bounding-box centre | A turntable performer or a rotating stage gag |
+| **Figure-8** | Lemniscate (two-lobe) inside the bounding box | A complex path that visits two foci — useful for cross-stage chases |
+| **Square** | Four straight-line legs around the bounding-box rim | A "patrol perimeter" feel used in security / industrial themes |
+| **Ribbon** *(new in v1.7.83)* | A single travelling anchor on a chosen axis (left-right, front-back, up-down, cross, figure-8); multiple movers ride the ribbon at phase offsets so a sweep visibly travels the rig instead of every head moving in unison | The Aurora Curtain template's coordinated curtain effect |
+
+#### Speed
+
+- **Slow** — 20 s cycle.
+- **Medium** — 10 s cycle.
+- **Fast** — 5 s cycle.
+- **Custom** — set `cycleS` directly. The default `speedPreset` is
+  `medium`; ribbon patrol objects ship with `speedPreset: "custom"`
+  so the template's `cycleS: 12` wins instead of the medium default.
+
+#### Range
+
+Bounding-box percentage (default 10 %–90 %). The patrol stays inside
+the box; targets near a wall don't lead a mover into IK gimbal lock.
+
+#### Easing
+
+- **Sine** — smooth acceleration / deceleration (default).
+- **Linear** — constant velocity.
+
+#### `patrolMode`
+
+Patrol objects can be set to one of:
+
+- `always` *(default)* — patrol motion runs whenever the orchestrator
+  is up. Useful for "the prop is alive even before the show starts".
+- `on-demand` — patrol motion is suspended until an active timeline
+  references this object via a Track action. The instant a referencing
+  clip starts playing, the patrol resumes from where it would have
+  been if it had been running all along (so a Track action that
+  expects a moving target sees one immediately, not a stationary
+  prop). Operators are sometimes surprised to find an `on-demand`
+  patrol prop sitting still on the stage view — that's the intended
+  behaviour.
 
 ### Temporal Objects
-External systems can create short-lived objects via `POST /api/objects/temporal`:
-- Always in-memory (never saved to disk)
-- Require `ttl` > 0 (time-to-live in seconds)
-- Auto-expire when TTL elapses
-- Position updates refresh the TTL
-- Shown in runtime viewer with dashed outline and countdown badge
-- Useful for camera tracking integration
+
+External systems can create short-lived objects via
+`POST /api/objects/temporal`:
+
+- Always in-memory; never saved to disk.
+- Require `ttl > 0` (time-to-live in seconds).
+- Auto-expire when TTL elapses.
+- Position updates refresh the TTL.
+- Shown in the runtime viewer with a dashed outline and a countdown
+  badge.
+- The camera tracker pushes detected people in via this route — each
+  detection becomes a temporal object that the Spotlight Follow
+  Person preset's Track action chases.
+
+The temporal-object scale uses the renderer's `[width, height (Z),
+depth (Y)]` ordering — call sites that want a "person-shaped"
+detection should ship `[0.6, 1.8, 0.6]` (60 cm wide, 1.8 m tall, 60 cm
+deep), not `[0.6, 0.6, 1.8]`.
 
 ---
 
@@ -536,31 +606,92 @@ Navigate to **Actions** tab → **+ New Spatial Effect**.
 
 ## 8. Track Action
 
-### Track Action (Type 18)
-Makes DMX moving heads follow moving objects in real-time during playback.
+The Track action (type 18) is the bridge between the Objects tab
+(chapter 6) and the moving-head rig: while a clip with a Track action
+is playing, every assigned moving head computes its pan / tilt aim
+from the live position of one or more target objects, every frame
+(40 Hz). When the clip ends — or the action's last referencing clip
+finishes — the assigned heads park at their Home pose (#807).
 
-**How it works:**
-1. Create moving objects (props/performers) on the Layout tab
-2. Create a Track action on the Actions tab
-3. Select target objects and configure assignment
-4. During playback, the 40Hz loop computes pan/tilt for each head
+### How a Track action runs
 
-**Assignment algorithm:**
-- Equal heads and objects: 1:1 mapping
-- More heads than objects: Spread evenly across objects
-- More objects than heads (cycling mode): Cycle through objects (default 2s per target)
-- More objects than heads (fixed mode): Each head locks to one target, extras ignored
+1. Place the moving objects you want chased on the **Layout / Objects**
+   tab (chapter 6) — props, custom moving objects, ribbon targets, or
+   camera-detected people coming in as temporal objects.
+2. Create a Track action on the **Actions** tab. Set its name, scope,
+   and target list.
+3. Drop a clip on a track in the **Timeline** that references the
+   Track action.
+4. During playback, the 40 Hz DMX loop reads each target's current
+   position, picks (or assigns) one or more heads to chase it, runs
+   the canonical aim-vector IK (#806 / #809), and writes pan / tilt
+   to the universe buffer. The 3D viz's beam cone is driven from the
+   same aim vector, so the visualisation always matches what the
+   physical head is doing.
 
-**Fields:**
-| Field | Description |
-|-------|-------------|
-| trackObjectIds | Target object IDs (empty = all moving objects, including camera-detected people) |
-| trackCycleMs | Cycle time when cycling (default 2000ms) |
-| trackOffset | Global [x,y,z] offset in mm |
-| trackFixtureIds | Specific fixture IDs (empty = all moving heads) |
-| trackFixtureOffsets | Per-fixture [x,y,z] overrides |
-| trackAutoSpread | Spread multiple heads across object width |
-| trackFixedAssignment | Fixed 1:1 assignment — each head gets one target, extra targets ignored |
+### Assignment algorithm
+
+The assignment is recomputed every frame from `trackFixtureIds` (the
+heads in scope) and the resolved target list:
+
+| Situation | Behaviour |
+| --- | --- |
+| Equal number of heads and objects | 1 : 1 mapping by index |
+| More heads than objects, **trackAutoSpread = false** | Each object is chased by exactly one head; extra heads sit idle (still on, just not assigned). |
+| More heads than objects, **trackAutoSpread = true** | Spread the heads across each object's width — useful for washing a single target with multiple movers. |
+| More objects than heads, default | Cycle through objects with one head landing on a different target every `trackCycleMs` (default 2000 ms). |
+| More objects than heads, **trackFixedAssignment = true** | Each head locks to one target by index; extras are ignored until a head frees up. |
+
+Per-fixture offsets (`trackFixtureOffsets`) allow asymmetric rigs to
+aim each head at a slightly different point on the same target — for
+example, a stage-left mover aims at the performer's head while a
+stage-right mover aims at the feet.
+
+### Action editor — Advanced expander (#811)
+
+The Action editor's DMX Scene-family panes group the simple fields
+(name, scope, RGB, dimmer) at the top, with an **Advanced** expander
+underneath holding the per-action fine controls. For Track actions
+the Advanced section exposes:
+
+| Field | What it controls | Range |
+| --- | --- | --- |
+| **Cycle Time (ms)** | `trackCycleMs` — only used when there are more objects than heads | 100 – 10 000 ms (clamped) |
+| **Offset X / Y / Z (mm)** | Global aim offset added to every target. Useful for "aim 30 cm above the floor where the marker actually is" or "aim at head height instead of centre of mass". | ± 10 000 mm |
+| **Auto-spread** | Toggles `trackAutoSpread` for the more-heads-than-objects case | — |
+| **Fixed assignment** | Toggles `trackFixedAssignment` — disables cycling, locks each head to one target | — |
+| **Track dimmer** | `trackDimmer` — overrides the dimmer the heads run at while the Track action is active. Defaults to 255 (full); operators sometimes lower this so the followed beam doesn't overpower the rest of the rig. | 0 – 255 |
+
+### Target object selection
+
+| Field | What it does |
+| --- | --- |
+| **`trackObjectIds`** | An explicit list of object IDs to track. Wins over `trackObjectType` when set. Searches the **whole** moving-object set (including patrol props), so an `on-demand` patrol prop's id resolves cleanly here. |
+| **`trackObjectType`** | Filter moving objects by type — e.g. `"prop"`, `"ribbon-target"`, `"custom"`. Useful when the target set is "every ribbon target" without listing IDs. |
+| **`trackMode`** | Only consulted when `trackObjectIds` and `trackObjectType` are both empty. `"camera-moving"` *(default)* — track only camera-detected people (temporal objects). `"all-moving"` — track patrol props **and** camera detections together. |
+
+If a Track action has explicit `trackObjectIds` but every listed
+object has been deleted, the action skips the frame entirely rather
+than blacking out the assigned heads — pre-fix (v1.7.78 and earlier)
+the missing-target case would zero the dimmer of every head in scope.
+
+### Cooperation with shows and remotes (#763 / #835)
+
+Track actions are full citizens of the show timeline:
+
+- An orphan Track action (one that lives in `_actions` but is not
+  referenced by any clip in the running timeline) does **not**
+  evaluate (#835). This stops a leftover preset action from
+  blacking out movers in unrelated timelines.
+- When a remote (Android phone or gyro puck) claims a head via the
+  mover-control claim arbiter (chapter on Remote control), the
+  claimed head is muted from the Track action for the duration of the
+  claim — operator gestures take priority over the show. Releasing
+  the claim returns the head to the show without a re-bake.
+- Track actions write the canonical aim-vector through the same
+  `_set_canonical_aim_stage` path the rest of the orchestrator uses,
+  so calibrate-end during a Track-driven show observes the head's
+  true direction without an inverse-IK round-trip.
 
 ---
 
@@ -672,8 +803,24 @@ profile name under the fixture's **Edit Profile** button.
 - **Channel count** — total DMX slots the fixture uses. Auto-updated
   as you add channels; can also be set explicitly.
 - **Colour mode** — `rgb`, `cmy`, `rgbw`, `rgba`, `single` (monochrome
-  dimmer), or `color-wheel-only`. Drives how the show engine resolves
-  a requested colour.
+  dimmer), `color-wheel-only`, or **hybrid RGB + colour wheel**. Drives
+  how the show engine resolves a requested colour:
+
+  - **RGB family** — the orchestrator writes the requested R / G / B
+    triple to the matching channels.
+  - **Colour-wheel-only** — the orchestrator picks the closest wheel
+    slot for the requested RGB via the Euclidean-distance resolver
+    described under Capabilities. Wheel slots without a hex annotation
+    are skipped, so a profile that should match (say) red but doesn't
+    has a missing `color` hex on its red WheelSlot capability.
+  - **Hybrid RGB + wheel** — the profile carries BOTH a red/green/blue
+    triple AND a `color-wheel` channel. Since v1.7.83 (#842) the
+    orchestrator drives RGB directly **and** parks the wheel at slot 0
+    (open / white) automatically, so the wheel's default coloured slot
+    doesn't filter the beam. Pre-v1.7.83 hybrid fixtures often looked
+    "wrong" because the wheel's home slot was tinting an RGB-driven
+    colour; that's now handled at the lowest level (`set_fixture_rgb`)
+    and every render path benefits.
 - **Pan range** / **Tilt range** — maximum mechanical sweep in
   degrees. Used by mover calibration to normalise DMX→angle.
 - **Beam width** — degrees of the beam cone. Used for 3D beam-cone
@@ -752,6 +899,43 @@ colour hex swatch.
   OFL and not in the community. When you're done, share it so nobody
   else has to.
 
+### Global brightness scaling (#843)
+
+Master brightness reaches DMX fixtures through a per-frame scaling
+pass at render time, not through the bake. That keeps bakes valid
+across brightness changes — operators can drag the slider during a
+show without re-baking — and lets the Android Auto Brightness
+fast-path drive the master at ~20 Hz with the live envelope of stage
+audio.
+
+Two cases:
+
+- **Master-dimmer profiles** — when the profile maps a `dimmer`
+  channel, the dimmer byte is scaled. The scaling is gamma-corrected
+  (γ = 2.2 LUT) so a master setting of 50 % reads on a DMX par the
+  same way it reads on an LED strip (which FastLED gamma-corrects
+  internally).
+- **RGB-only profiles** — when there is no `dimmer` channel, the RGB
+  triple is gamma-scaled instead. Wheel-only fixtures fall back to
+  scaling the dimmer (slot indices are categorical, not intensity).
+
+The orchestrator broadcasts `CMD_SET_BRIGHTNESS` to every LED child
+on every change, and re-sends the current value to a child the
+first time it appears in PONG after a power cycle, so a freshly
+booted child doesn't display its first show frame at full
+intensity.
+
+### Aim cone clamping (#803)
+
+Aim requests on a moving head are clamped to the fixture's reachable
+cone, not rejected. If a Track action or `/api/mover/<fid>/aim`
+target lands outside the head's pan / tilt sweep, the orchestrator
+slides the aim along the cone rim toward the target instead of
+returning a 400 error. Operators see the head reach as far as it
+mechanically can; the 3D viz cone reflects the clamped aim, not the
+rejected one. Pre-v1.7.30 the operator-direct route would refuse the
+write, leaving the rig in a half-aimed state.
+
 ### Legacy quick-reference
 
 Settings tab → **Profiles** → **New Profile** or **Edit**:
@@ -793,32 +977,97 @@ Community server: https://electricrv.ca/api/profiles/
 
 ## 13. Preset Shows
 
-14 pre-built shows available from Runtime tab → **Load Show** → **Presets**:
+Preset shows are a one-click way to put any rig into a polished
+look — useful for soundcheck, pre-show ambience, or a quick reset
+between cues. Open them from **Runtime → Load Show → Presets**.
 
-| Preset | Description |
-|--------|-------------|
-| Rainbow Up | Rainbow plane rising floor to ceiling |
-| Rainbow Across | Rainbow sphere sweeping left to right |
-| Slow Fire | Warm fire effect on all fixtures |
-| Disco | Pastel twinkle sparkles |
-| Ocean Wave | Blue wave sweep with teal wash |
-| Sunset Glow | Warm breathe with golden sweep |
-| Police Lights | Red strobe with blue flash sweep |
-| Starfield | White sparkles on dark background |
-| Aurora Borealis | Green curtain with purple shimmer |
-| Spotlight Sweep | Warm orb — moving heads track it |
-| Concert Wash | Magenta flood + amber tracking spot |
-| Figure Eight | Crossing orbs — heads trace X paths |
-| Thunderstorm | Lightning strikes — heads chase bolts |
-| Dance Floor | Fast orbiting spots — rapid tracking |
+The show generator inspects the rig at install time (LED strips,
+moving heads, camera nodes) and adapts each theme to what's actually
+on the stage. Themes that include moving-head choreography
+auto-classify any DMX fixture with `panRange > 0` and `tiltRange > 0`
+as a candidate, then emit either coordinated sweeps (stage-coordinate
+motion via `ptStartPos` / `ptEndPos`) or live target-tracking via a
+Track action.
+
+### Available themes
+
+| Preset | Description | Movers do |
+| --- | --- | --- |
+| **Rainbow Up** | Rainbow plane rising floor to ceiling | Stage-coord sweep up the Z axis (#837) |
+| **Rainbow Across** | Rainbow sphere sweeping stage-left to stage-right | Stage-coord sweep along X |
+| **Slow Fire** | Warm fire effect on every fixture | Static beam, dimmer flicker |
+| **Disco** | Pastel twinkle sparkles | Mid-stage stage-coord chase |
+| **Ocean Wave** | Blue wave sweep with teal wash | Slow front-to-back sweep |
+| **Sunset Glow** | Warm breathe with golden sweep | Static aim, breathing dimmer |
+| **Police Lights** | Red strobe with blue flash sweep | Strobe + slow side-to-side |
+| **Starfield** | White sparkles on dark background | Static beam, dimmer twinkle |
+| **Aurora Borealis** | Green curtain with purple shimmer | Slow front-to-back sweep |
+| **Aurora Curtain** *(new in v1.7.83)* | Coordinated travelling curtain — every mover rides the same ribbon target at a phase offset, so the curtain visibly travels the rig instead of every head moving in unison. Includes a sparkle layer and fade-in / fade-out brackets so the look opens and closes cleanly. | Track a ribbon target, ping-pong on the chosen axis |
+| **Spotlight Follow Person** | Warm orb that camera-tracked people inherit | Track action — heads chase detected person |
+| **Concert Wash** | Magenta flood + amber sweep | Stage-coord sweep, no tracking |
+| **Figure Eight** | Crossing orbs — heads trace X paths | Track action — heads chase crossing patrol props |
+| **Thunderstorm** | Lightning strikes from the rig top-down | Strobe-style stage-coord bolts (Z-down, #837) |
+| **Dance Floor** | Fast orbiting spots | Stage-coord chase, no tracking |
+
+### Track-action vs sweep
+
+The description column tells you whether the heads chase a target
+("Track action") or follow a pre-baked sweep path ("stage-coord
+sweep"). Pre-v1.7.83, several themes promised tracking in their
+description but emitted only a sweep — fixed in #837 so the table is
+honest now: only **Spotlight Follow Person**, **Figure Eight**, and
+**Aurora Curtain** create a Track action when installed.
+
+### Customising an installed preset
+
+Installing a preset writes it into the regular Actions / Timeline /
+Objects state, so every part of it is editable in place:
+
+- **Recolour a sweep** — open the action under **Actions**, change RGB.
+  The bake re-renders next time the timeline plays; no need to
+  re-install the preset.
+- **Scope a Track action to specific fixtures** — open the Track
+  action's Advanced expander (chapter 8), set
+  `trackFixtureIds` to the heads you want, leave it empty to scope to
+  every mover.
+- **Adjust the tracker cycle** — Cycle Time (ms) in the Advanced
+  expander controls how often a head jumps to a new target when there
+  are more targets than heads.
+- **Replace the patrol target** — for Aurora Curtain or Figure Eight,
+  the underlying patrol object is on the **Layout / Objects** tab.
+  Change its axis, speedPreset, or pattern; the next playback frame
+  picks up the new motion.
+
+### Behaviour outside playback
+
+Preset shows respect the same idle-behaviour contract as any other
+timeline (chapter 17 → "Idle behaviour"): the rig parks at home and
+the lamp closes when the show ends, claim is released, or the
+operator stops playback. The Aurora Curtain ribbon's patrol object
+auto-stops at timeline end since it's tagged `patrolMode: on-demand`
+when the preset installs it (chapter 6).
 
 ---
 
 ## 14. Camera Nodes
 
-Camera nodes are Orange Pi or Raspberry Pi single-board computers with **USB cameras**. They provide live snapshots and AI-powered object detection for stage setup.
+Camera nodes are Orange Pi or Raspberry Pi single-board computers
+with **USB cameras**. They provide live snapshots and AI-powered
+object detection for stage setup, mover calibration, and live person
+tracking via the Spotlight Follow Person preset.
 
-> **Note:** Only USB cameras are supported. Pi CSI ribbon cameras (e.g. Pi Camera Module, Freenove FNK0056) are not supported in v1.x. Use USB webcams instead.
+The current production camera firmware is **v1.6.3** (paired with
+orchestrator v1.7.83). Older deployed nodes can be updated in place
+from the Firmware tab — the SSH-deploy path picks up the new
+firmware bundle from `dist/camera-firmware-v1.6.3.zip` and replaces
+the camera service without rebooting the SBC.
+
+> **Note:** Only USB cameras are supported. Pi CSI ribbon cameras
+> (e.g. Pi Camera Module, Freenove FNK0056) are not supported. Use
+> USB webcams instead. Compatibility matrix for SBCs and USB sensors
+> lives in `docs/SUPPORTED_HARDWARE.md` — Orange Pi 4A is the primary
+> target; RPi 3B+ / 4 / 5 and Orange Pi Zero 3/5 are confirmed
+> working.
 
 ### Adding a Camera Node
 1. Flash an Orange Pi with the supported OS image
@@ -951,19 +1200,85 @@ Before running full calibration, use the orientation test to confirm pan and til
 
 ## 15. Firmware & OTA Updates
 
+The Firmware tab is the operator's single window onto every flashable
+device on the rig: LED performers, the DMX-bridge, the gyro puck, and
+the camera nodes. Every flashable device reports its current firmware
+version up to the orchestrator on each PING/PONG cycle, so a stale
+device shows as "outdated" within seconds of the orchestrator booting.
+
+### Current production versions (orchestrator v1.7.83)
+
+| Device | Track | Current | Channel |
+| --- | --- | --- | --- |
+| Orchestrator (Windows / macOS) | app | **v1.7.83** | installer (`SlyLED-Setup.exe`) |
+| Android operator app | app | matches orchestrator track | sideload APK from `dist/slyled-android.apk` |
+| LED Performer (ESP32) | `child-led-esp32` | **v7.5.11** | OTA |
+| LED Performer (D1 Mini) | `child-led-d1mini` | **v7.5.10** | OTA |
+| LED Performer (Giga child) | `child-led-giga` | **v7.5.2** | OTA |
+| DMX Bridge (ESP32) | `dmx-bridge-esp32` | **v7.5.20** | OTA |
+| DMX Bridge (Giga R1) | `dmx-bridge-giga` | **v7.5.20** | OTA |
+| Parent firmware (Giga R1) | `parent-giga` | **v7.5.24** *(on hold — desktop orchestrator is the recommended runtime)* | USB only |
+| Gyro Controller (ESP32-S3) | `gyro-esp32s3` | **v1.2.8** | OTA |
+| Camera node (Linux SBC) | `camera-node` | **v1.6.3** | SSH deploy from Firmware tab |
+
+The Firmware tab queries `firmware/registry.json` to know what the
+"current" version is, so this table is regenerated automatically every
+release; the operator never has to keep it in their head.
+
 ### USB Flash
-1. Go to **Firmware** tab
-2. Select COM port and firmware binary
-3. Click **Flash** — progress shows percentage
+
+1. Go to the **Firmware** tab.
+2. Click the **USB Flash** card. The dropdown lists every binary the
+   registry knows about for boards that flash over USB (LED ESP32 / D1
+   Mini / Giga child / DMX bridge variants / Gyro Controller).
+3. Plug the target board in and pick its COM port from the second
+   dropdown.
+4. Click **Flash** — progress shows percentage and a final
+   "verification OK" before the board reboots into the new firmware.
+
+The Gyro Controller (ESP32-S3) ships with USB-CDC serial in the
+firmware. If a wedged build leaves the puck unable to enumerate over
+USB, hold the **BOOT** button while plugging in to enter the manual
+ROM bootloader; the Firmware tab then re-flashes through esptool's
+recovery path.
 
 ### OTA (Over-the-Air)
-1. Set WiFi credentials on the Firmware tab
-2. Click **Check for Updates** — shows per-device version comparison
-3. Click **Update** on any outdated performer
-4. Device reboots automatically after flash
+
+1. Set WiFi credentials on the Firmware tab — these get pushed to every
+   newly-flashed device.
+2. Click **Check for Updates**. The tab shows a per-device comparison:
+   reported version → registry version, with an **Update** button on
+   anything outdated.
+3. Click **Update** on any outdated performer. Mid-flash status comes
+   back live; the device reboots automatically after verification.
+4. New since v1.7.83: when a registry SHA-256 mismatches the on-disk
+   binary (a download mid-update or a hand-edited registry), the
+   orchestrator falls back to the GitHub release for that board's
+   `releaseTag` rather than refusing the flash.
+
+The diagnostic / development gyro builds (`esp32s3-gyro-test-firmware.bin`)
+are deliberately hidden from the operator OTA UI — the Firmware tab only
+offers production builds. The diagnostic binary is still present in
+`dist/` for engineers running paired-board debugging.
 
 ### Firmware Registry
-`firmware/registry.json` lists available binaries with board type and version. The OTA system compares the registry version against each performer's reported firmware.
+
+`firmware/registry.json` is the single source of truth for what version
+the orchestrator believes ships with each release. Each entry carries:
+
+- `id` and `name` for the OTA UI label.
+- `version` (3-part semver) — what the operator's device should be
+  running.
+- `releaseTag` and `releaseAsset` — the GitHub release tag and the
+  asset filename inside it, used by the OTA fallback.
+- `sha256` — verification hash that the orchestrator checks before and
+  after flashing.
+
+Editing `registry.json` by hand is not recommended; `build_release.ps1`
+keeps it in sync with the actual binary hashes on every release. The
+Firmware tab refreshes the registry from GitHub on demand from the
+**Refresh** button so a freshly-pulled installer immediately sees the
+versions corresponding to its release tag.
 
 ---
 
@@ -989,16 +1304,34 @@ See `docs/STRESS_TEST.md` for full benchmark data.
 
 ## 17. Troubleshooting
 
-| Problem | Solution |
-|---------|----------|
-| **Runtime view empty** | Check fixtures are positioned in Layout. DMX-only rigs now render (v8.1 fix). |
-| **Beam cone wrong direction** | aimPoint[1] is height (Y), not depth (Z). Check aim point values. |
-| **Android JSON crash** | Update to v8.1 — aimPoint changed from Int to Double. Factory reset: now requires confirm header. |
-| **Save Show error** | Update to v8.1 — `/api/show/export` endpoint was missing. |
-| **Firmware check fails** | Update to v8.1 — registry.json UTF-8 BOM and dict iteration bugs fixed. |
-| **3D viewport not rendering** | Use Chrome/Firefox/Edge with WebGL support. |
-| **Performers not syncing** | Check all devices on same WiFi network. Refresh in Setup tab. |
-| **Canvas wrong size** | Stage dimensions (Settings) drive canvas size: canvasW = stage.w × 1000. |
+The table below covers the symptoms operators most often raise. Every
+row points to the orchestrator version where the underlying behaviour
+was last touched, so an operator running an older build can decide
+whether to update or work around.
+
+| Problem | What you'll see | Fix or version |
+| --- | --- | --- |
+| **Runtime view empty** | The 3D Runtime tab shows the stage but no fixtures. | Check that fixtures are positioned in the **Layout** tab. DMX-only rigs render correctly since v1.7.30. |
+| **Beam cone wrong direction** | The 3D viz cone aims at the wrong wall. | Beam direction comes from the fixture's `rotation = [rx, ry, rz]` in stage space. Z is up; rx > 0 aims down. See chapter 4 for the full convention. |
+| **3D viz cone disagrees with the physical head** | Cone in the viz points stage-left but the moving head is aimed stage-right. | Fixed in v1.7.52 (#806/#809): the canonical aim vector is the source of truth and the physical IK derives from it. If you still see the disagreement on v1.7.52+, re-save the fixture's Home and Secondary in the Set Home wizard. |
+| **Calibrate-end pan jump** | Pressing release on calibrate snaps the head to a different pose than the puck was reporting. | Fixed in v1.7.52 (#805). Pre-fix the legacy IK fallback was capturing the wrong aim vector at release time. Operators on v1.7.52+ who still see a jump should report it with the gyro-puck firmware version (must be ≥ v1.2.4). |
+| **Press Start blinks back to "start" on the puck** | Operator presses Start after a WiFi gap, the puck UI flashes claim-acknowledge for a frame, then reverts to IDLE while the orchestrator holds an orphan claim. | Fixed in v1.7.83 (#812 / #813 / #825). Press-Start now uses a 16-bit nonce + CLAIM_ACK, with HB_REP heartbeats to reconcile divergent state. If you see the symptom on v1.7.83+, check that the puck firmware is ≥ v1.2.7 (registry will warn). |
+| **Auto Brightness has no effect on the lights** | The Android Auto Brightness UI shows the master sliding with the music, but DMX heads and LED strips don't dim. | Fixed in v1.7.83 (#843). The fast-path POST now broadcasts `CMD_SET_BRIGHTNESS` to LED children and gamma-scales DMX dimmer / RGB at render time. Operators on older builds can fall back to the manual Settings → Global Brightness slider until they update. |
+| **Looping playlist blacks out between iterations** | A single-item or multi-item playlist set to **Loop All** flashes everything to zero for one frame at every wrap. | Fixed in v1.7.83 (#840). Single-item loops route through the modulo-wrap playback path; multi-item loops pass `is_final=False` to suppress the natural-end blackout sweep until the playlist actually stops. |
+| **Track action blacks out movers in unrelated timelines** | A timeline that doesn't reference a particular Track action still has its movers go dark whenever that action exists in the action library. | Fixed in v1.7.83 (#835). Track actions now only evaluate on timelines that reference them; orphan actions stay dormant. |
+| **Show preset says "moving heads track / follow / chase X" but they don't** | A theme description promises tracking, but the rig just sweeps. | Fixed in v1.7.83 (#837). Theme descriptions now match the actual implementation: only Figure Eight and Spotlight Follow Person emit a Track action; the others sweep. |
+| **Colour Wheel field appears in DMX Scene action editor** | The action editor's DMX Scene / PT-Move / Gobo Select panes had a "Colour Wheel" input that didn't do what the operator expected on hybrid RGB+wheel fixtures. | Fixed in v1.7.83 (#841 / #842). The Colour Wheel slot is now type-17 only; the bake/render layer derives the slot from RGB via `rgb_to_wheel_slot` for every other action type. A one-shot migration strips stale `colorWheel: 0` fields on first start of v1.7.83+. |
+| **3D viewport not rendering** | Black canvas where the stage should be. | Use Chrome / Firefox / Edge with WebGL support. Check `chrome://gpu` for hardware acceleration. |
+| **Performers not syncing** | A child shows offline in Setup but is powered up. | Check that the orchestrator and the child are on the same WiFi subnet. The Setup tab's **Refresh** rescans via mDNS + UDP broadcast. |
+| **Canvas wrong size** | The Layout canvas is much smaller or larger than the room. | Stage dimensions (Settings → Stage) drive canvas size: `canvasW = stage.w × 1000`. Adjust stage width/height in metres rather than canvas pixels. |
+| **OTA flash refused with SHA mismatch** | Firmware tab refuses to update with `sha256 mismatch`. | Fixed in v1.7.61 (#814). The orchestrator now falls back to the GitHub release for the registered `releaseTag` when the on-disk binary disagrees with the registry. If you still see this, click **Refresh** on the Firmware tab to re-fetch `registry.json` from GitHub. |
+| **Gyro stale-reason latch never clears** | "Connection lost" stays on a puck status row even after the puck resumes streaming. | Fixed in v1.7.62 (#821) and again in v1.7.63 (#823). Press-Start clears the remote stale_reason; cache self-destructs on a transient read failure. |
+
+If you hit something not in this table, the orchestrator's log
+(Settings → Logging → enable file logging) captures every UDP send and
+DMX render decision tagged by issue number — open an issue on GitHub
+with the relevant section attached and a description of what the rig
+was doing at the moment.
 
 ---
 
@@ -1873,9 +2206,16 @@ flowchart LR
 
 <a id="appendix-b"></a>
 
-## Appendix B — Moving-Head Calibration Pipeline (DRAFT)
+## Appendix B — Moving-Head Calibration Pipeline
 
-> ⚠ **DRAFT — assumes all in-flight work is merged.** This appendix describes the moving-head-calibration pipeline as if issues #610, #651–#661, #653–#655, #658–#661, and #357 are fully implemented. Some features documented below are **partially merged** today (notably global per-phase time budgets per #653, full held-out parametric gating of the `moverCalibrated` flag per #654, adaptive battleship density scaling per #661, and the floor-view polygon target filter per #659). See `docs/DOCS_MAINTENANCE.md` for the current merge status and the criteria for removing this banner. Issue [#662](https://github.com/SlyWombat/SlyLED/issues/662).
+> Updated for orchestrator v1.7.83. The pipeline described here is
+> the post-#784 architecture: a single canonical aim-vector
+> (`aim_stage`, #806) is the source of truth for every head, the
+> `ParametricFixtureModel` + Levenberg–Marquardt fit (#488) is the
+> primary IK, and the legacy SMART pipeline that powered earlier
+> calibration releases has been retired. The phase-by-phase content
+> below has been ground-truthed against the current
+> `mover_calibrator.py` and `parametric_mover.py`.
 
 Moving-head calibration runs per [DMX](#glossary) moving-head fixture after the camera(s) covering its reachable region have been calibrated (Appendix A). It produces a sample set + parametric 6-[DOF](#glossary) [kinematic model](#glossary) that lets the orchestrator translate stage-space targets into exact pan/tilt DMX values, enabling [IK](#glossary) (inverse kinematics) for the Track action and spatial effects.
 
@@ -1893,7 +2233,7 @@ flowchart TD
     Coarse --> MapConv
     MapConv --> Grid[4 — Grid build<br/>&lt;1s]
     Grid --> Verify[5 — Verification sweep<br/>3-5s advisory]
-    Verify --> Fit[6 — LM model fit<br/>4 sign combos + verify_signs<br/>&lt;1s]
+    Verify --> Fit[6 — LM model fit<br/>verify_signs → single-combo LM<br/>&lt;1s]
     Fit --> HoldOut{7 — Held-out<br/>parametric gate<br/>#654}
     HoldOut -->|pass| Save[8 — Save +<br/>moverCalibrated=true]
     HoldOut -->|fail| OperatorRetry[Accept / Retry prompt]
@@ -1919,7 +2259,7 @@ flowchart TD
 | 3′ | Convergence (v2) | `sampling` | 30–60 s (N targets × ~1 s each) | 30–70 | Abort if convergence fails on multiple targets |
 | 4 | Grid build | `grid` | <1 s | ~80 | Abort if sample spread insufficient |
 | 5 | Verification sweep | `verification` | 3–5 s (3 held-out points) | ~90 | **Advisory only** — does not block save |
-| 6 | Model fit (LM) | `fitting` | <1 s | 85–95 | Abort if all 4 sign combos fail |
+| 6 | Model fit (LM) | `fitting` | <1 s | 85–95 | verify_signs first → single-combo LM; full four-combo fallback if a sign probe misses |
 | 7 | Held-out parametric gate (#654) | `holdout` | 2–5 s (N unseen targets) | 95–98 | Surface Accept/Retry prompt |
 | 8 | Save | `complete` | <1 s | 100 | Write error logged but does not affect moverCalibrated flag |
 
@@ -2003,7 +2343,7 @@ sequenceDiagram
 
     Note over Orch: Grid build (<1s, sync)
     Note over Orch,Cam: Verification sweep (3-5s)
-    Note over Orch: LM fit — 4 sign combos + verify_signs
+    Note over Orch: verify_signs probes → single-combo LM fit
     Note over Orch,Cam: Held-out parametric gate (#654)
 
     alt within tolerance
@@ -2040,7 +2380,7 @@ Two code paths exist. The battleship path is preferred when camera homography is
 **Legacy (`discovery` status):**
 
 - Initial probe at the warmstart aim (model prediction or geometric estimate from camera FOV).
-- Coarse 10×7 grid: pan bins `0.02 + 0.96·i/9`, tilt bins `0.1 + 0.85·j/6` — 70 probes. Per-probe settle `SETTLE = 0.6 s` (legacy discovery uses the fixed constant; the #655 adaptive-settle machinery documented in the mapping phase does not apply here).
+- Coarse 10×7 grid: pan bins `0.02 + 0.96·i/9`, tilt bins `0.1 + 0.85·j/6` — 70 probes. Each probe goes through `_wait_settled`, which reuses the same adaptive-settle machinery (`SETTLE_BASE = 0.4 s` with `[0.4, 0.8, 1.5] s` escalation) used in the mapping phase — not a separate fixed `SETTLE` constant.
 - If the coarse sweep misses, spiral outward from the warmstart aim in rectangular shells at `STEP = 0.05`, up to `MAX_PROBES = 80` total.
 - **Expected duration** — 45–55 s worst-case.
 - **Fallback on failure** — abort with `error`; call `_cal_blackout()`.
@@ -2059,7 +2399,7 @@ Two code paths exist. The battleship path is preferred when camera homography is
 **v2 Convergence (`sampling` status):**
 
 - For each target from `pick_calibration_targets` (filtered through the camera floor-view polygon per #659), converge the beam on the target pixel via `converge_on_target_pixel`.
-- **Bracket-and-retry refine (#660)** — initial `bracket_step = 0.08`. When the beam is lost, halve the step and walk back toward the best-known-good offset in the error direction. Bracket floor `BRACKET_FLOOR = 0.002`. Reset `bracket_step` to 0.08 on beam re-acquisition. Typical convergence: 5–10 iterations; max 25.
+- **Bracket-and-retry refine (#660)** — initial `bracket_step = 0.08`. When the beam is lost, halve the step and walk back toward the best-known-good offset in the error direction. `BRACKET_FLOOR` is fixture-dependent: `1 / (2^pan_bits − 1)` — about `0.0039` on 8-bit pan and `0.0000153` on 16-bit, so the loop exhausts to the fixture's actual DMX resolution instead of the old 8-bit-only `1/255` floor (#679). Reset `bracket_step` to 0.08 on beam re-acquisition. Typical convergence: 5–10 iterations; max 25.
 - **Expected duration** — 30–60 s (N targets × ~1 s each).
 
 **Fallback** — if fewer than 6 samples are collected, abort with `error`.
@@ -2079,10 +2419,11 @@ Two code paths exist. The battleship path is preferred when camera homography is
 
 #### 6. Model fit (parametric, Levenberg-Marquardt)
 
-- Try all four sign combinations `(pan_sign, tilt_sign) ∈ {±1}²`. For each combo, run `scipy.optimize.least_squares` with `soft_l1` loss (`f_scale=0.05`) over five continuous parameters (mount yaw/pitch/roll + pan/tilt offsets); up to 120 iterations.
-- Sort candidates by RMS error; pick the best. If the top two candidates agree to within 0.2°, log a mirror-ambiguity warning.
-- **Sign verification (§8.1)** — after fit, nudge pan by +0.02 and detect the pixel shift; nudge tilt +0.02 and do the same. Compute the sign of `Δpx · pan_axis_sign_in_frame` (default +1) → pan_sign; and `Δpy · tilt_axis_sign_in_frame` (default -1) → tilt_sign. Re-fit with `force_signs=(pan_sign, tilt_sign)` to resolve the mirror.
-- **Expected duration** — <1 s including verify_signs probes.
+- **Sign verification (#652 / §8.1) runs FIRST, before the LM fit.** Right after discovery returns `(pan, tilt, pixel)`, the thread issues two extra probes (`pan + 0.02`, `tilt + 0.02`) and calls `verify_signs` on the pixel deltas to compute `(pan_sign, tilt_sign)`. Those signs flow into `fit_model(..., force_signs=(ps, ts))` so the LM runs **one** solve instead of four.
+- Fallback — if any sign probe fails to detect a beam, `force_signs` is left `None` and `fit_model` runs the full four-combo search and picks the lowest-RMS candidate.
+- When the top two candidates agree to within 0.2° RMS AND the caller didn't supply `force_signs`, `FitQuality.mirror_ambiguity` is set True and surfaced on the status endpoint (#679) so the UI can flag the calibration for a manual re-run.
+- `scipy.optimize.least_squares` with `soft_l1` loss (`f_scale=0.05`) fits five continuous parameters (mount yaw/pitch/roll + pan/tilt offsets); up to 120 iterations.
+- **Expected duration** — <1 s total (verify_signs + single LM solve).
 - **Fallback** — if all 4 combos fail to converge, raise `RuntimeError`; caller aborts with `error`.
 
 #### 7. Held-out parametric gate (#654)
@@ -2144,6 +2485,17 @@ Cancellation can originate from three sources: operator (`POST /api/calibration/
 
 ### B.7 Tuning-parameter reference
 
+**Operator-tunable (#680) — Settings → Advanced → Calibration Timeouts.**
+The constants below are the shipped defaults; operators can override them
+via the Advanced panel, which persists into `desktop/shared/data/settings.json`
+under `calibrationTuning`. Overrides are read at phase start, so a change
+takes effect on the next calibration run without a server restart. Validation
+is centralised in `CAL_TUNING_SPEC` (`parent_server.py`); POST /api/settings
+rejects out-of-range values with a 400. Every constant below has a matching
+entry in `CAL_TUNING_SPEC` except the ones flagged "fixed" (e.g. `STEP`,
+`MAX_SAMPLES` is exposed as `bfsMaxSamples`, `BRACKET_FLOOR` is derived per
+fixture and not operator-tunable per #679).
+
 Constants in `desktop/shared/mover_calibrator.py`:
 
 | Constant | Default | Role |
@@ -2157,13 +2509,27 @@ Constants in `desktop/shared/mover_calibrator.py`:
 | `MAX_SAMPLES` | 80 | Hard cap on BFS samples |
 | `COARSE_PAN` | 10 | Legacy coarse grid pan bins |
 | `COARSE_TILT` | 7 | Legacy coarse grid tilt bins |
-| `BRACKET_FLOOR` | 0.002 | Convergence refine floor (~1° on 540° pan) |
+| `BRACKET_FLOOR` | `1 / (2^pan_bits − 1)` | Convergence refine floor — fixture-dependent (8-bit → `≈0.0039`, 16-bit → `≈0.0000153`) (#679) |
 
 Constants in `desktop/shared/mover_control.py`:
 
 | Constant | Default | Role |
 |----------|---------|------|
-| Claim TTL | 15 s | Auto-release if claim not refreshed |
+| Claim TTL (`moverClaimTtlS`, #680) | 15 s | Auto-release if claim not refreshed |
+
+Phase time budgets (from `CAL_TUNING_SPEC` in `desktop/shared/parent_server.py`, #680):
+
+| Key | Default | Clamp | Role |
+|-----|---------|-------|------|
+| `discoveryBattleshipS` | 60 s | 20 – 300 | Coarse-grid scan budget |
+| `discoveryColourFallbackS` | 90 s | 30 – 300 | Legacy colour-filter fallback budget |
+| `mappingS` | 120 s | 30 – 600 | BFS mapping budget (soft cap) |
+| `fitS` | 10 s | 5 – 60 | LM + grid build |
+| `verificationS` | 30 s | 5 – 120 | Grid + parametric held-out verify |
+| `warmupSeconds` | 30 s | 0 – 120 | Pre-cal motor warmup sweep |
+| `bfsMaxSamples` | 80 | 20 – 300 | Hard cap on BFS samples |
+| `convergeMaxIterations` | 25 | 5 – 100 | Per-target bracket-and-retry loop |
+| `battleshipPan/TiltStepsMin/Max` | 3 / 8 / 3 / 6 | see spec | Adaptive-grid clamps (#661) |
 
 ### B.8 Related features
 
@@ -2172,111 +2538,6 @@ Constants in `desktop/shared/mover_control.py`:
 - **Track Action** — §8 "Track Action". Consumes the interpolation grid + parametric model to aim at moving subjects.
 
 ---
-
-<a id="appendix-d"></a>
-
-## Appendix D — Choosing an AI auto-tune vision model
-
-> Added 2026-04-25, revised after #685 architecture decision.
-> Auto-tune now defaults to a deterministic OpenCV `analyzer`
-> evaluator (no AI required). This appendix is for operators who want
-> to opt into a vision-language model as a secondary evaluator.
-
-### D.1 Why opt-in
-
-The 2026-04-25 matrix run on the basement rig proved every small VLM
-tested (moondream-1.6B in particular) failed to drive auto-tune
-reliably — they copied prompt-example values instead of evaluating the
-image. The deterministic `analyzer` evaluator (histogram + LAB cast +
-intent-aware delta proposal) hits 96–98 / 100 on under-exposed cells
-where moondream peaked at 98 with extreme variance, and is correctly
-conservative on already-good frames. AI mode is now demoted to a
-direction-suggester for operators with a heavyweight model already
-selected; every iteration's delta is gated through the heuristic
-regardless of which evaluator proposed it.
-
-### D.2 No model is shipped or auto-pulled
-
-Since v1.6.x the orchestrator does NOT pre-pull any vision model. The
-"Local AI" installer component installs Ollama itself only. Operators
-who want an AI evaluator pull a model from the table below and select
-it in Settings → AI Runtime → Active vision model.
-
-### D.3 Picking a model for your hardware
-
-| Hardware                       | Recommended                | Pull command                              | Notes |
-|--------------------------------|----------------------------|-------------------------------------------|-------|
-| **CPU only** (laptop / mini-PC)| `qwen2.5vl:3b` (default)   | `ollama pull qwen2.5vl:3b`                | Default. Tune-modal "Tiny (320 px)" preset brings iter time to ~3 s. |
-| **CPU + 16 GB RAM**            | `qwen2.5vl:7b`             | `ollama pull qwen2.5vl:7b`                | Larger context, slightly better JSON adherence. ~25–60 s/iter on CPU. |
-| **GPU 6 GB VRAM**              | `qwen2.5vl:3b` or `llava:7b` | `ollama pull llava:7b`                  | LLaVA's classic balance of speed and quality. |
-| **GPU 12 GB+ VRAM**            | `qwen2.5vl:7b` or `llava:13b` | `ollama pull llava:13b`                | Sub-second per iteration on a discrete GPU. |
-| **Apple Silicon (M-series)**   | `qwen2.5vl:3b` or `qwen2.5vl:7b` | `ollama pull qwen2.5vl:7b`          | Metal acceleration kicks in automatically; both fit comfortably. |
-| **Arm SBC** (Pi 5, Orange Pi)  | `moondream:1.8b-v2` only   | `ollama pull moondream:1.8b-v2`           | Anything heavier OOMs. JSON adherence is shaky; "heuristic" evaluator is usually a better choice on this class. |
-
-Other vision models the orchestrator recognises in the dropdown
-(non-exhaustive — anything Ollama serves with vision support works,
-but JSON adherence varies):
-
-- `moondream`, `moondream:1.8b-v2`
-- `qwen2.5vl:3b`, `qwen2.5vl:7b`
-- `llava:7b`, `llava:13b`
-- `bakllava`
-- `internvl3:2b`
-- `minicpm-v`
-- `paligemma`
-
-### D.4 How to install another model
-
-After Ollama is installed (Settings → AI Runtime → Install button),
-open a shell on the orchestrator host and pull the model directly:
-
-```bash
-ollama pull qwen2.5vl:7b
-```
-
-Models live in Ollama's own cache (`%LOCALAPPDATA%\Programs\Ollama` on
-Windows, `~/.ollama/models` on macOS / Linux). The pull is resumable
-and parallel-safe; the orchestrator can keep running.
-
-### D.5 Switching the active model
-
-Settings → AI Runtime → **Active vision model** dropdown lists every
-model Ollama has pulled locally. Vision-capable entries float to the
-top; text-only entries are visible but flagged so you don't pick one
-by mistake. Selecting a model:
-
-1. Saves the choice to `_settings["aiAutoTuneModel"]` (persists across
-   restarts).
-2. The next click of **Test** in the AI Engines card uses the new
-   model — confirms it answers a fixed prompt within the 120 s budget.
-3. The next **Run Auto-Tune** in any camera's Tune modal uses it for
-   the iteration loop. The Tune log header line shows `model=<name>`
-   so you can verify the override took effect.
-
-### D.6 Per-run override
-
-The Tune modal's Run Auto-Tune body accepts `model: "..."` as a
-per-call override. Useful for matrix testing without changing the
-persisted setting. Operators driving the API directly:
-
-```bash
-curl -X POST http://localhost:8080/api/cameras/16/settings/auto-tune \
-  -H 'Content-Type: application/json' \
-  -d '{"intent":"aruco","evaluator":"ai","model":"llava:13b","resizeLongSide":960}'
-```
-
-### D.7 Diagnostics
-
-If a tune cell scores 0 / 100 across every iteration with `applied`
-unchanged, the model is text-only or its JSON output is malformed.
-The Tune log will show entries like `Iter 1/6: score 0.0` with no
-applied controls — switch to a vision-capable model from the table
-above. The matrix-run pattern that flagged moondream was: 8 cells × AI
-mode all returning `before == after` with `score < 1.0`.
-
-If the Test button on Settings → AI Engines hangs past 2 min, the model
-is too heavy for this hardware. Drop down to a smaller variant in the
-table.
 
 <a id="appendix-c"></a>
 
@@ -2323,4 +2584,213 @@ These require `.github/` changes and are tracked as follow-ups under #662.
 ### C.5 DRAFT banner removal
 
 The DRAFT banners on Appendix A and B should be removed once the in-flight items listed in `docs/DOCS_MAINTENANCE.md §"When to bump the DRAFT banner"` are all confirmed merged. At the time this appendix was drafted (2026-04-23), the following are known to be partial or not yet in code: #653 time budgets, #654 held-out parametric gate, #655 full median oversample, #658 blink-confirm on non-battleship path, #659 floor-view polygon target filter, #661 adaptive battleship density.
+
+## Appendix D — Idle Behaviour
+
+A "rock-solid" rig is one where, at any moment a show isn't playing
+and an operator isn't actively driving a head, every moving head
+parks at a known pose with the lamp closed. Operators expect that
+contract because the alternative — a head sitting on whatever pose
+the last writer happened to leave it in — looks broken even when
+nothing is wrong. This appendix is the canonical list of when the
+orchestrator parks, when it doesn't, and what "parked" means in
+practice.
+
+### What "parked" means
+
+A parked moving head:
+
+- Aims at its **Home** pose (the pose saved in the Set Home wizard;
+  fallback to mechanical centre when no Home is saved).
+- Holds **dimmer = 0** so the lamp doesn't bleed onto the rig.
+- Closes the **shutter** if the profile carries a strobe channel
+  with a `Closed` capability — fixtures with mechanical shutters
+  benefit from the explicit close.
+- Releases any colour-wheel slot it was holding back to slot 0
+  (open / white) so the next show frame doesn't inherit a stale
+  filter.
+
+### When the orchestrator parks a head
+
+| Trigger | Path | Notes |
+| --- | --- | --- |
+| **Cold start** | Orchestrator boot | Every DMX fixture parks once the engine comes up. Avoids the "head was left aimed at the back wall last night" surprise. |
+| **Timeline natural end** | `_dmx_playback_loop` exit | Heads driven by the timeline's bake park when the show finishes. Track-action-driven heads also park (#807) — pre-fix only the bake-driven heads parked, leaving any tracker-claimed mover stuck at its last pose. |
+| **Operator presses Stop** | `_dmx_playback_stop` set | Same as natural end. The blackout sweep applies only on stop or final-iteration end (#840), not between loop iterations. |
+| **Claim release** | Mover-control claim arbiter | When an Android phone or gyro puck releases a claim, the head returns to the show if a show is running, otherwise parks. The release is instant — no slewed easing in v1.7.83+. |
+| **Power-cycle re-settle** | First PONG from a child after a boot | When a fixture's child board power-cycles, the orchestrator resends the current globalBrightness (#843) and the next show frame writes a known pose. Pre-v1.7.83 the child could come up at full brightness for one frame; the PONG-time top-up closes that window. |
+
+### What does NOT trigger a park
+
+These intentionally do not park heads — operators sometimes expect
+them to, but parking on every one-shot would steal the head from the
+show.
+
+- **One-shot `/api/mover/<fid>/aim`** — these are operator-direct
+  test pulses; the rig holds whatever pose the route sets until the
+  next show frame.
+- **DMX-test sliders on the Settings tab** — same reasoning. The
+  sliders override show output for as long as the operator is
+  driving them.
+- **Brief gaps within an active claim** — a phone or puck temporarily
+  losing WiFi for a second doesn't release the claim. The remote-
+  control claim TTL is 15 s; a head only parks when the TTL elapses
+  without a heartbeat (#813 §6.3 "all-comms silence").
+- **Calibration probes** — beam discovery and convergence sweeps
+  hold the head wherever the probe lands. The calibration session
+  parks the head explicitly when it finishes (success or abort).
+
+### How to verify on your rig
+
+1. Park a moving head at a known wall (Set Home → save).
+2. Stop any running show.
+3. Aim the head at the floor with `/api/mover/<fid>/aim`.
+4. Press play on a 5-second blank timeline. The head should NOT
+   move (rule three: one-shot aims hold).
+5. Stop the timeline. The head should return to Home with the lamp
+   closed within ~50 ms.
+
+If step 5 doesn't happen, check (a) the fixture has a Home pose
+saved, (b) the timeline ended naturally rather than crashing,
+(c) no claim is held on the fixture (the Setup tab shows claim
+state per fixture).
+
+---
+
+## Appendix E — Remote Control: Android Phone & Gyro Puck
+
+Two remote controllers can drive moving heads in real time alongside
+a running show: an Android phone running the SlyLED operator app and
+a Waveshare ESP32-S3 round-LCD gyro puck. Both go through the same
+claim arbiter on the orchestrator, both follow the same handshake
+protocol, and both cooperate with the show timeline through the
+mover-control claim arbiter. This appendix describes the full
+lifecycle, the gestures, and how claim arbitration interacts with
+preset shows.
+
+### Claim lifecycle
+
+The claim is the orchestrator's "this remote currently owns mover
+N" lock. It carries a 16-bit nonce, a TTL, and a current pose so
+the system can reconcile the puck's UI state with the orchestrator's
+arbiter state when one of them reboots or drops a packet.
+
+```
+1. IDLE on remote.
+2. Operator presses Start (puck) or Claim (Android).
+3. Remote ships CMD_GYRO_START / claim request with a fresh 16-bit nonce.
+4. Orchestrator allocates a mover, replies CLAIM_ACK with the
+   nonce + assigned moverId. The remote advances UI to ACTIVE
+   only on a matching ACK; CLAIM_DENIED reverts; ~1.5 s overall
+   timeout reverts with "NO RESPONSE".
+5. Remote streams orient quaternions at ~50 Hz; orchestrator
+   converts to aim-stage and writes pan / tilt to the head.
+6. Both ends exchange 2 s heartbeats (HB_REP carries uiState +
+   claimNonce + seq) so divergent state is reconciled.
+7. Operator presses Stop / Release; remote ships nonce; orchestrator
+   replies STOP_ACK and releases the claim.
+```
+
+The full state-machine spec lives in `docs/gyro-claim-lifecycle.md`
+and is the source of truth for any change to the protocol.
+
+#### What the operator sees
+
+- **Press Start on the puck** — page advances to "ACTIVE" within
+  ~150 ms. If the orchestrator can't claim a mover (none online,
+  none available), the page reverts to IDLE with a denial reason.
+- **Press Stop on the puck** — page returns to IDLE; the head
+  returns to whatever the show was driving (or parks if no show is
+  running).
+- **Calibrate** — hold the **Calibrate** button (puck or Android)
+  for as long as you need; release to capture the new reference
+  pose. The screen advances to the colour picker page on the puck;
+  the Android app advances to the gesture page.
+- **Connection lost** — both remotes show a stale-reason badge if
+  the orchestrator stops hearing heartbeats. The puck self-clears
+  when it resumes streaming (#812 / #821 / #823); operator can also
+  force-clear via `POST /api/remotes/<id>/clear-stale`.
+
+### Gestures
+
+Once active, both remotes drive the same `aim_stage` semantic — the
+head's beam aims at a stage-coordinate point computed from the
+remote's orientation.
+
+#### Phone (Android)
+
+- **Pitch** (tip phone forward / back) — beam pitches up / down on
+  the head.
+- **Roll** (tilt phone left / right) — beam pans across the stage.
+- **Yaw** (rotate phone around vertical) — beam pans across the
+  stage.
+- **Volume buttons** — fine dimmer up / down (Android operator app
+  configurable).
+- **Auto Brightness** (chapter on Brightness) — the app can drive
+  the orchestrator's master brightness from the local mic envelope
+  at ~20 Hz, gamma-scaled to the rig (#820, #843).
+
+The phone-specific yaw axis is mirrored relative to the puck (#824)
+because the phone's natural-portrait orientation puts the operator's
+"left" 90 ° offset from the puck's body frame. The operator never
+needs to think about this; the orchestrator's `_apply_quat` for
+`KIND_PHONE` handles the negation.
+
+#### Gyro puck
+
+- **Pitch** (tip puck forward / back) — beam pitches up / down.
+- **Yaw** (rotate around the puck's vertical axis) — beam pans.
+- **Roll** (tilt left / right) — colour-wheel selection on profiles
+  with a colour wheel; ignored on RGB-only profiles.
+- **Press Start** — claim mover and start streaming.
+- **Press Stop** — release claim.
+- **Press Calibrate** — capture new reference pose.
+
+### Claim arbitration with shows (#763)
+
+Claims take priority over the show timeline:
+
+- A claimed head is **muted** from `_evaluate_track_actions` and
+  from the bake-driven `set_fixture_dimmer` / `set_fixture_pan_tilt`
+  writes. The claim writer owns the head until release.
+- Other heads in the rig keep playing the show normally — the
+  claim affects only the assigned mover.
+- On release the head **rejoins the show within one frame**: no
+  slew, no fade. If the show has moved on, the head jumps to
+  wherever the show currently has it. This was a deliberate choice
+  per #763 — slewing back in took the operator out of the moment;
+  snap-rejoin is what real consoles do.
+- Track actions evaluate every frame, so a head that was claimed
+  during a sweep returns to wherever the sweep is **right now**,
+  not to where the sweep would have been mid-claim.
+
+### Colour & dimmer during a claim (#814)
+
+A claim doesn't take over colour or dimmer:
+
+- The remote's gestures drive **only pan / tilt** (and colour wheel
+  for the puck's roll axis on profiles that support it).
+- The head's dimmer and RGB stay under the show's control. If the
+  show is dim, the claimed head stays dim — the operator picks pan
+  and tilt; the show paints colour and intensity.
+- This applies to global brightness (#843) the same way: a claim
+  during Auto Brightness inherits the auto-driven master.
+
+### Recovery from divergent state
+
+The handshake's heartbeats include both ends' state, so divergent
+combinations are reconciled:
+
+| Puck UI | Orchestrator | What happens |
+| --- | --- | --- |
+| ACTIVE | claim held | Normal — heartbeats keep TTL alive. |
+| ACTIVE | no claim | Orchestrator reconstructs the claim (orchestrator-restart bootstrap). |
+| IDLE | claim held | Orphan claim — orchestrator releases it. |
+| IDLE | no claim | Normal idle. |
+
+The orphan-claim guard fires 1.5 s after CLAIM_ACK if no orient
+arrives, releasing the claim so a wedged remote can't squat on a
+mover indefinitely.
+
+---
 

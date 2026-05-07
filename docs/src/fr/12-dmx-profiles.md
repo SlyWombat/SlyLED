@@ -50,8 +50,29 @@ projecteur DMX en cliquant sur le nom du profil sous le bouton
   Mis a jour automatiquement en ajoutant des canaux ; aussi reglable
   explicitement.
 - **Mode couleur** — `rgb`, `cmy`, `rgbw`, `rgba`, `single` (variateur
-  monochrome) ou `color-wheel-only`. Pilote la maniere dont le moteur
-  de spectacles resout une couleur demandee.
+  monochrome), `color-wheel-only` ou **hybride RVB + roue de
+  couleurs**. Pilote la manière dont le moteur résout une couleur
+  demandée :
+
+  - **Famille RVB** — l'orchestrateur écrit le triplet R / V / B
+    demandé sur les canaux correspondants.
+  - **Roue de couleurs uniquement** — l'orchestrateur choisit
+    l'emplacement de roue le plus proche de la couleur RVB demandée
+    via le résolveur par distance euclidienne décrit sous
+    Capacités. Les emplacements sans annotation hexadécimale sont
+    ignorés ; un préréglage qui devrait correspondre (par exemple)
+    au rouge mais qui ne le fait pas a un attribut `color` manquant
+    sur sa capacité WheelSlot rouge.
+  - **Hybride RVB + roue** — le préréglage porte À LA FOIS un
+    triplet rouge/vert/bleu ET un canal `color-wheel`. Depuis
+    v1.7.83 (#842), l'orchestrateur pilote le RVB directement **et**
+    gare la roue à l'emplacement 0 (open / blanc) automatiquement,
+    pour que l'emplacement par défaut coloré de la roue ne filtre
+    pas le faisceau. Avant v1.7.83, les appareils hybrides
+    paraissaient souvent « faux » parce que l'emplacement home de
+    la roue teintait une couleur pilotée en RVB ; c'est désormais
+    géré au plus bas niveau (`set_fixture_rgb`) et chaque chemin de
+    rendu en bénéficie.
 - **Plage pan** / **Plage tilt** — balayage mecanique maximal en
   degres. Utilise par la calibration des lyres pour normaliser
   DMX vers angle.
@@ -141,6 +162,49 @@ deroulante, definir `min`/`max`, ajouter un libelle et (pour
 - **Creer de zero** uniquement quand le projecteur n'est
   vraiment ni dans OFL ni dans la communaute. Quand vous avez
   termine, partagez-le pour que personne d'autre n'ait a le refaire.
+
+### Mise à l'échelle de la luminosité globale (#843)
+
+La luminosité maître atteint les appareils DMX par une passe de
+mise à l'échelle par frame au moment du rendu, et non par le
+précalcul. Cela garde les précalculs valides à travers les
+changements de luminosité — l'opérateur peut faire glisser le
+curseur pendant un spectacle sans re-précalculer — et laisse le
+chemin rapide Auto-luminosité Android piloter le maître à ~20 Hz
+avec l'enveloppe en direct du son scénique.
+
+Deux cas :
+
+- **Appareils avec gradateur maître** — quand le préréglage
+  expose un canal `dimmer`, l'octet du gradateur est mis à
+  l'échelle. La mise à l'échelle est corrigée gamma (LUT γ = 2,2),
+  un réglage maître à 50 % se lit donc sur un PAR DMX comme il se
+  lit sur un bandeau LED (que FastLED corrige en gamma en
+  interne).
+- **Appareils RVB seuls** — quand il n'y a pas de canal `dimmer`,
+  c'est le triplet RVB qui est mis à l'échelle gamma. Les
+  appareils à roue seule retombent sur la mise à l'échelle du
+  gradateur (les indices d'emplacement sont catégoriels, pas
+  d'intensité).
+
+L'orchestrateur diffuse `CMD_SET_BRIGHTNESS` à chaque nœud LED à
+chaque changement, et renvoie la valeur courante à un nœud la
+première fois qu'il apparaît dans PONG après un cycle
+d'alimentation, pour qu'un nœud fraîchement démarré n'affiche pas sa
+première frame de spectacle à pleine intensité.
+
+### Bornage du cône de visée (#803)
+
+Les requêtes de visée sur un projecteur motorisé sont bornées au
+cône atteignable de l'appareil, et non rejetées. Si une action de
+suivi ou un appel `/api/mover/<fid>/aim` cible un point hors du
+balayage pan / tilt, l'orchestrateur fait glisser la visée le long
+du bord du cône vers la cible plutôt que de renvoyer une erreur
+400. L'opérateur voit la tête atteindre aussi loin qu'elle le peut
+mécaniquement ; le cône de la visualisation 3D reflète la visée
+bornée, pas celle qui aurait été rejetée. Avant v1.7.30, la route
+opérateur direct refusait l'écriture, laissant le rig dans un état
+de demi-visée.
 
 ### Reference rapide heritee
 

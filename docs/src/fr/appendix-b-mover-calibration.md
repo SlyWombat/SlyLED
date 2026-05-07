@@ -1,6 +1,13 @@
-## Annexe B — Pipeline d'étalonnage de projecteur motorisé (EBAUCHE)
+## Annexe B — Pipeline d'étalonnage de projecteur motorisé
 
-> ⚠ **EBAUCHE — suppose que tout le travail en vol est fusionné.** Cette annexe décrit le pipeline d'étalonnage des projecteurs motorisés comme si les issues #610, #651–#661, #653–#655, #658–#661 et #357 étaient entièrement implémentées. Certaines fonctionnalités documentées ci-dessous sont **partiellement fusionnées** aujourd'hui (notamment les budgets globaux de temps par phase par #653, le filtrage paramétrique tenu de côté complet du drapeau `moverCalibrated` par #654, la mise à l'échelle adaptative de densité battleship par #661 et le filtre polygonal de vue sol par #659). Voir `docs/DOCS_MAINTENANCE.md` pour le statut de fusion actuel et les critères de retrait de cette bannière. Issue [#662](https://github.com/SlyWombat/SlyLED/issues/662).
+> Mis à jour pour l'orchestrateur v1.7.83. Le pipeline décrit ici
+> est l'architecture post-#784 : un vecteur de visée canonique
+> unique (`aim_stage`, #806) est la source de vérité pour chaque
+> projecteur motorisé, le `ParametricFixtureModel` + l'ajustement
+> Levenberg–Marquardt (#488) sont l'IK principale, et l'ancien
+> pipeline SMART qui pilotait les versions d'étalonnage antérieures
+> a été retiré. Le contenu phase par phase ci-dessous a été vérifié
+> contre le `mover_calibrator.py` et `parametric_mover.py` actuels.
 
 L'étalonnage de projecteur motorisé s'exécute par appareil projecteur motorisé [DMX](#glossary) après que la/les caméra(s) couvrant sa région atteignable ont été étalonnées (annexe A). Il produit un ensemble d'échantillons + un [modèle cinématique](#glossary) paramétrique à 6 [DOF](#glossary) qui permet à l'orchestrateur de traduire les cibles dans l'espace scène en valeurs DMX pan/tilt exactes, activant l'[IK](#glossary) (cinématique inverse) pour l'action Track et les effets spatiaux.
 

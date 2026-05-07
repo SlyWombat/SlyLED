@@ -1,8 +1,26 @@
 ## 14. Nœuds caméra
 
-Les nœuds caméra sont des ordinateurs monocartes Orange Pi ou Raspberry Pi équipés de **caméras USB**. Ils fournissent des captures d'image en direct et de la détection d'objets par IA pour la préparation de la scène.
+Les nœuds caméra sont des ordinateurs monocartes Orange Pi ou
+Raspberry Pi équipés de **caméras USB**. Ils fournissent des
+captures d'image en direct et de la détection d'objets par IA pour
+la préparation du plateau, l'étalonnage des projecteurs motorisés
+et le suivi de personnes en direct via le préréglage Spotlight
+Follow Person.
 
-> **Remarque :** seules les caméras USB sont prises en charge. Les caméras à nappe CSI du Pi (p. ex. Pi Camera Module, Freenove FNK0056) ne sont pas prises en charge en v1.x. Utilisez des webcams USB à la place.
+Le firmware caméra de production courant est **v1.6.3** (apparié
+avec l'orchestrateur v1.7.83). Les nœuds déjà déployés peuvent
+être mis à jour sur place depuis l'onglet Firmware — le chemin de
+déploiement SSH récupère le nouveau bundle depuis
+`dist/camera-firmware-v1.6.3.zip` et remplace le service caméra
+sans redémarrer le SBC.
+
+> **Remarque :** seules les caméras USB sont prises en charge. Les
+> caméras à nappe CSI du Pi (p. ex. Pi Camera Module, Freenove
+> FNK0056) ne sont pas prises en charge. Utilisez des webcams USB à
+> la place. La matrice de compatibilité des SBC et des capteurs USB
+> vit dans `docs/SUPPORTED_HARDWARE.md` — Orange Pi 4A est la cible
+> principale ; RPi 3B+ / 4 / 5 et Orange Pi Zero 3/5 sont confirmés
+> fonctionnels.
 
 ### Ajouter un nœud caméra
 1. Flashez un Orange Pi avec l'image OS prise en charge

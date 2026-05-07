@@ -23,9 +23,11 @@
 18. [Examples](#18-examples)
 19. [API Quick Reference](#19-api)
 20. [Glossary](#glossary)
-21. [Appendix A — Camera Calibration Pipeline (DRAFT)](#appendix-a)
-22. [Appendix B — Moving-Head Calibration Pipeline (DRAFT)](#appendix-b)
+21. [Appendix A — Camera Calibration Pipeline](#appendix-a)
+22. [Appendix B — Moving-Head Calibration Pipeline](#appendix-b)
 23. [Appendix C — Documentation Maintenance](#appendix-c)
+24. [Appendix D — Idle Behaviour](#appendix-d)
+25. [Appendix E — Remote Control: Android Phone & Gyro Puck](#appendix-e)
 
 ---
 

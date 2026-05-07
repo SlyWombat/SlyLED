@@ -47,8 +47,24 @@ profile name under the fixture's **Edit Profile** button.
 - **Channel count** — total DMX slots the fixture uses. Auto-updated
   as you add channels; can also be set explicitly.
 - **Colour mode** — `rgb`, `cmy`, `rgbw`, `rgba`, `single` (monochrome
-  dimmer), or `color-wheel-only`. Drives how the show engine resolves
-  a requested colour.
+  dimmer), `color-wheel-only`, or **hybrid RGB + colour wheel**. Drives
+  how the show engine resolves a requested colour:
+
+  - **RGB family** — the orchestrator writes the requested R / G / B
+    triple to the matching channels.
+  - **Colour-wheel-only** — the orchestrator picks the closest wheel
+    slot for the requested RGB via the Euclidean-distance resolver
+    described under Capabilities. Wheel slots without a hex annotation
+    are skipped, so a profile that should match (say) red but doesn't
+    has a missing `color` hex on its red WheelSlot capability.
+  - **Hybrid RGB + wheel** — the profile carries BOTH a red/green/blue
+    triple AND a `color-wheel` channel. Since v1.7.83 (#842) the
+    orchestrator drives RGB directly **and** parks the wheel at slot 0
+    (open / white) automatically, so the wheel's default coloured slot
+    doesn't filter the beam. Pre-v1.7.83 hybrid fixtures often looked
+    "wrong" because the wheel's home slot was tinting an RGB-driven
+    colour; that's now handled at the lowest level (`set_fixture_rgb`)
+    and every render path benefits.
 - **Pan range** / **Tilt range** — maximum mechanical sweep in
   degrees. Used by mover calibration to normalise DMX→angle.
 - **Beam width** — degrees of the beam cone. Used for 3D beam-cone
@@ -126,6 +142,43 @@ colour hex swatch.
 - **Create from scratch** only when the fixture is genuinely not in
   OFL and not in the community. When you're done, share it so nobody
   else has to.
+
+### Global brightness scaling (#843)
+
+Master brightness reaches DMX fixtures through a per-frame scaling
+pass at render time, not through the bake. That keeps bakes valid
+across brightness changes — operators can drag the slider during a
+show without re-baking — and lets the Android Auto Brightness
+fast-path drive the master at ~20 Hz with the live envelope of stage
+audio.
+
+Two cases:
+
+- **Master-dimmer profiles** — when the profile maps a `dimmer`
+  channel, the dimmer byte is scaled. The scaling is gamma-corrected
+  (γ = 2.2 LUT) so a master setting of 50 % reads on a DMX par the
+  same way it reads on an LED strip (which FastLED gamma-corrects
+  internally).
+- **RGB-only profiles** — when there is no `dimmer` channel, the RGB
+  triple is gamma-scaled instead. Wheel-only fixtures fall back to
+  scaling the dimmer (slot indices are categorical, not intensity).
+
+The orchestrator broadcasts `CMD_SET_BRIGHTNESS` to every LED child
+on every change, and re-sends the current value to a child the
+first time it appears in PONG after a power cycle, so a freshly
+booted child doesn't display its first show frame at full
+intensity.
+
+### Aim cone clamping (#803)
+
+Aim requests on a moving head are clamped to the fixture's reachable
+cone, not rejected. If a Track action or `/api/mover/<fid>/aim`
+target lands outside the head's pan / tilt sweep, the orchestrator
+slides the aim along the cone rim toward the target instead of
+returning a 400 error. Operators see the head reach as far as it
+mechanically can; the 3D viz cone reflects the clamped aim, not the
+rejected one. Pre-v1.7.30 the operator-direct route would refuse the
+write, leaving the rig in a half-aimed state.
 
 ### Legacy quick-reference
 

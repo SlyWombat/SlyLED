@@ -113,16 +113,33 @@
   see_also:
   - Appendix B §B.3
   - 'issue #658.'
+- term: CLI
+  acronym: true
+  en:
+    short: Command-Line Interface
+    long: A text shell interface (e.g. `arduino-cli`, `gh`, PowerShell, bash). The
+      orchestrator's build/flash flow is driven through CLI tools rather than IDEs.
+  fr:
+    short: Command-Line Interface
+    long: Interface en ligne de commande (p. ex. `arduino-cli`, `gh`, PowerShell,
+      bash). Le flux de compilation et de flash de l'orchestrateur passe par des outils
+      CLI plutôt que par des IDE.
+  see_also:
+  - §15 Firmware
+  - CLAUDE.md build commands.
 - term: CPU
   acronym: true
   en:
     short: Central Processing Unit
-    long: The main processor.
+    long: The main processor. CPU0 / CPU1 distinguish the two cores on the ESP32 (WiFi
+      pinned to one, FastLED pinned to the other).
   fr:
     short: Central Processing Unit
-    long: Le processeur principal.
+    long: Le processeur principal. CPU0 / CPU1 distinguent les deux cœurs sur l'ESP32
+      (WiFi épinglé sur l'un, FastLED épinglé sur l'autre).
   see_also:
-  - §14 Camera Nodes.
+  - §14 Camera Nodes
+  - CLAUDE.md hardware quirks.
 - term: CRGB
   acronym: true
   en:
@@ -156,6 +173,22 @@
       v1.x — utilisez des caméras USB).
   see_also:
   - §14 Camera Nodes.
+- term: CV
+  acronym: true
+  en:
+    short: Computer Vision
+    long: Algorithmic image-understanding — the umbrella over solvePnP, RANSAC, beam
+      detection, depth estimation, and YOLO. The auto-tune **analyzer** evaluator
+      is the CV-only alternative to the AI evaluator.
+  fr:
+    short: Computer Vision
+    long: Compréhension algorithmique d'image — la famille qui couvre solvePnP, RANSAC,
+      la détection de faisceau, l'estimation de profondeur et YOLO. L'évaluateur **analyzer**
+      d'auto-tune est l'alternative purement CV à l'évaluateur AI.
+  see_also:
+  - Appendix A
+  - §14 Camera Nodes
+  - Appendix D.
 - term: dark reference
   acronym: false
   en:
@@ -170,6 +203,21 @@
   see_also:
   - Appendix A §A.5
   - 'issue #651.'
+- term: DFU
+  acronym: true
+  en:
+    short: Device Firmware Update
+    long: USB protocol for flashing microcontroller firmware in bootloader mode. The
+      Giga R1 (USB ID `2341:0366`) requires the Zadig WinUSB driver installed once
+      before DFU uploads work.
+  fr:
+    short: Device Firmware Update
+    long: Protocole USB pour flasher le firmware d'un microcontrôleur en mode bootloader.
+      La Giga R1 (USB ID `2341:0366`) requiert l'installation unique du pilote WinUSB
+      via Zadig avant que les uploads DFU ne fonctionnent.
+  see_also:
+  - §15 Firmware
+  - CLAUDE.md first-time setup.
 - term: DHCP
   acronym: true
   en:
@@ -197,6 +245,20 @@
   - §2 Walkthrough
   - §12 DMX Profiles
   - Appendix B.
+- term: DNS
+  acronym: true
+  en:
+    short: Domain Name System
+    long: The naming layer that resolves a hostname to an IP address. SlyLED relies
+      on **mDNS** (zero-config DNS over multicast) for peer-name resolution on the
+      LAN.
+  fr:
+    short: Domain Name System
+    long: La couche de nommage qui résout un nom d'hôte en adresse IP. SlyLED s'appuie
+      sur **mDNS** (DNS sans configuration sur multicast) pour la résolution de noms
+      entre pairs sur le LAN.
+  see_also:
+  - §14 Camera Nodes deployment.
 - term: DOF
   acronym: true
   en:
@@ -210,6 +272,21 @@
       pan, décalage tilt, plus échelle).
   see_also:
   - Appendix B §B.3 Model fit.
+- term: EEPROM
+  acronym: true
+  en:
+    short: Electrically Erasable Programmable Read-Only Memory
+    long: Flash-backed non-volatile key/value storage on the D1 Mini (the ESP32 uses
+      NVS instead). Each child board persists its hostname, string config, and per-string
+      GPIO/length there.
+  fr:
+    short: Electrically Erasable Programmable Read-Only Memory
+    long: Stockage clé/valeur non volatile adossé à la flash sur le D1 Mini (l'ESP32
+      utilise NVS à la place). Chaque carte enfant y persiste son nom d'hôte, sa configuration
+      de chaînes et le GPIO/longueur par chaîne.
+  see_also:
+  - §4 Fixture Setup
+  - CLAUDE.md per-board limits.
 - term: ESP32
   acronym: false
   en:
@@ -352,6 +429,20 @@
     long: Le balisage dont est fait le SPA.
   see_also:
   - §3 Platform Guide.
+- term: HTTP
+  acronym: true
+  en:
+    short: HyperText Transfer Protocol
+    long: The request/response protocol behind every `/api/*` call and every config
+      page served by the orchestrator, performers, and camera nodes.
+  fr:
+    short: HyperText Transfer Protocol
+    long: Protocole requête/réponse derrière chaque appel `/api/*` et chaque page
+      de configuration servie par l'orchestrateur, les nœuds exécutants et les nœuds
+      caméra.
+  see_also:
+  - §19 API Quick Reference
+  - throughout.
 - term: HUD
   acronym: true
   en:
@@ -490,6 +581,19 @@
       un ajustement « basé sur la médiane », c'est parce que LSQ n'a pas convergé.
   see_also:
   - Appendix A §A.6.
+- term: MAC
+  acronym: true
+  en:
+    short: Media Access Control
+    long: A hardware-unique 48-bit identifier baked into every WiFi/Ethernet interface.
+      Performer hostnames are derived from the MAC (e.g. `SLYC-XXXX`).
+  fr:
+    short: Media Access Control
+    long: Identifiant matériel unique de 48 bits inscrit dans chaque interface WiFi/Ethernet.
+      Les noms d'hôtes des nœuds exécutants sont dérivés de la MAC (p. ex. `SLYC-XXXX`).
+  see_also:
+  - §4 Fixture Setup
+  - performer naming.
 - term: Mbed OS
   acronym: false
   en:
@@ -715,6 +819,19 @@
       px signifie que quelque chose ne va pas.
   see_also:
   - Appendix A §A.4.
+- term: REST
+  acronym: true
+  en:
+    short: Representational State Transfer
+    long: An architectural style for HTTP APIs — predictable verbs (GET/POST/PUT/DELETE)
+      acting on noun-shaped URLs. SlyLED's `/api/*` surface follows REST conventions.
+  fr:
+    short: Representational State Transfer
+    long: Style architectural pour les API HTTP — verbes prévisibles (GET/POST/PUT/DELETE)
+      agissant sur des URL en forme de noms. La surface `/api/*` de SlyLED suit les
+      conventions REST.
+  see_also:
+  - §19 API Quick Reference.
 - term: RGB / RGBW
   acronym: true
   en:

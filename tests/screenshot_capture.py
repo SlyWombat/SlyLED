@@ -220,7 +220,7 @@ def capture_spa():
         ctx = browser.new_context(viewport={'width': 1280, 'height': 800},
                                    color_scheme='dark')
         page = ctx.new_page()
-        page.goto(BASE, wait_until='networkidle', timeout=15000)
+        page.goto(BASE, wait_until='domcontentloaded', timeout=20000)
         time.sleep(1)  # let SPA initialize
 
         def snap(name, delay=0.5):
@@ -605,7 +605,7 @@ def capture_examples():
         ctx = browser.new_context(viewport={'width': 1280, 'height': 800},
                                    color_scheme='dark')
         page = ctx.new_page()
-        page.goto(BASE, wait_until='networkidle', timeout=15000)
+        page.goto(BASE, wait_until='domcontentloaded', timeout=20000)
         time.sleep(1.5)
 
         def snap(name, delay=0.5):

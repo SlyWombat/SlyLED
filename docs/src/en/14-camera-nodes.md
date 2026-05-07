@@ -1,8 +1,22 @@
 ## 14. Camera Nodes
 
-Camera nodes are Orange Pi or Raspberry Pi single-board computers with **USB cameras**. They provide live snapshots and AI-powered object detection for stage setup.
+Camera nodes are Orange Pi or Raspberry Pi single-board computers
+with **USB cameras**. They provide live snapshots and AI-powered
+object detection for stage setup, mover calibration, and live person
+tracking via the Spotlight Follow Person preset.
 
-> **Note:** Only USB cameras are supported. Pi CSI ribbon cameras (e.g. Pi Camera Module, Freenove FNK0056) are not supported in v1.x. Use USB webcams instead.
+The current production camera firmware is **v1.6.3** (paired with
+orchestrator v1.7.83). Older deployed nodes can be updated in place
+from the Firmware tab — the SSH-deploy path picks up the new
+firmware bundle from `dist/camera-firmware-v1.6.3.zip` and replaces
+the camera service without rebooting the SBC.
+
+> **Note:** Only USB cameras are supported. Pi CSI ribbon cameras
+> (e.g. Pi Camera Module, Freenove FNK0056) are not supported. Use
+> USB webcams instead. Compatibility matrix for SBCs and USB sensors
+> lives in `docs/SUPPORTED_HARDWARE.md` — Orange Pi 4A is the primary
+> target; RPi 3B+ / 4 / 5 and Orange Pi Zero 3/5 are confirmed
+> working.
 
 ### Adding a Camera Node
 1. Flash an Orange Pi with the supported OS image
