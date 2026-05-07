@@ -1,6 +1,9 @@
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0A0F13;color:#e2e8f0;min-height:100vh}
-#hdr{background:#0b1120;padding:.8em 2em;border-bottom:1px solid rgba(51,65,85,.3)}
+/* Right padding reserves space for the position:fixed Help "?" button
+   (32px wide + 16px from edge + 8px gap = 56px clearance) so the
+   project-name display and File menu don't slide under it. */
+#hdr{background:#0b1120;padding:.8em 2em;padding-right:64px;border-bottom:1px solid rgba(51,65,85,.3)}
 #hdr h1{font-family:'Space Grotesk',sans-serif;font-size:1.5em;letter-spacing:.08em;text-transform:uppercase}
 #hdr h1 span{color:#22d3ee}
 #hs{font-size:.85em;color:#94a3b8}
