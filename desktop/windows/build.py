@@ -166,16 +166,35 @@ if reg_path.exists():
 # #637 — bundle the user manual (HTML + images + markdown source) so the
 # /help route resolves in frozen/installed builds. Without these, the
 # PyInstaller bundle has no docs/ tree and /help returns 404.
-HELP_DIR  = (HERE / ".." / ".." / "docs" / "help").resolve()
-MANUAL_EN = (HERE / ".." / ".." / "docs" / "USER_MANUAL.md").resolve()
-MANUAL_FR = (HERE / ".." / ".." / "docs" / "USER_MANUAL_fr.md").resolve()
-BUILD_DIR = (HERE / ".." / ".." / "docs" / "build").resolve()
+HELP_DIR    = (HERE / ".." / ".." / "docs" / "help").resolve()
+MANUAL_EN   = (HERE / ".." / ".." / "docs" / "USER_MANUAL.md").resolve()
+MANUAL_FR   = (HERE / ".." / ".." / "docs" / "USER_MANUAL_fr.md").resolve()
+MANUAL_EN_PDF  = (HERE / ".." / ".." / "docs" / "USER_MANUAL.pdf").resolve()
+MANUAL_FR_PDF  = (HERE / ".." / ".." / "docs" / "USER_MANUAL_fr.pdf").resolve()
+MANUAL_EN_DOCX = (HERE / ".." / ".." / "docs" / "USER_MANUAL.docx").resolve()
+MANUAL_FR_DOCX = (HERE / ".." / ".." / "docs" / "USER_MANUAL_fr.docx").resolve()
+SCHEMA_DIR  = (HERE / ".." / ".." / "docs" / "schema").resolve()
+BUILD_DIR   = (HERE / ".." / ".." / "docs" / "build").resolve()
 if HELP_DIR.exists():
     args += ["--add-data", f"{HELP_DIR};docs/help"]
 if MANUAL_EN.exists():
     args += ["--add-data", f"{MANUAL_EN};docs"]
 if MANUAL_FR.exists():
     args += ["--add-data", f"{MANUAL_FR};docs"]
+# #818 — also bundle PDF / DOCX so the operator can open the offline
+# manual from the installed app without a network round-trip; bundle
+# the glossary schema so the /api/glossary hover layer works in
+# frozen builds.
+if MANUAL_EN_PDF.exists():
+    args += ["--add-data", f"{MANUAL_EN_PDF};docs"]
+if MANUAL_FR_PDF.exists():
+    args += ["--add-data", f"{MANUAL_FR_PDF};docs"]
+if MANUAL_EN_DOCX.exists():
+    args += ["--add-data", f"{MANUAL_EN_DOCX};docs"]
+if MANUAL_FR_DOCX.exists():
+    args += ["--add-data", f"{MANUAL_FR_DOCX};docs"]
+if SCHEMA_DIR.exists():
+    args += ["--add-data", f"{SCHEMA_DIR};docs/schema"]
 if BUILD_DIR.exists():
     args += ["--add-data", f"{BUILD_DIR};docs/build"]
 
