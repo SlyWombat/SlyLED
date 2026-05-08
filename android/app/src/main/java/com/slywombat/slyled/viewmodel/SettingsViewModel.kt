@@ -275,6 +275,14 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    // #826 — empirical aim-axis wizard. The dialog captures three
+    // pose quaternions on-device and posts them via this method;
+    // server-side derives forward_local / up_local from the rotation
+    // deltas (see `_aim_wizard_compute` in parent_server.py).
+    suspend fun submitAimWizard(
+        poses: List<Pair<String, FloatArray>>,
+    ): SlyLedRepository.AimWizardResult = repository.submitAimWizard(poses)
+
     fun factoryReset() {
         viewModelScope.launch {
             try {

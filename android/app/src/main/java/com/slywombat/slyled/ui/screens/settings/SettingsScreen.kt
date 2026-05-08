@@ -80,6 +80,8 @@ fun SettingsScreen(
 
     var showResetConfirm by remember { mutableStateOf(false) }
     var unitsExpanded by remember { mutableStateOf(false) }
+    // #826 — empirical aim-axis calibration wizard state.
+    var showAimWizard by remember { mutableStateOf(false) }
 
     // File picker for show import (config import removed in #649 —
     // operator app does not edit project state).
@@ -316,6 +318,34 @@ fun SettingsScreen(
             // DMX Control Card
             DmxControlSection(viewModel = viewModel)
 
+            // #826 — Aim Calibration entry. Opens the empirical aim-axis
+            // wizard so the operator measures the phone's pointer axes
+            // for THIS grip instead of the server guessing from
+            // Surface.ROTATION_*. Run once per device or grip change.
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        "Aim Calibration",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Three quick gestures so the head tracks your phone's actual pointer " +
+                            "direction. Run once per device, or any time you change grip.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedButton(
+                        onClick = { showAimWizard = true },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Run Aim Calibration Wizard")
+                    }
+                }
+            }
+
             // Factory Reset Card
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -415,6 +445,14 @@ fun SettingsScreen(
 
             Spacer(Modifier.height(16.dp))
         }
+    }
+
+    // #826 — Aim Calibration wizard dialog.
+    if (showAimWizard) {
+        AimWizardDialog(
+            onDismiss = { showAimWizard = false },
+            submitWizard = viewModel::submitAimWizard,
+        )
     }
 
     // Factory Reset confirmation dialog

@@ -161,6 +161,19 @@ interface SlyLedApi {
     @POST("api/remotes/grip")
     suspend fun publishRemoteGrip(@Body body: JsonObject): OkResponse
 
+    // #826 — empirical aim-axis calibration wizard. Operator captures
+    // three pose quaternions on-device (neutral, pitch-forward, yaw-
+    // left); server derives body-frame forward_local + up_local from
+    // the rotation deltas and persists them on the Remote. Replaces the
+    // grip-publish guesswork with measured axes.
+    // Body: {deviceId, poses: [{role, quat:[w,x,y,z]}, ...]}
+    // 200 → {ok:true, forwardLocal:[x,y,z], upLocal:[x,y,z]}
+    // 400 → {ok:false, err:<code>, detail:<message>} for bad_quaternion,
+    //       insufficient_pitch, insufficient_yaw, degenerate_axes,
+    //       non_orthogonal_frame, missing_pose.
+    @POST("api/remotes/aim-wizard")
+    suspend fun submitAimWizard(@Body body: JsonObject): JsonObject
+
     // #427 — pointer mode aims by stage XYZ (mm). Body: {targetX,targetY,targetZ}.
     // Server routes through SMART model when present, returns 400
     // {err:"Fixture not calibrated"} when world-XYZ aim isn't supported yet.

@@ -324,6 +324,53 @@ class SlyLedRepository @Inject constructor(
         return requireApi().publishRemoteGrip(body)
     }
 
+    // #826 — empirical aim-axis wizard. Operator's three captured
+    // quaternions (neutral, pitch-forward, yaw-left) plus the optional
+    // roll-cw sanity check go to the server, which derives body-frame
+    // forward_local + up_local from the rotation deltas. Returns the
+    // resolved axes on success or a structured error code on validation
+    // failure (degenerate_axes, insufficient_pitch, etc) so the UI can
+    // show a specific retry hint.
+    data class AimWizardResult(
+        val ok: Boolean,
+        val forwardLocal: FloatArray? = null,
+        val upLocal: FloatArray? = null,
+        val errCode: String? = null,
+        val errDetail: String? = null,
+    )
+    suspend fun submitAimWizard(
+        poses: List<Pair<String, FloatArray>>,
+    ): AimWizardResult {
+        val id = requireIdentity()
+        val body = buildJsonObject {
+            put("deviceId", id.deviceId)
+            putJsonArray("poses") {
+                poses.forEach { (role, quat) ->
+                    add(buildJsonObject {
+                        put("role", role)
+                        putJsonArray("quat") {
+                            quat.forEach { add(it.toDouble()) }
+                        }
+                    })
+                }
+            }
+        }
+        val resp = requireApi().submitAimWizard(body)
+        val ok = (resp["ok"] as? kotlinx.serialization.json.JsonPrimitive)?.boolean ?: false
+        if (!ok) {
+            val err = (resp["err"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+            val detail = (resp["detail"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+            return AimWizardResult(ok = false, errCode = err, errDetail = detail)
+        }
+        val fwd = (resp["forwardLocal"] as? kotlinx.serialization.json.JsonArray)
+            ?.map { (it as kotlinx.serialization.json.JsonPrimitive).content.toFloat() }
+            ?.toFloatArray()
+        val up = (resp["upLocal"] as? kotlinx.serialization.json.JsonArray)
+            ?.map { (it as kotlinx.serialization.json.JsonPrimitive).content.toFloat() }
+            ?.toFloatArray()
+        return AimWizardResult(ok = true, forwardLocal = fwd, upLocal = up)
+    }
+
     // #427 — pointer mode: aim a mover by stage XYZ (mm). Server runs the
     // SMART path when available, returns 400 fixture_not_calibrated otherwise.
     suspend fun moverAim(moverId: Int, targetX: Double, targetY: Double,
