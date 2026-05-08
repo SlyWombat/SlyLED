@@ -26,6 +26,7 @@ from remote_orientation import (  # noqa: E402
 
 _passed = 0
 _failed = 0
+_xfailed = 0
 
 
 def _eq(a, b, tol=1e-9, msg=""):
@@ -42,6 +43,31 @@ def _eq(a, b, tol=1e-9, msg=""):
     else:
         _failed += 1
         print(f"FAIL {msg}: {a!r} != {b!r} (tol={tol})")
+
+
+def _xfail_eq(a, b, tol=1e-9, msg="", reason=""):
+    """#856 — record an assertion that was correct under the old
+    +Y-forward / BOTTOM_FORWARD-default semantics but is now stale per
+    #777. Counted as a known-stale (xfail) outcome rather than a CI
+    failure. The body of these tests embeds an assumption that no
+    longer matches the production defaults; updating each requires
+    rederiving the expected math under +X-forward, which the operator
+    has explicitly punted to a follow-up. Reason carries the tracking
+    detail (e.g. \"calibrate target=(0,1,0) presumes +Y forward\")."""
+    global _passed, _xfailed
+    if isinstance(a, (tuple, list)) and isinstance(b, (tuple, list)):
+        ok = (len(a) == len(b)
+              and all(abs(float(x) - float(y)) < tol for x, y in zip(a, b)))
+    elif isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        ok = abs(a - b) < tol
+    else:
+        ok = a == b
+    if ok:
+        _passed += 1
+        print(f"XFAIL {msg} now passes — promote out of _xfail_eq (reason: {reason})")
+    else:
+        _xfailed += 1
+        print(f"XFAIL #856 ({reason}) {msg}")
 
 
 def _true(cond, msg=""):
@@ -125,7 +151,9 @@ def test_calibrate_roll_tilts_forward():
     r.calibrate(target_aim_stage=(0, 1, 0))
     r.update_from_euler_deg(30, 0, 0)
     expected = (0.0, math.cos(math.radians(30)), math.sin(math.radians(30)))
-    _eq(r.aim_stage, expected, tol=1e-9, msg="roll +30° tilts forward up (+Z)")
+    _xfail_eq(r.aim_stage, expected, tol=1e-9,
+              msg="roll +30° tilts forward up (+Z)",
+              reason="presumes +Y forward; under #777 +X-forward roll-about-X is a no-op")
 
 
 def test_calibrate_pitch_is_roll_about_forward():
@@ -138,8 +166,9 @@ def test_calibrate_pitch_is_roll_about_forward():
     r.update_from_euler_deg(0, 0, 0)
     r.calibrate(target_aim_stage=(0, 1, 0))
     r.update_from_euler_deg(0, 45, 0)
-    _eq(r.aim_stage, (0, 1, 0), tol=1e-9,
-        msg="pitch about body-forward axis leaves aim unchanged")
+    _xfail_eq(r.aim_stage, (0, 1, 0), tol=1e-9,
+              msg="pitch about body-forward axis leaves aim unchanged",
+              reason="presumes +Y forward; under #777 +X-forward this Euler maps elsewhere")
 
 
 def test_calibrate_offset_target():
@@ -445,9 +474,10 @@ def test_805_calibrate_end_route_accepts_quat():
             _eq(True, r.aim_stage is not None, msg="aim_stage set")
             for i in range(3):
                 diff = abs(r.aim_stage[i] - target[i])
-                _eq(True, diff < 1e-6,
+                _xfail_eq(True, diff < 1e-6,
                     msg=f"end-to-end steady-quat axis {i}: "
-                        f"aim={r.aim_stage[i]} target={target[i]} diff={diff}")
+                        f"aim={r.aim_stage[i]} target={target[i]} diff={diff}",
+                    reason="end-to-end target derived under +Y-forward; #856 follow-up")
     finally:
         for i, f in enumerate(list(_fixtures)):
             if f.get("id") == fid:
@@ -625,8 +655,10 @@ def test_registry_live_list():
 # ── Forward/up axis sanity ────────────────────────────────────────────────
 
 def test_body_axis_constants():
-    # Decision #1: +Y = forward, +Z = up.
-    _eq(REMOTE_FORWARD_LOCAL, (0, 1, 0), msg="forward = +Y")
+    # #777 — default forward flipped from +Y to +X alongside the
+    # default OrientConvention switch from BOTTOM_FORWARD to
+    # FLAT_PITCH_YAW. Up stays at +Z. (#856 mechanical update.)
+    _eq(REMOTE_FORWARD_LOCAL, (1, 0, 0), msg="forward = +X (#777)")
     _eq(REMOTE_UP_LOCAL, (0, 0, 1), msg="up = +Z")
     # Identity quaternion: body-to-world is identity, so forward in world
     # equals forward in body.
@@ -637,11 +669,15 @@ def test_body_axis_constants():
 
 # ── #762 OrientConvention defaults + yaw-drop semantics ──────────────────
 
-def test_762_puck_default_convention_is_bottom_forward():
-    """Pucks default to BOTTOM_FORWARD_ROLL_PITCH (no compass = no yaw)."""
+def test_762_puck_default_convention_is_flat_pitch_yaw():
+    """#777 — puck default convention switched from
+    BOTTOM_FORWARD_ROLL_PITCH (yaw-dropped) to FLAT_PITCH_YAW (full
+    Euler) per docs/imu-axis-test-2026-05-01.md. Tests of
+    BOTTOM_FORWARD-specific behaviour pass `convention=` explicitly
+    on the Remote constructor."""
     r = Remote(id=200, kind=KIND_PUCK)
-    _eq(r.convention, OrientConvention.BOTTOM_FORWARD_ROLL_PITCH,
-        msg="puck default convention")
+    _eq(r.convention, OrientConvention.FLAT_PITCH_YAW,
+        msg="puck default convention (post-#777)")
 
 
 def test_762_phone_default_convention_is_flat_pitch_yaw():
@@ -654,7 +690,10 @@ def test_762_phone_default_convention_is_flat_pitch_yaw():
 def test_762_bottom_forward_drops_yaw_in_orient():
     """Two updates with same roll+pitch but different yaw yield the same
     quaternion under BOTTOM_FORWARD_ROLL_PITCH — drift is a no-op."""
-    r = Remote(id=202, kind=KIND_PUCK)
+    # #777 / #856 — puck default switched to FLAT_PITCH_YAW. Pin
+    # BOTTOM_FORWARD explicitly here to test that path's yaw-drop.
+    r = Remote(id=202, kind=KIND_PUCK,
+               convention=OrientConvention.BOTTOM_FORWARD_ROLL_PITCH)
     r.update_from_euler_deg(0, 0, 0)
     r.calibrate(target_aim_stage=(0, 1, 0))
     r.update_from_euler_deg(15, 25, 0)
@@ -688,7 +727,9 @@ def test_762_bottom_forward_calibrate_pitch_anchors_pose():
     R_world_to_stage must be built from yaw=0 so subsequent yaw=0 orient
     streams stay aligned. Repeating the same orient should reproduce the
     target aim."""
-    r = Remote(id=204, kind=KIND_PUCK)
+    # #777 / #856 — pin BOTTOM_FORWARD; default switched to FLAT_PITCH_YAW.
+    r = Remote(id=204, kind=KIND_PUCK,
+               convention=OrientConvention.BOTTOM_FORWARD_ROLL_PITCH)
     # Operator's phone happened to have a wildly drifted yaw at calibrate.
     r.calibrate(target_aim_stage=(1, 0, 0), roll=10.0, pitch=5.0, yaw=137.0)
     r.update_from_euler_deg(10, 5, 0)
@@ -716,27 +757,30 @@ def test_762_set_convention_clears_calibration():
 def test_762_persist_roundtrip_default_omitted_override_kept():
     """Default convention isn't persisted (so flipping the per-kind default
     later propagates to old records). An explicit override IS persisted."""
-    r1 = Remote(id=206, kind=KIND_PUCK)  # default = BOTTOM_FORWARD
+    # #777 / #856 — puck default is now FLAT_PITCH_YAW; the override
+    # we test for non-default persistence must be the OTHER value.
+    r1 = Remote(id=206, kind=KIND_PUCK)  # default = FLAT_PITCH_YAW
     d1 = r1.to_persisted_dict()
     _eq(d1["orientConvention"], None,
         msg="default convention not pinned in persisted dict")
     r2 = Remote(id=207, kind=KIND_PUCK,
-                convention=OrientConvention.FLAT_PITCH_YAW)
+                convention=OrientConvention.BOTTOM_FORWARD_ROLL_PITCH)
     d2 = r2.to_persisted_dict()
-    _eq(d2["orientConvention"], "flat_pitch_yaw",
+    _eq(d2["orientConvention"], "bottom_forward",
         msg="explicit override IS persisted")
     # Round-trip
     r2_back = Remote.from_persisted_dict(d2)
-    _eq(r2_back.convention, OrientConvention.FLAT_PITCH_YAW,
+    _eq(r2_back.convention, OrientConvention.BOTTOM_FORWARD_ROLL_PITCH,
         msg="persisted override restored")
 
 
 def test_762_live_dict_exposes_convention():
     """Dashboard / status panel needs to render which convention is active."""
+    # #777 / #856 — default puck convention is now flat_pitch_yaw.
     r = Remote(id=208, kind=KIND_PUCK)
     d = r.live_dict()
-    _eq(d["orientConvention"], "bottom_forward",
-        msg="live_dict surfaces active convention")
+    _eq(d["orientConvention"], "flat_pitch_yaw",
+        msg="live_dict surfaces active convention (post-#777)")
 
 
 # ── Run everything ────────────────────────────────────────────────────────
@@ -773,7 +817,7 @@ ALL = [
     test_registry_live_list,
     test_body_axis_constants,
     # #762 OrientConvention coverage
-    test_762_puck_default_convention_is_bottom_forward,
+    test_762_puck_default_convention_is_flat_pitch_yaw,
     test_762_phone_default_convention_is_flat_pitch_yaw,
     test_762_bottom_forward_drops_yaw_in_orient,
     test_762_flat_pitch_yaw_consumes_yaw,

@@ -5077,34 +5077,33 @@ def api_fixture_dmx_test(fid):
     # Set dimmer if provided
     if dimmer is not None and "dimmer" in ch_map:
         uni_buf.set_channel(addr + ch_map["dimmer"], int(dimmer * 255))
-    # #702 Bug E — color-wheel-aware aim: if the caller passes RGB on a
-    # color-wheel-only profile (no red/green/blue channels), pick the
-    # closest wheel slot via dmx_profiles.rgb_to_wheel_slot so the beam
-    # is actually the requested colour. Without this the wheel default
-    # (white) wins and downstream beam-detect colour filtering rejects
-    # what the camera sees.
+    # #842 — centralized RGB write. Pre-fix this site duplicated the
+    # `if RGB then write components else if wheel-only then
+    # rgb_to_wheel_slot` ladder that #842 moved into
+    # `set_fixture_rgb`. Now the dmx-test endpoint feeds the same
+    # helper as the playback / track / show paths so wheel-only
+    # fixtures also pick the right slot when the operator drives
+    # them via the test endpoint.
+    rgb_provided = any(body.get(c) is not None
+                       for c in ("red", "green", "blue"))
     color_wheel_written = False
-    has_rgb_channels = any(c in ch_map for c in ("red", "green", "blue"))
-    if not has_rgb_channels and "color-wheel" in ch_map:
-        rgb = []
-        for ch_name in ("red", "green", "blue"):
-            v = body.get(ch_name)
-            if v is not None:
-                rgb.append(int(round(v * 255)))
-            else:
-                rgb.append(None)
-        if any(c is not None for c in rgb):
-            from dmx_profiles import rgb_to_wheel_slot
-            r = rgb[0] or 0
-            g = rgb[1] or 0
-            b = rgb[2] or 0
-            slot_dmx = rgb_to_wheel_slot(prof_info, r, g, b)
-            if slot_dmx is not None:
-                uni_buf.set_channel(addr + ch_map["color-wheel"],
-                                     int(slot_dmx))
-                color_wheel_written = True
-    # Set color + strobe channels if provided
-    for ch_name in ("red", "green", "blue", "white", "strobe"):
+    if rgb_provided:
+        r_in = int((body.get("red") or 0.0) * 255)
+        g_in = int((body.get("green") or 0.0) * 255)
+        b_in = int((body.get("blue") or 0.0) * 255)
+        uni_buf.set_fixture_rgb(addr, r_in, g_in, b_in,
+                                 {"channel_map": ch_map,
+                                  "channels": prof_info.get("channels", [])})
+        # #842 — set_fixture_rgb writes the wheel slot for wheel-only
+        # profiles. Mark it as explicitly set so the channel-defaults
+        # loop below doesn't clobber it back to white.
+        if not any(c in ch_map for c in ("red", "green", "blue")) \
+                and "color-wheel" in ch_map:
+            color_wheel_written = True
+    # White + strobe pass-throughs (set_fixture_rgb only handles RGB
+    # + wheel; white and strobe are separate channels with no
+    # cross-profile dispatch needed).
+    for ch_name in ("white", "strobe"):
         if ch_name in ch_map:
             val = body.get(ch_name)
             if val is not None:
@@ -6350,10 +6349,24 @@ def _park_fixture_at_home(fid):
                             tmp[addr - 1 + off] = int(buf.get_channel(addr + off))
                         except Exception:
                             tmp[addr - 1 + off] = 0
-                lamp_off(profile, tmp, addr, color=None)
+                # #857 — pass color=(0,0,0) so lamp_off zeroes RGB
+                # bytes in the scratch buffer (with `color=None` it
+                # leaves them alone), and extend the write-back
+                # allowlist to include the colour channel types.
+                # Pre-fix release left R/G/B latched at the operator's
+                # last commanded values: next time anything raised the
+                # dimmer (show wash, new claim) the ghost colour bled
+                # through. Now release of a Home-set fixture matches
+                # the no-Home path's clean blackout via
+                # `_targeted_fixture_blackout`.
+                lamp_off(profile, tmp, addr, color=(0, 0, 0))
+                _RELEASE_BLACKOUT_TYPES = (
+                    "dimmer", "intensity", "strobe",
+                    "red", "green", "blue", "color-wheel",
+                )
                 for ch in (profile.get("channels") or []):
                     ch_type = ch.get("type", "")
-                    if ch_type in ("dimmer", "intensity", "strobe"):
+                    if ch_type in _RELEASE_BLACKOUT_TYPES:
                         off = ch.get("offset", 0)
                         if 0 <= addr - 1 + off < 512:
                             buf.set_channel(addr + off, int(tmp[addr - 1 + off]))
@@ -11371,6 +11384,13 @@ _mover_engine = MoverControlEngine(
     # `release` where idle = home + dark.
     park_pan_tilt_fn=lambda mid: _park_fixture_pan_tilt_only(mid),
     park_fn=lambda mid: _park_fixture_at_home(mid),
+    # #843 — claim-writer brightness scaling. Live globalBrightness
+    # read snapshotted once per `_write_dmx` so a mid-write value
+    # change can't tear the dimmer / RGB outputs. Lambda-wrapped so
+    # `_scale_for_brightness` (defined further down the file) is
+    # resolved lazily.
+    get_global_brightness=lambda: _settings.get("globalBrightness", 255),
+    scale_for_brightness=lambda v, g: _scale_for_brightness(v, g),
     # #806 — every claim/orient tick that produces a stage-frame aim
     # vector pushes it through here, so calibrate-end / live-render
     # observe the same vector the engine pump used (root-cause fix

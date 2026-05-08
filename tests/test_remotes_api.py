@@ -234,7 +234,10 @@ def test_diagnostic_endpoint():
         _assert(r.status_code == 200, "diag status pre-orient")
         d = r.get_json()
         _assert(d["rawQuat"] is None, "rawQuat None before orient")
-        _assert(d["bodyForwardLocal"] == [0.0, 1.0, 0.0], "body forward convention")
+        # #777 / #856 — body-forward default flipped from +Y to +X
+        # alongside the puck's BOTTOM_FORWARD → FLAT_PITCH_YAW switch.
+        _assert(d["bodyForwardLocal"] == [1.0, 0.0, 0.0],
+                "body forward convention (post-#777 +X-forward)")
         _assert(d["bodyUpLocal"] == [0.0, 0.0, 1.0], "body up convention")
         # After an orient sample + calibration, body_fwd_world is populated
         c.post(f"/api/remotes/{rid}/orient", json={"roll": 0, "pitch": 0, "yaw": 0})

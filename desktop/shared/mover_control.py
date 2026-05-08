@@ -99,6 +99,11 @@ class MoverClaim:
         # Restored on release so the Remote falls back to its persisted /
         # per-kind default when no claim is overriding it.
         "_prior_remote_convention",
+        # #855 — last-known prerequisite-failure code from
+        # `_aim_to_pan_tilt`. None when aim is healthy. One-shot WARNING
+        # log fires on every transition (so the log isn't noisy while
+        # the condition persists).
+        "aim_error",
     )
 
     def __init__(self, mover_id, device_id, device_name, device_type="gyro",
@@ -144,6 +149,7 @@ class MoverClaim:
         # it was already running (per-kind default or persisted override).
         self.convention = _coerce_convention(convention)
         self._prior_remote_convention = None
+        self.aim_error = None
 
     def to_dict(self):
         return {
@@ -167,6 +173,15 @@ class MoverClaim:
             # operator which axis-set the active claim is using.
             "orientConvention": (self.convention.value
                                   if self.convention else None),
+            # #855 — last-known prerequisite-failure for the aim path.
+            # `None` when the orient → pan/tilt translation is healthy.
+            # Surface values: "missing_profile", "missing_home",
+            # "missing_secondary", "non_mover_profile",
+            # "aimsphere_value_error", "aimsphere_exception". The
+            # dashboard / Android Status tab can render this as
+            # "head not aiming because <reason>" instead of leaving
+            # the operator staring at a non-moving head.
+            "aimError":     self.aim_error,
         }
 
 
@@ -179,7 +194,9 @@ class MoverControlEngine:
                  is_calibrating=None, get_claim_ttl_s=None,
                  get_default_convention=None,
                  park_fn=None, park_pan_tilt_fn=None,
-                 set_canonical_aim_fn=None):
+                 set_canonical_aim_fn=None,
+                 get_global_brightness=None,
+                 scale_for_brightness=None):
         """
         Args:
             get_fixtures:             list of fixtures
@@ -233,6 +250,17 @@ class MoverControlEngine:
         # eliminating the dmx_to_aim / aim_direction round-trip risk
         # that produced #805. Optional; missing fn → no canonical write.
         self._set_canonical_aim = set_canonical_aim_fn or (lambda _fid, _v: None)
+        # #843 — claim-writer brightness scaling. Mirrors the playback
+        # loop's per-frame snapshot of `_settings["globalBrightness"]`
+        # so a press-Start-while-an-Auto-Brightness-feed-runs claim
+        # also dims with the audio envelope. Without this, gyro / mover-
+        # control claims wrote dimmer / RGB at full intensity and the
+        # operator saw the claimed mover stay bright while every other
+        # fixture dimmed (G3 fail in the issue's contract).
+        self._get_global_brightness = (
+            get_global_brightness or (lambda: 255))
+        self._scale_for_brightness = (
+            scale_for_brightness or (lambda v, g: v))
 
         self._claims = {}  # mover_id → MoverClaim
         self._lock = threading.Lock()
@@ -672,12 +700,32 @@ class MoverControlEngine:
         """
         pid = mover.get("dmxProfileId")
         prof_info = self._get_profile_info(pid) if pid else None
-        if (prof_info is None
-                or mover.get("homePanDmx16") is None
-                or mover.get("homeTiltDmx16") is None
-                or not ((prof_info.get("panRange", 0) or 0) > 0)
-                or not ((prof_info.get("tiltRange", 0) or 0) > 0)):
+        # #855 — explicit guard for every prerequisite AimSphere
+        # actually requires. `homeSecondary` was missing from this
+        # ladder pre-fix, so a Home-but-no-Secondary fixture slipped
+        # past, hit the `except Exception` below at DEBUG, and the
+        # operator saw a head that didn't move with no surfaced error.
+        # Now we record an `aim_error` on the claim so the dashboard
+        # can show "head not aiming because Secondary not saved" and
+        # the WARNING log carries the same diagnostic.
+        if prof_info is None:
+            self._set_claim_aim_error(mover_id, "missing_profile")
             return (None, None)
+        if (mover.get("homePanDmx16") is None
+                or mover.get("homeTiltDmx16") is None):
+            self._set_claim_aim_error(mover_id, "missing_home")
+            return (None, None)
+        if not mover.get("homeSecondary"):
+            self._set_claim_aim_error(mover_id, "missing_secondary")
+            return (None, None)
+        if (not ((prof_info.get("panRange", 0) or 0) > 0)
+                or not ((prof_info.get("tiltRange", 0) or 0) > 0)):
+            self._set_claim_aim_error(mover_id, "non_mover_profile")
+            return (None, None)
+        # All prerequisites met — clear any prior error so the next
+        # reconfiguration that resolves the problem unsticks the
+        # claim's status without operator intervention.
+        self._set_claim_aim_error(mover_id, None)
         try:
             from aim.routes import _get_or_build_sphere
             sphere = _get_or_build_sphere(mover, prof_info)
@@ -701,6 +749,19 @@ class MoverControlEngine:
             pose = sphere.aim_direction(az_deg, el_deg, current_pose=cur_pose)
             return ((pose[0] / 65535.0, pose[1] / 65535.0)
                      if pose is not None else (None, None))
+        except ValueError as e:
+            # #855 — AimSphere raises ValueError for prerequisite
+            # failures we can name and surface. The early-return
+            # guards above already cover the common cases (no
+            # profile, no Home, no Secondary, non-mover profile);
+            # a ValueError from inside AimSphere is therefore an
+            # unexpected prerequisite failure (e.g. malformed
+            # secondary entry, profile shape mismatch). Tag it
+            # generically and surface to the claim.
+            self._set_claim_aim_error(mover_id, "aimsphere_value_error")
+            log.warning("aim_to_pan_tilt: AimSphere ValueError for mover %s "
+                         "aim_stage=%s: %s", mover_id, aim_stage, e)
+            return (None, None)
         except Exception as e:
             # #851 — was log.debug; promoted to log.warning so a
             # production silent-failure mode is visible without needing
@@ -708,10 +769,32 @@ class MoverControlEngine:
             # repeatedly the orient → panNorm refresh is broken and
             # panNorm freezes at its last good value — the symptom the
             # issue describes.
+            self._set_claim_aim_error(mover_id, "aimsphere_exception")
             log.warning("aim_to_pan_tilt: AimSphere failed for mover %s "
                          "aim_stage=%s: %s",
                          mover_id, aim_stage, e)
             return (None, None)
+
+    # #855 — track the last-known prerequisite-failure for each
+    # claim so /api/mover-control/status can surface "head not
+    # aiming because Secondary not saved" instead of leaving the
+    # operator staring at a non-moving fixture. Logged once per
+    # (mover_id, error) transition so the log isn't noisy when the
+    # condition persists across many ticks.
+    def _set_claim_aim_error(self, mover_id, err):
+        with self._lock:
+            claim = self._claims.get(mover_id)
+            if claim is None:
+                return
+            prev = getattr(claim, "aim_error", None)
+            if prev == err:
+                return
+            claim.aim_error = err
+            if err is not None:
+                log.warning("Mover %d aim error transition: %s -> %s",
+                             mover_id, prev or "ok", err)
+            elif prev is not None:
+                log.info("Mover %d aim error cleared (was %s)", mover_id, prev)
 
     # #784 PR-5 (2026-05-03) — `_get_smart_model` removed. The SMART
     # model / 2-pair-affine path is no longer consulted; `AimSphere` is
@@ -736,16 +819,36 @@ class MoverControlEngine:
         if include_pan_tilt:
             uni_buf.set_fixture_pan_tilt(addr, claim.pan_smooth,
                                          claim.tilt_smooth, profile)
+        # #843 — snapshot globalBrightness once per write so the
+        # dimmer + RGB outputs scale uniformly even if the brightness
+        # value changes mid-write. Mirrors the per-frame snapshot in
+        # `_dmx_playback_loop` / `_dmx_playback_single` /
+        # `_evaluate_track_actions`.
+        g_bri = int(self._get_global_brightness() or 255)
         # #814 — only stamp dimmer / color when the operator has set them
         # explicitly (set_color / flash). Tristate `None` means "inherit
         # whatever's on the wire" so a Track-action show keeps its color
         # while the operator drives pan/tilt from a phone.
         if claim.dimmer is not None:
-            uni_buf.set_fixture_dimmer(addr, claim.dimmer, profile)
+            scaled_dim = (self._scale_for_brightness(int(claim.dimmer), g_bri)
+                          if g_bri < 255 else int(claim.dimmer))
+            uni_buf.set_fixture_dimmer(addr, scaled_dim, profile)
         if (claim.color_r is not None and claim.color_g is not None
                 and claim.color_b is not None):
+            # #843 — scale RGB by global brightness only when the
+            # profile has no master dimmer (RGB-only par). Master-
+            # dimmer fixtures rely on the dimmer scaling above; double-
+            # scaling RGB on top would crush the colour.
+            cm = profile.get("channel_map") or {}
+            if "dimmer" in cm or g_bri >= 255:
+                r_out, g_out, b_out = (claim.color_r, claim.color_g,
+                                        claim.color_b)
+            else:
+                r_out = self._scale_for_brightness(claim.color_r, g_bri)
+                g_out = self._scale_for_brightness(claim.color_g, g_bri)
+                b_out = self._scale_for_brightness(claim.color_b, g_bri)
             self._set_fixture_color(engine, uni, addr,
-                                    claim.color_r, claim.color_g, claim.color_b,
+                                    r_out, g_out, b_out,
                                     prof_info)
 
         # Channel defaults + strobe override.
