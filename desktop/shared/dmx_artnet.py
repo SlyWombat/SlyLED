@@ -209,13 +209,27 @@ def parse_artpoll_reply(data):
 class ArtNetEngine:
     """Art-Net 4 output engine with ArtPoll discovery and 40Hz ArtDMX output."""
 
-    def __init__(self, bind_ip="0.0.0.0", unicast_targets=None, frame_rate=40):
+    def __init__(self, bind_ip="0.0.0.0", unicast_targets=None, frame_rate=40,
+                 get_global_brightness=None, get_intensity_offsets=None,
+                 gamma_lut=None):
         """
         Args:
             bind_ip: IP to bind the UDP socket to (default: all interfaces)
             unicast_targets: dict of universe→ip for unicast mode.
                              If None, broadcasts to 255.255.255.255.
             frame_rate: output frame rate in Hz (default 40)
+            get_global_brightness: callable() → int 0..255. Snapshotted
+                once per frame so the master grand-master gate (#853)
+                scales every ArtDmx output uniformly regardless of
+                writer. Default lambda returns 255 (no scaling).
+            get_intensity_offsets: callable(universe_num) → iterable of
+                0-based buffer indices to scale (intensity channels:
+                dimmer/intensity/red/green/blue/white/amber/uv/lime).
+                pan/tilt/strobe/gobo/wheel-slot bytes are excluded.
+                Default returns empty (no scaling).
+            gamma_lut: optional 256-byte gamma-correction LUT applied
+                after the linear master multiply (matches FastLED's
+                curve so DMX + LED dim identically at the same master).
         """
         self._bind_ip = bind_ip
         self._unicast = unicast_targets or {}
@@ -229,6 +243,14 @@ class ArtNetEngine:
         self._lock = threading.Lock()
         self._discovered = {}  # ip → ArtPollReply info
         self._local_ip = "0.0.0.0"
+        # #853 — master grand-master callbacks. Defaults are no-op so
+        # tests / standalone usage that don't wire them get the legacy
+        # unscaled behaviour.
+        self._get_global_brightness = (
+            get_global_brightness or (lambda: 255))
+        self._get_intensity_offsets = (
+            get_intensity_offsets or (lambda _u: ()))
+        self._gamma_lut = gamma_lut
 
     def configure(self, bind_ip=None, unicast_targets=None, frame_rate=None):
         """Update configuration. Takes effect on next start()."""
@@ -345,8 +367,16 @@ class ArtNetEngine:
         """
         if not self._sock:
             return
+        g_bri = int(self._get_global_brightness() or 255)
         for uni_num, uni in list(self._universes.items()):
-            data = uni.get_data()
+            if g_bri < 255:
+                data = uni.get_data_scaled(
+                    master_brightness=g_bri,
+                    intensity_offsets=self._get_intensity_offsets(uni_num),
+                    gamma_lut=self._gamma_lut,
+                )
+            else:
+                data = uni.get_data()
             seq = self._sequences.get(uni_num, 0) + 1
             if seq > 255:
                 seq = 1
@@ -464,13 +494,32 @@ class ArtNetEngine:
         """Send ArtDMX for dirty universes + keep-alive retransmit every ~1s."""
         if not self._sock:
             return
+        # #853 — snapshot master grand-master once per frame so every
+        # universe sent in this iteration scales uniformly even if a
+        # /api/brightness write lands mid-frame. The dirty-vs-keep-
+        # alive trigger below also fires when the master changes
+        # (handled at universe level via the dirty bit set by the
+        # parent_server's _broadcast_brightness path).
+        g_bri = int(self._get_global_brightness() or 255)
         now = time.monotonic()
         for uni_num, uni in list(self._universes.items()):
             # Send if dirty OR keep-alive interval elapsed (Art-Net standard)
             last = getattr(uni, '_last_send', 0)
             if not uni.dirty and (now - last) < 1.0:
                 continue
-            data = uni.get_data()
+            # #853 — final-gate scaling. When master is 255 this is the
+            # zero-cost identity path (`get_data_scaled` returns the raw
+            # buffer copy); otherwise it scales intensity-class channels
+            # via the per-universe offset cache. Pan/tilt/strobe/gobo/
+            # wheel-slot bytes are explicitly excluded.
+            if g_bri < 255:
+                data = uni.get_data_scaled(
+                    master_brightness=g_bri,
+                    intensity_offsets=self._get_intensity_offsets(uni_num),
+                    gamma_lut=self._gamma_lut,
+                )
+            else:
+                data = uni.get_data()
             seq = self._sequences.get(uni_num, 0) + 1
             if seq > 255:
                 seq = 1

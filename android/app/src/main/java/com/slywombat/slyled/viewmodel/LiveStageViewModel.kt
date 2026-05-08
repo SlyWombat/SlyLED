@@ -209,13 +209,33 @@ class LiveStageViewModel @Inject constructor(
         if (enabled == _autoBrightnessEnabled.value) return
         if (enabled) {
             val started = mic.start(viewModelScope) { master ->
-                // Drop hop if previous fast-path still in flight.
-                if (lastBrightnessJob?.isActive == true) return@start
+                // #854 — latest-wins: cancel the prior in-flight POST and
+                // replace it with the new value. Pre-fix the in-flight
+                // guard `if (lastBrightnessJob?.isActive == true) return`
+                // permanently dropped every subsequent hop after the
+                // FIRST stuck POST (TLS handshake delay, network blip,
+                // OkHttp retry loop), because the stuck job kept
+                // isActive=true for the full default Retrofit timeout
+                // (~10 s). Operator saw "Listening" UI animate locally
+                // while ZERO POSTs reached the orchestrator.
+                //
+                // Combined with the 2 s withTimeout below: the most
+                // recent value always gets sent (current beat, not 5
+                // beats ago); stuck calls get cancelled and replaced;
+                // the failure mode "stuck forever after first hang"
+                // becomes "self-healing latest-wins."
+                lastBrightnessJob?.cancel()
                 lastBrightnessJob = viewModelScope.launch {
                     try {
-                        repository.setMasterBrightness(master)
+                        kotlinx.coroutines.withTimeout(2000L) {
+                            repository.setMasterBrightness(master)
+                        }
+                    } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                        Log.w(TAG, "fast brightness POST timed out (2s) value=$master")
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        // Expected — superseded by a newer hop.
                     } catch (e: Exception) {
-                        Log.w(TAG, "fast brightness POST", e)
+                        Log.w(TAG, "fast brightness POST failed value=$master", e)
                     }
                 }
             }

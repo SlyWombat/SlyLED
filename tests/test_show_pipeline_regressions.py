@@ -218,6 +218,121 @@ def test_840_loop_wrap_no_zero_frame():
             if ch.get("id") != fid]
 
 
+def test_853_master_grand_master_scales_universe_no_show():
+    """#853 — global brightness must apply at universe-buffer-send
+    time as a final gate, regardless of whether a show is running.
+    Pre-fix, /api/brightness only affected the bake-segment render
+    path; Track actions, mover-control claims, direct dmx-test, and
+    no-show ambient state all bypassed the scaling. Post-fix, the
+    ArtNet engine's `get_data_scaled` applies the gamma-corrected
+    master to intensity-class channels (red/green/blue/dimmer/etc;
+    NOT pan/tilt/strobe/gobo/wheel-slot) on every send tick."""
+    print("\n-- test_853_master_grand_master_scales_universe_no_show --")
+    with parent_server.app.test_client() as c:
+        c.post("/api/reset", headers={"X-SlyLED-Confirm": "true"})
+        c.post("/api/dmx/start", json={"protocol": "artnet"})
+        _drain_existing_playback()
+
+        # generic-dimmer-rgb (4ch: dim, R, G, B) gives us direct
+        # intensity-channel addressing without going through a show.
+        r = c.post("/api/fixtures", json={
+            "name": "#853 par", "type": "point", "fixtureType": "dmx",
+            "dmxUniverse": 1, "dmxStartAddr": 1,
+            "dmxChannelCount": 4,
+            "dmxProfileId": "generic-dimmer-rgb",
+            "rotation": [0, 0, 0],
+        })
+        fid = r.get_json()["id"]
+
+        # Reset master to 255 + write a known-state frame.
+        c.post("/api/brightness", json={"value": 255})
+        c.post(f"/api/fixtures/{fid}/dmx-test", json={
+            "pan": -1, "tilt": -1,
+            "dimmer": 200/255.0, "red": 1.0, "green": 0.5, "blue": 0.0,
+        })
+        chans = c.get("/api/dmx/monitor/1").get_json()["channels"]
+        # Profile: dimmer=ch1 (offset 0), red=ch2, green=ch3, blue=ch4.
+        _ok(chans[0] == 200,
+            "#853 baseline dimmer at master=255",
+            f"got {chans[0]} (expected 200)")
+        _ok(chans[1] == 255,
+            "#853 baseline red at master=255",
+            f"got {chans[1]}")
+
+        # Drop master to 128 — the monitor should reflect the gamma-
+        # corrected scaled view (matching what the wire would carry).
+        c.post("/api/brightness", json={"value": 128})
+        chans = c.get("/api/dmx/monitor/1").get_json()["channels"]
+        # Linear scale: 200 × 128/255 = 100. Gamma 2.2: 100 → 13.
+        # Anything substantially less than 200 confirms scaling fired.
+        _ok(chans[0] < 100,
+            "#853 master=128 scales dimmer down",
+            f"got {chans[0]} (expected < 100; gamma 200→13)")
+        _ok(chans[1] < 200,
+            "#853 master=128 scales red down (RGB-only profile)",
+            f"got {chans[1]} (expected < 200)")
+
+        # Restore master — output returns to baseline (no double-apply,
+        # no stuck scaled values).
+        c.post("/api/brightness", json={"value": 255})
+        chans = c.get("/api/dmx/monitor/1").get_json()["channels"]
+        _ok(chans[0] == 200,
+            "#853 restore to master=255 returns dimmer to 200",
+            f"got {chans[0]} (expected 200; round-trip clean)")
+
+        c.delete(f"/api/fixtures/{fid}")
+        c.post("/api/brightness", json={"value": 255})
+
+
+def test_853_master_does_not_scale_pan_tilt():
+    """#853 — pan/tilt/strobe/gobo/wheel-slot bytes are positional
+    indices, not intensities. The master grand-master gate must NOT
+    scale them. A 12-ch movinghead at master=64 should still report
+    its pan/tilt bytes verbatim."""
+    print("\n-- test_853_master_does_not_scale_pan_tilt --")
+    with parent_server.app.test_client() as c:
+        c.post("/api/reset", headers={"X-SlyLED-Confirm": "true"})
+        c.post("/api/dmx/start", json={"protocol": "artnet"})
+        _drain_existing_playback()
+
+        r = c.post("/api/fixtures", json={
+            "name": "#853 mover", "type": "point", "fixtureType": "dmx",
+            "dmxUniverse": 1, "dmxStartAddr": 1,
+            "dmxChannelCount": 12,
+            "dmxProfileId": "movinghead-150w-12ch",
+            "rotation": [0, 0, 0],
+        })
+        fid = r.get_json()["id"]
+
+        c.post("/api/brightness", json={"value": 255})
+        c.post(f"/api/fixtures/{fid}/dmx-test", json={
+            "pan": 0.5, "tilt": 0.5, "dimmer": 200/255.0,
+        })
+        chans_full = c.get("/api/dmx/monitor/1").get_json()["channels"]
+        pan_full = chans_full[0]
+        tilt_full = chans_full[2]
+        dim_full = chans_full[5]
+
+        c.post("/api/brightness", json={"value": 64})
+        chans_dim = c.get("/api/dmx/monitor/1").get_json()["channels"]
+        pan_dim = chans_dim[0]
+        tilt_dim = chans_dim[2]
+        dim_dim = chans_dim[5]
+
+        _ok(pan_dim == pan_full,
+            "#853 pan unchanged by master (positional, not intensity)",
+            f"pan_full={pan_full} pan_dim={pan_dim}")
+        _ok(tilt_dim == tilt_full,
+            "#853 tilt unchanged by master",
+            f"tilt_full={tilt_full} tilt_dim={tilt_dim}")
+        _ok(dim_dim < dim_full,
+            "#853 dimmer scaled by master",
+            f"dim_full={dim_full} dim_dim={dim_dim}")
+
+        c.delete(f"/api/fixtures/{fid}")
+        c.post("/api/brightness", json={"value": 255})
+
+
 def test_848_invariant_1_default_rgb_on_press_start():
     """#848 invariant 1 — `_gyro_lights_on` (called pre-CLAIM_ACK on
     every press-Start) must write a default RGB when the wire is
@@ -352,6 +467,8 @@ def main():
     test_835_orphan_track_action_does_not_blackout_dimmer()
     test_840_loop_wrap_no_zero_frame()
     test_848_invariant_1_default_rgb_on_press_start()
+    test_853_master_grand_master_scales_universe_no_show()
+    test_853_master_does_not_scale_pan_tilt()
     test_845_playback_writes_first_frame_under_300ms()
     print(f"\n{_passed} assertions passed, {_failed} failed")
     return 0 if _failed == 0 else 1

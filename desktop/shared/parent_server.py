@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.96"
+VERSION = "1.7.97"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -156,6 +156,23 @@ def _load(name, default):
 
 def _save(name, obj):
     (DATA / f"{name}.json").write_text(json.dumps(obj, indent=2))
+    # #853 — fixture changes invalidate the per-universe intensity-
+    # channel cache used by the master grand-master send-time gate.
+    # Any path that adds / removes / re-addresses / re-profiles a
+    # fixture goes through `_save("fixtures", _fixtures)`, so this
+    # is the single chokepoint for the invalidation. Forward
+    # reference is fine — `_invalidate_intensity_offsets_cache` is
+    # defined later in the file but `_save` is only ever called at
+    # runtime when both definitions are loaded.
+    if name == "fixtures":
+        try:
+            _invalidate_intensity_offsets_cache()
+        except NameError:
+            # Module-load ordering: fixtures may be saved during
+            # bootstrap before the cache helpers are defined. Safe
+            # to ignore — the lazy build on first read picks up
+            # everything correctly.
+            pass
 
 #  "  "  In-memory state  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -654,7 +671,16 @@ _lock  = threading.Lock()
 
 #  "  "  DMX subsystems  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 _profile_lib = ProfileLibrary(data_dir=str(DATA))
-_artnet = ArtNetEngine()
+# #853 — master grand-master callbacks. Lazy lambdas so `_settings`,
+# `_fixtures`, `_GAMMA_LUT`, and `_get_intensity_offsets` (all defined
+# later in this file) resolve at the engine's call time, not at engine
+# construction. The engines's send loops snapshot the master once per
+# frame and apply the gamma-corrected scaling at get-time, eliminating
+# the per-render-path scaling boilerplate that v1.7.82 introduced.
+_artnet = ArtNetEngine(
+    get_global_brightness=lambda: _settings.get("globalBrightness", 255),
+    get_intensity_offsets=lambda uni: _get_intensity_offsets(uni),
+)
 _sacn = sACNEngine()
 
 _shutdown_blackout_done = False
@@ -12829,10 +12855,26 @@ def _artnet_oneshot_poll():
 
 @app.get("/api/dmx/monitor/<int:uni>")
 def api_dmx_monitor(uni):
-    """Return all 512 channel values for a universe as a flat array."""
+    """Return all 512 channel values for a universe as a flat array.
+
+    #853 — applies the master grand-master scaling so the monitor
+    reflects what ArtNet would actually send. Pre-fix the monitor
+    showed the raw buffer (writers' values) which diverged from the
+    wire whenever globalBrightness < 255 — the operator couldn't
+    sanity-check 'is the master actually scaling?' from the SPA.
+    Now the monitor reads the same scaled view the send loop uses.
+    """
     for engine in (_artnet, _sacn):
         if engine.running and uni in engine._universes:
-            data = engine._universes[uni].get_data()
+            g_bri = _settings.get("globalBrightness", 255)
+            if g_bri < 255:
+                data = engine._universes[uni].get_data_scaled(
+                    master_brightness=int(g_bri),
+                    intensity_offsets=_get_intensity_offsets(uni),
+                    gamma_lut=_GAMMA_LUT,
+                )
+            else:
+                data = engine._universes[uni].get_data()
             return jsonify({"universe": uni, "channels": list(data)})
     # No engine running or universe not created — return zeros
     return jsonify({"universe": uni, "channels": [0] * 512})
@@ -14657,26 +14699,18 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures,
                 ta_r = ta.get("r", 255)
                 ta_g = ta.get("g", 255)
                 ta_b = ta.get("b", 255)
-                # #843 — apply global brightness. Master-dimmer fixtures
-                # scale the dimmer channel; RGB-only fixtures (no dimmer
-                # in profile) scale the RGB triple instead. Colour-wheel-
-                # only fixtures fall through to dimmer scaling — slots are
-                # categorical, not intensity, so the wheel index stays.
-                if "dimmer" in cm:
-                    tr_out = _scale_for_brightness(tr, g_bri)
-                    r_out, g_out, b_out = ta_r, ta_g, ta_b
-                else:
-                    tr_out = tr
-                    r_out = _scale_for_brightness(ta_r, g_bri)
-                    g_out = _scale_for_brightness(ta_g, g_bri)
-                    b_out = _scale_for_brightness(ta_b, g_bri)
-                uni_buf.set_fixture_dimmer(addr, tr_out, profile)
+                # #853 — write Track action's raw values; the master
+                # grand-master is applied at universe-buffer-send time
+                # by the ArtNet engine's `get_data_scaled` so this
+                # path automatically respects the operator's brightness
+                # without per-writer boilerplate.
+                uni_buf.set_fixture_dimmer(addr, tr, profile)
                 cw_override = ta.get("colorWheel")
                 if (cw_override is not None and "color-wheel" in cm
                         and not any(c in cm for c in ("red", "green", "blue"))):
                     uni_buf.set_channel(addr + cm["color-wheel"], cw_override)
                 else:
-                    uni_buf.set_fixture_rgb(addr, r_out, g_out, b_out, profile)
+                    uni_buf.set_fixture_rgb(addr, ta_r, ta_g, ta_b, profile)
                 # Apply channel defaults (strobe open, etc.) so beam is visible
                 for ch in prof_info.get("channels", []):
                     ch_type = ch.get("type", "")
@@ -14912,27 +14946,23 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
                 # #841) still wins for wheel-only profiles where the
                 # operator picked a slot.
                 cm = fx["ch_map"] or {}
-                # #843 — apply global brightness. Master-dimmer fixtures
-                # scale the dimmer channel; RGB-only fixtures (no
-                # dimmer) scale the RGB triple. Bake outputs are
-                # unchanged — scaling happens here at render time, so
-                # brightness slewing during a show needs no re-bake.
-                if "dimmer" in cm:
-                    r_out, g_out, b_out = r, g, b
-                else:
-                    r_out = _scale_for_brightness(r, g_bri)
-                    g_out = _scale_for_brightness(g, g_bri)
-                    b_out = _scale_for_brightness(b, g_bri)
+                # #853 — write the bake's raw values; the master grand-
+                # master is applied at universe-buffer-send time by the
+                # ArtNet engine's `get_data_scaled` (gamma-corrected,
+                # intensity-channels only). Pre-fix this path scaled
+                # at render time per #843, but the resulting per-
+                # writer-must-remember pattern broke for Track action
+                # / claim writer / dmx-test / no-show paths. Send-time
+                # scaling is uniform across every writer.
                 if (color_wheel is not None and "color-wheel" in cm
                         and not any(c in cm for c in ("red", "green", "blue"))):
                     uni_buf.set_channel(fx["addr"] + cm["color-wheel"], color_wheel)
                 elif cm and (r or g or b
                              or any(c in cm for c in ("red", "green", "blue"))):
-                    uni_buf.set_fixture_rgb(fx["addr"], r_out, g_out, b_out, profile)
+                    uni_buf.set_fixture_rgb(fx["addr"], r, g, b, profile)
                 # Dimmer
                 if fx["ch_map"] and "dimmer" in fx["ch_map"]:
                     dim = dimmer if dimmer is not None else (255 if (r or g or b) else 0)
-                    dim = _scale_for_brightness(dim, g_bri)
                     uni_buf.set_fixture_dimmer(fx["addr"], dim, profile)
                 # Pan/Tilt
                 if pan is not None and tilt is not None and profile:
@@ -15436,22 +15466,18 @@ def _dmx_playback_single(tid, go_epoch, duration, is_final=True):
             uni_buf = engine.get_universe(fx["uni"])
             # #842 — see _dmx_playback_loop for the dispatch rationale.
             cm = fx["ch_map"] or {}
-            # #843 — apply global brightness (matches _dmx_playback_loop).
-            if "dimmer" in cm:
-                r_out, g_out, b_out = r, g, b
-            else:
-                r_out = _scale_for_brightness(r, g_bri)
-                g_out = _scale_for_brightness(g, g_bri)
-                b_out = _scale_for_brightness(b, g_bri)
+            # #853 — render-time scaling removed; ArtNet send-time
+            # gate scales every output uniformly via gamma-corrected
+            # master grand-master. See _dmx_playback_loop's identical
+            # comment.
             if (color_wheel is not None and "color-wheel" in cm
                     and not any(c in cm for c in ("red", "green", "blue"))):
                 uni_buf.set_channel(fx["addr"] + cm["color-wheel"], color_wheel)
             elif cm and (r or g or b
                          or any(c in cm for c in ("red", "green", "blue"))):
-                uni_buf.set_fixture_rgb(fx["addr"], r_out, g_out, b_out, profile)
+                uni_buf.set_fixture_rgb(fx["addr"], r, g, b, profile)
             if fx["ch_map"] and "dimmer" in fx["ch_map"]:
                 dim = dimmer if dimmer is not None else (255 if (r or g or b) else 0)
-                dim = _scale_for_brightness(dim, g_bri)
                 uni_buf.set_fixture_dimmer(fx["addr"], dim, profile)
             if pan is not None and tilt is not None and profile:
                 uni_buf.set_fixture_pan_tilt(fx["addr"], pan, tilt, profile)
@@ -15799,6 +15825,80 @@ def api_settings_save():
 # index. 256 bytes — trivial.
 _GAMMA_LUT = bytes(int((i / 255.0) ** 2.2 * 255 + 0.5) for i in range(256))
 
+# #853 — wire the gamma LUT into the engines now that it exists. The
+# engines' send loops snapshot master brightness once per frame and
+# apply this LUT to intensity-class channels via
+# `DMXUniverse.get_data_scaled`.
+_artnet._gamma_lut = _GAMMA_LUT
+_sacn._gamma_lut = _GAMMA_LUT
+
+
+# #853 — intensity-channel offset cache for the master grand-master
+# gate. Built lazily, invalidated whenever fixtures change. Per-
+# universe set of 0-based buffer indices (i.e. `addr - 1 + offset`
+# for each intensity-typed channel on every DMX fixture). Pan / tilt /
+# strobe / gobo / wheel-slot / prism / focus / zoom are excluded —
+# they're indices / positions, not intensities.
+_INTENSITY_TYPES = frozenset({
+    "dimmer", "intensity",
+    "red", "green", "blue", "white", "amber", "uv", "lime",
+})
+_intensity_offsets_cache = {}   # int(uni_num) → frozenset[int]
+_intensity_offsets_cache_dirty = True
+
+
+def _invalidate_intensity_offsets_cache():
+    """Mark the per-universe intensity-channel cache dirty. Called
+    whenever the fixture list / fixture profile assignment / address
+    changes."""
+    global _intensity_offsets_cache_dirty
+    _intensity_offsets_cache_dirty = True
+
+
+def _build_intensity_offsets_cache():
+    """Walk every DMX fixture once and collect the buffer indices
+    that should be scaled by the master grand-master."""
+    global _intensity_offsets_cache, _intensity_offsets_cache_dirty
+    cache = {}
+    for f in _fixtures:
+        if f.get("fixtureType") != "dmx":
+            continue
+        pid = f.get("dmxProfileId")
+        info = _profile_lib.channel_info(pid) if pid else None
+        if not info:
+            continue
+        try:
+            uni = int(f.get("dmxUniverse", 1) or 1)
+            addr = int(f.get("dmxStartAddr", 1) or 1)
+        except (TypeError, ValueError):
+            continue
+        offsets = cache.setdefault(uni, set())
+        for ch in info.get("channels") or []:
+            ch_type = ch.get("type", "")
+            if ch_type not in _INTENSITY_TYPES:
+                continue
+            try:
+                off = int(ch.get("offset", 0))
+            except (TypeError, ValueError):
+                continue
+            idx = addr - 1 + off
+            if 0 <= idx < 512:
+                offsets.add(idx)
+    # Freeze to prevent the engine's send-thread from observing a
+    # half-built set during a rebuild.
+    _intensity_offsets_cache = {u: frozenset(s) for u, s in cache.items()}
+    _intensity_offsets_cache_dirty = False
+
+
+def _get_intensity_offsets(universe_num):
+    """Return the frozenset of buffer indices on `universe_num` that
+    are intensity-class channels (and therefore subject to the master
+    grand-master gate). Empty frozenset for universes with no DMX
+    fixtures or unknown profile."""
+    if _intensity_offsets_cache_dirty:
+        _build_intensity_offsets_cache()
+    return _intensity_offsets_cache.get(int(universe_num), frozenset())
+
 
 def _scale_for_brightness(value, g_bri):
     """Apply the global-brightness gamma curve to an 8-bit channel value.
@@ -15929,6 +16029,16 @@ def api_brightness_fast():
         _settings["globalBrightness"] = iv
     if iv != prev:
         _broadcast_brightness(iv)
+        # #853 — mark every active universe dirty so the master
+        # grand-master change emits a fresh ArtDmx frame on the
+        # next send tick instead of waiting up to 1 s for the
+        # keep-alive cycle. Without this the operator-perceived
+        # latency between sliding the brightness and seeing the
+        # rig respond is up to a full keep-alive period.
+        for engine in (_artnet, _sacn):
+            if engine.running:
+                for uni in engine._universes.values():
+                    uni.dirty = True
     _log_brightness_hop(request.remote_addr or "?", iv, prev)
     return jsonify(ok=True, value=iv)
 
@@ -18514,6 +18624,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 

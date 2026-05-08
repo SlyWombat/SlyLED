@@ -183,17 +183,36 @@ def test_scale_for_brightness_gamma_corrected_at_half():
             f"_scale_for_brightness(255, 128) gamma-corrected (got {out})")
 
 
-def test_render_paths_snapshot_brightness_per_frame():
-    """Each of the three render paths must snapshot globalBrightness
-    under _lock once per frame (Gap 5 — torn-read avoidance)."""
+def test_render_paths_no_longer_scale_brightness():
+    """#853 — render-time scaling REMOVED. The ArtNet engine's
+    `get_data_scaled` applies the master grand-master at send time so
+    every writer (bake render, Track action, claim writer, dmx-test,
+    no-show direct write) goes through a single uniform gate. The
+    previous v1.7.82 per-render-path scaling is no longer expected;
+    its presence would now double-apply on top of the send gate.
+    """
     for fn_name in ("_evaluate_track_actions",
                      "_dmx_playback_loop",
                      "_dmx_playback_single"):
         src = inspect.getsource(getattr(parent_server, fn_name))
-        _assert("g_bri = _settings" in src,
-                f"{fn_name} reads global brightness into local g_bri")
-        _assert("_scale_for_brightness" in src,
-                f"{fn_name} applies _scale_for_brightness somewhere")
+        _assert("_scale_for_brightness" not in src,
+                f"{fn_name} no longer calls _scale_for_brightness "
+                "(send-time gate applies the master)")
+
+
+def test_artnet_engine_wired_with_master_grand_master_callbacks():
+    """#853 — the ArtNet engine has the master grand-master callbacks
+    wired so the send loop can apply gamma-corrected scaling at the
+    final gate. `get_global_brightness` reads `_settings`,
+    `get_intensity_offsets` returns the per-universe channel cache,
+    `_gamma_lut` is the FastLED-parity 256-byte table."""
+    eng = parent_server._artnet
+    _assert(callable(getattr(eng, "_get_global_brightness", None)),
+            "ArtNet engine has _get_global_brightness callback")
+    _assert(callable(getattr(eng, "_get_intensity_offsets", None)),
+            "ArtNet engine has _get_intensity_offsets callback")
+    _assert(eng._gamma_lut is parent_server._GAMMA_LUT,
+            "ArtNet engine's gamma LUT is the FastLED-parity table")
 
 
 def test_brightness_endpoint_validates_input():
@@ -223,7 +242,8 @@ ALL = [
     test_scale_for_brightness_passthrough_at_full,
     test_scale_for_brightness_zero_at_zero,
     test_scale_for_brightness_gamma_corrected_at_half,
-    test_render_paths_snapshot_brightness_per_frame,
+    test_render_paths_no_longer_scale_brightness,
+    test_artnet_engine_wired_with_master_grand_master_callbacks,
     test_brightness_endpoint_validates_input,
     test_sync_time_uses_brightness_packet_helper,
 ]

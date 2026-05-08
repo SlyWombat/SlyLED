@@ -57,6 +57,45 @@ class DMXUniverse:
         with self._lock:
             return bytes(self._data)
 
+    def get_data_scaled(self, master_brightness=255,
+                        intensity_offsets=None, gamma_lut=None):
+        """#853 — return a snapshot with the global master grand-master
+        applied to intensity-class channels only.
+
+        ``master_brightness`` 0..255 is the grand-master scalar.
+        ``intensity_offsets`` is the iterable of 0-based buffer indices
+        (i.e. ``addr - 1 + channel.offset`` for each ``red``/``green``/
+        ``blue``/``white``/``amber``/``uv``/``lime``/``dimmer``/
+        ``intensity`` channel) on this universe — pan/tilt/strobe/
+        gobo/wheel-slot bytes are NOT scaled because they're indices
+        / positions, not intensities. ``gamma_lut`` is a 256-byte
+        lookup applied after the linear master multiply (matches
+        FastLED's gamma curve so DMX and LED outputs perceive
+        identically at the same master).
+
+        This is the *single point* where global brightness applies to
+        DMX output. Every writer (bake render, Track action, claim
+        writer, dmx-test, blackout, calibration sweep) writes raw
+        unscaled values into the buffer; the master is applied at
+        get-time so the contract is uniform across paths and
+        observable from monitor reads + ArtNet sends alike.
+        """
+        if master_brightness >= 255 or not intensity_offsets:
+            with self._lock:
+                return bytes(self._data)
+        with self._lock:
+            scaled = bytearray(self._data)
+        if gamma_lut is None:
+            for idx in intensity_offsets:
+                if 0 <= idx < 512:
+                    scaled[idx] = (scaled[idx] * master_brightness) // 255
+        else:
+            for idx in intensity_offsets:
+                if 0 <= idx < 512:
+                    linear = (scaled[idx] * master_brightness) // 255
+                    scaled[idx] = gamma_lut[linear & 0xFF]
+        return bytes(scaled)
+
     def set_data(self, data):
         """Overwrite the entire universe from a 512-byte buffer."""
         with self._lock:

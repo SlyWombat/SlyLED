@@ -819,36 +819,23 @@ class MoverControlEngine:
         if include_pan_tilt:
             uni_buf.set_fixture_pan_tilt(addr, claim.pan_smooth,
                                          claim.tilt_smooth, profile)
-        # #843 — snapshot globalBrightness once per write so the
-        # dimmer + RGB outputs scale uniformly even if the brightness
-        # value changes mid-write. Mirrors the per-frame snapshot in
-        # `_dmx_playback_loop` / `_dmx_playback_single` /
-        # `_evaluate_track_actions`.
-        g_bri = int(self._get_global_brightness() or 255)
-        # #814 — only stamp dimmer / color when the operator has set them
-        # explicitly (set_color / flash). Tristate `None` means "inherit
-        # whatever's on the wire" so a Track-action show keeps its color
-        # while the operator drives pan/tilt from a phone.
+        # #853 — render-time scaling removed; the ArtNet engine's
+        # send-time master grand-master gate (`get_data_scaled` with
+        # gamma-corrected scaling on intensity-class channels) handles
+        # globalBrightness for every writer uniformly. Pre-fix this
+        # path multiplied dimmer + RGB by g_bri locally per #843,
+        # which would now double-apply on top of the send gate.
+        # #814 — only stamp dimmer / color when the operator has set
+        # them explicitly (set_color / flash). Tristate `None` means
+        # "inherit whatever's on the wire" so a Track-action show
+        # keeps its color while the operator drives pan/tilt.
         if claim.dimmer is not None:
-            scaled_dim = (self._scale_for_brightness(int(claim.dimmer), g_bri)
-                          if g_bri < 255 else int(claim.dimmer))
-            uni_buf.set_fixture_dimmer(addr, scaled_dim, profile)
+            uni_buf.set_fixture_dimmer(addr, int(claim.dimmer), profile)
         if (claim.color_r is not None and claim.color_g is not None
                 and claim.color_b is not None):
-            # #843 — scale RGB by global brightness only when the
-            # profile has no master dimmer (RGB-only par). Master-
-            # dimmer fixtures rely on the dimmer scaling above; double-
-            # scaling RGB on top would crush the colour.
-            cm = profile.get("channel_map") or {}
-            if "dimmer" in cm or g_bri >= 255:
-                r_out, g_out, b_out = (claim.color_r, claim.color_g,
-                                        claim.color_b)
-            else:
-                r_out = self._scale_for_brightness(claim.color_r, g_bri)
-                g_out = self._scale_for_brightness(claim.color_g, g_bri)
-                b_out = self._scale_for_brightness(claim.color_b, g_bri)
             self._set_fixture_color(engine, uni, addr,
-                                    r_out, g_out, b_out,
+                                    claim.color_r, claim.color_g,
+                                    claim.color_b,
                                     prof_info)
 
         # Channel defaults + strobe override.
