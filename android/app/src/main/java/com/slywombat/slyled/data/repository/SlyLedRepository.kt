@@ -356,7 +356,8 @@ class SlyLedRepository @Inject constructor(
             }
         }
         val resp = requireApi().submitAimWizard(body)
-        val ok = (resp["ok"] as? kotlinx.serialization.json.JsonPrimitive)?.boolean ?: false
+        val ok = (resp["ok"] as? kotlinx.serialization.json.JsonPrimitive)
+            ?.content?.equals("true", ignoreCase = true) ?: false
         if (!ok) {
             val err = (resp["err"] as? kotlinx.serialization.json.JsonPrimitive)?.content
             val detail = (resp["detail"] as? kotlinx.serialization.json.JsonPrimitive)?.content
