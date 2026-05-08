@@ -1963,11 +1963,49 @@ def _gyro_lights_on(mover_id):
         if cur_dim == 0:
             dim = int(mover.get("lampOnDimmer", 255) or 255)
             uni.set_fixture_dimmer(addr, max(0, min(255, dim)), profile)
+        # #848 invariant 1 — default RGB / wheel-slot when the wire is
+        # currently dark so the operator sees the head light up
+        # immediately on press-Start. Pre-fix only the dimmer was
+        # written; if the wire was at RGB=(0,0,0) and the profile had
+        # no master dimmer (or the master was already up), the head
+        # stayed black-commanded and the operator's "no lights came
+        # on" report was the result. #814's "inherit existing colour"
+        # rule is preserved by gating on a darkness check — a show
+        # already driving non-zero RGB is not clobbered.
+        # `set_fixture_rgb` handles RGB / hybrid / wheel-only dispatch
+        # per the #842 centralization, so a 12-ch wheel-only mover
+        # like movinghead-150w-12ch picks the closest white slot.
+        r_off = ch_map.get("red")
+        g_off = ch_map.get("green")
+        b_off = ch_map.get("blue")
+        cw_off = ch_map.get("color-wheel")
+        cur_r = uni.get_channel(addr + r_off) if r_off is not None else 0
+        cur_g = uni.get_channel(addr + g_off) if g_off is not None else 0
+        cur_b = uni.get_channel(addr + b_off) if b_off is not None else 0
+        cur_wheel = uni.get_channel(addr + cw_off) if cw_off is not None else 0
+        # Dark = RGB sum < 30 AND no explicit wheel-slot pick. The
+        # threshold lets a faint Track-action base wash count as "lit"
+        # so we don't clobber it; cur_wheel != 0 means an upstream
+        # writer already picked a slot, also leave alone.
+        is_dark = (cur_r + cur_g + cur_b) < 30 and cur_wheel == 0
+        if is_dark:
+            # Operator-tunable per fixture (`lampOnR/G/B` on the
+            # fixture record); default white.
+            default_r = int(mover.get("lampOnR", 255) or 255)
+            default_g = int(mover.get("lampOnG", 255) or 255)
+            default_b = int(mover.get("lampOnB", 255) or 255)
+            uni.set_fixture_rgb(
+                addr,
+                max(0, min(255, default_r)),
+                max(0, min(255, default_g)),
+                max(0, min(255, default_b)),
+                profile,
+            )
         # Apply non-pan/tilt/dimmer/RGB/colour-wheel defaults so beam-
         # shaping channels (strobe open, gobo open, prism off, focus
         # mid…) produce a clean visible beam. Pan/tilt are driven live
         # by the engine tick from Remote.aim_stage; RGB / colour-wheel
-        # are inherited per #814.
+        # are handled by the #848 default-RGB block above.
         skip = {"pan", "tilt", "dimmer", "red", "green", "blue", "color-wheel"}
         for ch in prof_info.get("channels", []):
             ch_type = ch.get("type", "")

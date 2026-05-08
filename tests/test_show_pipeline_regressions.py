@@ -218,6 +218,73 @@ def test_840_loop_wrap_no_zero_frame():
             if ch.get("id") != fid]
 
 
+def test_848_invariant_1_default_rgb_on_press_start():
+    """#848 invariant 1 — `_gyro_lights_on` (called pre-CLAIM_ACK on
+    every press-Start) must write a default RGB when the wire is
+    currently dark, so the operator sees the head light up
+    immediately. Pre-fix only the dimmer was written; the lamp gate
+    opened but the LEDs stayed black-commanded ('no lights came on'
+    operator report)."""
+    print("\n-- test_848_invariant_1_default_rgb_on_press_start --")
+    with parent_server.app.test_client() as c:
+        c.post("/api/reset", headers={"X-SlyLED-Confirm": "true"})
+        c.post("/api/dmx/start", json={"protocol": "artnet"})
+        _drain_existing_playback()
+
+        # `generic-dimmer-rgb` (4-ch: dimmer + R/G/B) is in the static
+        # profile catalog and gives us direct RGB bytes to assert.
+        # The 12-ch wheel-only mover would exercise the wheel-slot
+        # path via #842's set_fixture_rgb but verifying component
+        # bytes is the cleaner assertion.
+        r = c.post("/api/fixtures", json={
+            "name": "#848 inv1 mover", "type": "point",
+            "fixtureType": "dmx",
+            "dmxUniverse": 1, "dmxStartAddr": 60,
+            "dmxChannelCount": 4,
+            "dmxProfileId": "generic-dimmer-rgb",
+            "rotation": [0, 0, 0],
+        })
+        fid = r.get_json()["id"]
+
+        # Wire starts dark — confirm the precondition.
+        chans_before = c.get("/api/dmx/monitor/1").get_json()["channels"]
+        prof = parent_server._profile_lib.channel_info("generic-dimmer-rgb") or {}
+        cmap = prof.get("channel_map") or {}
+        r_idx = 60 - 1 + cmap.get("red", 1)
+        g_idx = 60 - 1 + cmap.get("green", 2)
+        b_idx = 60 - 1 + cmap.get("blue", 3)
+
+        _ok(chans_before[r_idx] + chans_before[g_idx] + chans_before[b_idx] < 30,
+            "#848 inv1 precondition: wire is dark before lights_on",
+            f"got R={chans_before[r_idx]} G={chans_before[g_idx]} B={chans_before[b_idx]}")
+
+        # Fire the lamp-on path directly (same call the gyro press-Start
+        # handler makes at line 1553 of parent_server.py).
+        parent_server._gyro_lights_on(fid)
+
+        chans_after = c.get("/api/dmx/monitor/1").get_json()["channels"]
+        rgb_sum = chans_after[r_idx] + chans_after[g_idx] + chans_after[b_idx]
+        _ok(rgb_sum > 30,
+            "#848 inv1 lights_on writes default RGB when wire is dark",
+            f"got R={chans_after[r_idx]} G={chans_after[g_idx]} B={chans_after[b_idx]} "
+            f"(sum={rgb_sum}; default white expected)")
+
+        # Inverse case: pre-set RGB on the wire, run lights_on, assert
+        # the existing colour SURVIVES (#814 inheritance semantic).
+        c.post("/api/dmx/monitor/1/set", json={"channels": [
+            {"addr": r_idx + 1, "value": 200},
+            {"addr": g_idx + 1, "value": 0},
+            {"addr": b_idx + 1, "value": 0},
+        ]})
+        parent_server._gyro_lights_on(fid)
+        chans_after2 = c.get("/api/dmx/monitor/1").get_json()["channels"]
+        _ok(chans_after2[r_idx] >= 180,
+            "#848 inv1 lights_on preserves existing red wash (inherits #814)",
+            f"got R={chans_after2[r_idx]} (expected ~200; pre-existing red kept)")
+
+        c.delete(f"/api/fixtures/{fid}")
+
+
 def test_845_playback_writes_first_frame_under_300ms():
     """#845 sanity: the playback loop produces non-zero output within
     300 ms of go_epoch on a baked DMX fixture. Pre-fix the loop died
@@ -284,6 +351,7 @@ def main():
     print("=== Show pipeline regressions (#858) ===")
     test_835_orphan_track_action_does_not_blackout_dimmer()
     test_840_loop_wrap_no_zero_frame()
+    test_848_invariant_1_default_rgb_on_press_start()
     test_845_playback_writes_first_frame_under_300ms()
     print(f"\n{_passed} assertions passed, {_failed} failed")
     return 0 if _failed == 0 else 1
