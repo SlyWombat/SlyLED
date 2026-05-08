@@ -222,9 +222,19 @@ def run():
             'name': 'Seed LED', 'type': 'linear', 'fixtureType': 'led',
             'strings': [{'leds': 60, 'mm': 3000, 'sdir': 0}],
         }).get_json().get('id')
+        # #837 — figure-eight + spotlight-follow-person now refuse on
+        # mover-less rigs (was: silent fall-through to non-tracking
+        # show). Seed a mover so the live_track preset install path
+        # succeeds in this exhaustive coverage test.
+        seed_mover = c.post('/api/fixtures', json={
+            'name': 'Seed Mover', 'type': 'point', 'fixtureType': 'dmx',
+            'dmxUniverse': 1, 'dmxStartAddr': 100, 'dmxChannelCount': 12,
+            'dmxProfileId': 'movinghead-150w-12ch',
+        }).get_json().get('id')
         c.post('/api/layout', json={'children': [
             {'id': seed_par, 'x': 5000, 'y': 2500, 'z': 3000},
             {'id': seed_led, 'x': 2000, 'y': 4000, 'z': 0},
+            {'id': seed_mover, 'x': 7000, 'y': 2500, 'z': 3000},
         ]})
 
         # List presets — should include new moving-head presets
@@ -238,12 +248,27 @@ def run():
             ok(f'Preset {pid} listed', pid in preset_ids)
 
         # Install each new preset — verify it creates timeline + effects
+        # #837 — live_track themes (figure-eight, spotlight-follow-
+        # person) emit a single Track action on an allPerformers
+        # track and zero spatial effects (the Track action drives the
+        # movers in real-time; there's no spatial-field layer). Pre-
+        # fix figure-eight fell through to non-tracking generation
+        # which DID emit spatial effects, masking the contract. The
+        # effect-count assertion now only applies to non-live_track
+        # themes; live_track themes assert effects=0.
+        live_track_presets = {'figure-eight'}  # spotlight-follow-person not in this list
         for pid in new_presets:
             r = c.post('/api/show/preset', json={'id': pid})
             d = r.get_json()
             ok(f'Install {pid}', r.status_code == 200 and d.get('ok'), d.get('err', ''))
             ok(f'{pid} has timeline', d.get('timelineId') is not None)
-            ok(f'{pid} has effects', d.get('effects', 0) >= 1, f'effects={d.get("effects")}')
+            if pid in live_track_presets:
+                ok(f'{pid} live_track has no spatial effects',
+                   d.get('effects', 0) == 0,
+                   f'effects={d.get("effects")} (expected 0 for live_track)')
+            else:
+                ok(f'{pid} has effects', d.get('effects', 0) >= 1,
+                   f'effects={d.get("effects")}')
 
         # Verify timelines were created
         r = c.get('/api/timelines')
