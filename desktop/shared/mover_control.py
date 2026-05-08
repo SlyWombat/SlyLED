@@ -684,6 +684,15 @@ class MoverControlEngine:
             az_deg = math.degrees(math.atan2(aim_stage[0], aim_stage[1]))
             el_deg = math.degrees(math.atan2(
                 aim_stage[2], math.hypot(aim_stage[0], aim_stage[1])))
+            # #851 — assertions in `sphere.aim_direction` can fire on
+            # boundary az/el; clamp into the assertion's exact accepted
+            # range so a tiny float overshoot doesn't silently drop the
+            # frame. Without this clamp, the AssertionError caught by
+            # the wrapper below would silently freeze panNorm at its
+            # last good value while orient packets keep streaming —
+            # exactly the symptom #851 reports.
+            az_deg = max(-180.0, min(180.0, az_deg))
+            el_deg = max(-90.0, min(90.0, el_deg))
             claim = self._claims.get(mover_id)
             cur_pose = ((int(claim.pan_smooth * 65535),
                           int(claim.tilt_smooth * 65535))
@@ -693,8 +702,15 @@ class MoverControlEngine:
             return ((pose[0] / 65535.0, pose[1] / 65535.0)
                      if pose is not None else (None, None))
         except Exception as e:
-            log.debug("aim_to_pan_tilt: AimSphere failed for mover %s: %s",
-                      mover_id, e)
+            # #851 — was log.debug; promoted to log.warning so a
+            # production silent-failure mode is visible without needing
+            # to re-flash with DEBUG logging enabled. If this fires
+            # repeatedly the orient → panNorm refresh is broken and
+            # panNorm freezes at its last good value — the symptom the
+            # issue describes.
+            log.warning("aim_to_pan_tilt: AimSphere failed for mover %s "
+                         "aim_stage=%s: %s",
+                         mover_id, aim_stage, e)
             return (None, None)
 
     # #784 PR-5 (2026-05-03) — `_get_smart_model` removed. The SMART

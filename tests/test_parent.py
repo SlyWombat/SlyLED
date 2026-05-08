@@ -3544,6 +3544,118 @@ def run():
         if wiz_remote is not None:
             _ps_pb._remotes.remove(wiz_remote.id)
 
+        # ── #851 / #852 — orient → panNorm refresh contract ─────────
+        # Per #852 simulator-coverage policy: every gyro/claim bug
+        # must produce a simulator regression test as part of its
+        # fix. This block exercises the end-to-end orient → claim
+        # state update cycle for the puck-cal-only path that #847
+        # established. The simulator-level test passes pre-#851 fix
+        # (the bug is production-specific — silent assertion in
+        # AimSphere or degenerate cal); the #851 PR adds INFO-level
+        # logging on the silent-failure path so the next operator
+        # session surfaces the underlying cause.
+        # Three contract assertions per #851's acceptance:
+        #   1. Orient input change → claim.panNorm changes
+        #   2. Stable orient → stable panNorm (no IK jitter)
+        #   3. Orient range coverage → panNorm spans non-trivial range
+        from remote_orientation import KIND_PUCK as _KIND_PUCK_851
+
+        # Mover with Home + Secondary + true mover profile.
+        r = c.post('/api/fixtures', json={
+            'name': '#851 Aim-Loop Mover', 'type': 'point',
+            'fixtureType': 'dmx',
+            'dmxUniverse': 1, 'dmxStartAddr': 500,
+            'dmxChannelCount': 12,
+            'dmxProfileId': 'movinghead-150w-12ch',
+            'rotation': [0, 0, 0],
+        })
+        loop_fid = r.get_json().get('id')
+        c.post(f'/api/fixtures/{loop_fid}/home', json={
+            'panDmx16': 32768, 'tiltDmx16': 16384,
+            'secondary': {
+                'panOffsetDmx16': 16384, 'tiltOffsetDmx16': 16384,
+                'panMovedDirection': 'right', 'tiltMovedDirection': 'up',
+            },
+        })
+        _ps_pb._layout.setdefault('children', []).append(
+            {'id': loop_fid, 'x': 0, 'y': 0, 'z': 2000})
+
+        # Puck Remote pre-cal'd against the mover (#847 path).
+        loop_dev = '#851-loop-puck'
+        loop_remote = _ps_pb._remotes.add(
+            name='Loop-test puck', kind=_KIND_PUCK_851, device_id=loop_dev)
+        loop_remote.R_world_to_stage = (1.0, 0.0, 0.0, 0.0)
+        loop_remote.calibrated = True
+        loop_remote.calibrated_at = _time_pb.time()
+        loop_remote.calibrated_against = {'kind': 'mover',
+                                           'objectId': loop_fid}
+        loop_remote.stale_reason = None
+
+        ok_c, _ = _ps_pb._mover_engine.claim(
+            loop_fid, loop_dev, 'Loop-test puck', 'gyro',
+            smoothing=0.15, convention='flat_pitch_yaw')
+        ok('#851 claim acquired', ok_c)
+        _ps_pb._mover_engine.start_stream(loop_fid, loop_dev)
+        loop_claim = _ps_pb._mover_engine._claims.get(loop_fid)
+
+        # Send three distinct orients + tick after each.
+        pan_history = []
+        for (roll, pitch, yaw) in [(0, 0, 0), (45, 30, 60), (-30, -10, -90)]:
+            loop_remote.update_from_euler_deg(roll, pitch, yaw)
+            _ps_pb._mover_engine._tick()
+            pan_history.append(round(loop_claim.pan_smooth, 4))
+
+        # Contract 1: orient varies → panNorm varies.
+        unique_pans = set(pan_history)
+        ok('#851 distinct orients produce distinct panNorm',
+           len(unique_pans) == 3,
+           f'pan_history={pan_history}')
+
+        # Contract 2: stable orient → stable panNorm (no IK jitter).
+        # First converge via 30 ticks at the target orient (smoothing
+        # alpha needs several ticks to settle), then sample over 20
+        # more ticks and assert no further drift. Pre-fix a sticky-IK
+        # bug would still pass the sweep test (#851 contract 3) but
+        # fail jitter — output oscillates around the target.
+        for _ in range(30):
+            loop_remote.update_from_euler_deg(15, 5, 30)
+            _ps_pb._mover_engine._tick()
+        post_converge = loop_claim.pan_smooth
+        for _ in range(20):
+            loop_remote.update_from_euler_deg(15, 5, 30)
+            _ps_pb._mover_engine._tick()
+        post_settle = loop_claim.pan_smooth
+        ok('#851 stable orient → stable panNorm (no jitter)',
+           abs(post_settle - post_converge) < 0.01,
+           f'converged={post_converge} settled={post_settle} '
+           f'drift={abs(post_settle-post_converge)}')
+
+        # Contract 3: range coverage. Sweep yaw -90..90 and verify
+        # pan_smooth spans a non-trivial fraction of [0, 1].
+        sweep_pans = []
+        for yaw in range(-90, 91, 30):
+            # Reset have_pan_tilt so each sample isn't blended with the
+            # last via the smoothing alpha.
+            loop_claim.have_pan_tilt = False
+            loop_remote.update_from_euler_deg(0, 0, yaw)
+            _ps_pb._mover_engine._tick()
+            sweep_pans.append(loop_claim.pan_smooth)
+        spread = max(sweep_pans) - min(sweep_pans)
+        ok('#851 yaw sweep produces > 30% pan range coverage',
+           spread > 0.30,
+           f'spread={spread:.3f} sweep_pans={[round(p,3) for p in sweep_pans]}')
+
+        # Cleanup
+        try:
+            _ps_pb._mover_engine.release(loop_fid, loop_dev)
+        except Exception:
+            pass
+        c.delete(f'/api/fixtures/{loop_fid}')
+        _ps_pb._remotes.remove(loop_remote.id)
+        _ps_pb._layout['children'] = [
+            ch for ch in _ps_pb._layout.get('children', [])
+            if ch.get('id') != loop_fid]
+
         # ── #837 — show-generator: live_track theme refuses with no movers ──
         from show_generator import generate_show as _gs_837
         # Mover-less rig.
