@@ -210,6 +210,10 @@ var
   PortPage: TInputQueryWizardPage;
 
 procedure InitializeWizard;
+var
+  PrevPortFile: String;
+  PrevPort: String;
+  PrevPortInt: Integer;
 begin
   PortPage := CreateInputQueryPage(
     wpSelectComponents,
@@ -221,7 +225,22 @@ begin
     + 'Windows hosts do via Hyper-V), pick another free port like 5600 '
     + 'or 9000.');
   PortPage.Add('Port (1024-65535):', False);
+  // Default to 8080 unless a prior install dropped port.txt in {app}
+  // — on upgrade, Inno Setup resolves {app} from the AppId registry
+  // entry before any page renders, so reading the file here surfaces
+  // the operator's previously-chosen port as the prompt's default and
+  // the operator only has to confirm. Fresh install (no prior port
+  // .txt) keeps 8080.
   PortPage.Values[0] := '8080';
+  PrevPortFile := ExpandConstant('{app}\port.txt');
+  if FileExists(PrevPortFile) then begin
+    if LoadStringFromFile(PrevPortFile, PrevPort) then begin
+      PrevPort := Trim(PrevPort);
+      PrevPortInt := StrToIntDef(PrevPort, -1);
+      if (PrevPortInt >= 1024) and (PrevPortInt <= 65535) then
+        PortPage.Values[0] := IntToStr(PrevPortInt);
+    end;
+  end;
 end;
 
 function GetPort(Param: String): String;
