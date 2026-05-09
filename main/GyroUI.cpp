@@ -129,6 +129,11 @@ static bool s_startHeld = false;
 static bool s_calibHeld = false;
 static bool s_flashHeld = false;
 static bool s_stopHeld  = false;
+// #867 — second hold flag for the new OFF button on the CONFIRM page
+// (page 3). OFF and STOP share the page; tracked separately so the
+// hold-fill animation only paints the button the operator's finger is
+// actually on.
+static bool s_offHeld   = false;
 
 // #774 — calibrate-end debounce. When the finger lifts off the calibrate
 // button we don't fire the END packet immediately; instead we wait
@@ -375,22 +380,46 @@ static void drawColourPage() {
     drawPageDots();
 }
 
-// ── ACTIVE page 2 — Stop ────────────────────────────────────────────────────
+// ── ACTIVE page 3 — Confirm-terminate (OFF / STOP) ──────────────────────────
+// #867 — two-button screen reached from the ACTIVE page swipe. OFF
+// blackouts the claimed head AND releases the claim; STOP releases
+// the claim leaving the head at its last frame. Both buttons are
+// hold-to-action, mirroring the original single-STOP UX so the
+// operator can't terminate by accidental brush.
+static constexpr int16_t CONFIRM_BTN_R = BTN_MAIN_R - 28;  // smaller so two fit
+static constexpr int16_t CONFIRM_OFF_CY  = CY - (CONFIRM_BTN_R + 6);
+static constexpr int16_t CONFIRM_STOP_CY = CY + (CONFIRM_BTN_R + 6);
 
 static void drawStopPage() {
     gyroClearScreen(GC_BLACK);
     drawLiveIndicator();
 
-    // STOP button — brighter when held
-    uint16_t fill = s_stopHeld ? GC_RED : (uint16_t)0x9800u;
-    gyroFillCircle(CX, CY, BTN_MAIN_R, fill);
-    gyroDrawCircle(CX, CY, BTN_MAIN_R, GC_RED);
-    const char* lbl = s_stopHeld ? "HOLD" : "STOP";
-    int16_t tw = (int16_t)(strlen(lbl) * 6 * 2);
-    gyroDrawText(CX - tw / 2, CY - 7, lbl, 2, GC_WHITE);
+    // OFF button (top half) — yellow/amber when idle, red when held.
+    // OFF semantically = "lights out + release"; visually loudest
+    // because it's the operator-visible blackout path.
+    {
+        uint16_t fill = s_offHeld ? GC_RED : (uint16_t)0xFD00u;  // amber
+        gyroFillCircle(CX, CONFIRM_OFF_CY, CONFIRM_BTN_R, fill);
+        gyroDrawCircle(CX, CONFIRM_OFF_CY, CONFIRM_BTN_R, GC_RED);
+        const char* lbl = s_offHeld ? "HOLD" : "OFF";
+        int16_t tw = (int16_t)(strlen(lbl) * 6 * 2);
+        gyroDrawText(CX - tw / 2, CONFIRM_OFF_CY - 7, lbl, 2, GC_BLACK);
+    }
 
-    if (!s_stopHeld)
-        gyroDrawText(26, 180, "Hold to stop", 1, GC_GREY);
+    // STOP button (bottom half) — current colour scheme. Releases
+    // claim only; head holds last frame.
+    {
+        uint16_t fill = s_stopHeld ? GC_RED : (uint16_t)0x9800u;
+        gyroFillCircle(CX, CONFIRM_STOP_CY, CONFIRM_BTN_R, fill);
+        gyroDrawCircle(CX, CONFIRM_STOP_CY, CONFIRM_BTN_R, GC_RED);
+        const char* lbl = s_stopHeld ? "HOLD" : "STOP";
+        int16_t tw = (int16_t)(strlen(lbl) * 6 * 2);
+        gyroDrawText(CX - tw / 2, CONFIRM_STOP_CY - 7, lbl, 2, GC_WHITE);
+    }
+
+    if (!s_offHeld && !s_stopHeld) {
+        gyroDrawText(20, 220, "Hold OFF to blackout, STOP to release", 1, GC_GREY);
+    }
 
     drawPageDots();
 }
@@ -870,11 +899,21 @@ void gyroUIUpdate() {
                 }
             }
         }
-        // Page 3: hold-to-stop
-        if (s_page == 3 && held && hitCircle(tx, ty, CX, CY, BTN_MAIN_R)) {
-            if (!s_stopHeld) {
-                s_stopHeld = true;
-                drawStopPage();
+        // Page 3 (#867): two-button confirm — OFF (top) and STOP
+        // (bottom). Hit-test each button independently so the hold
+        // animation only fills the one the operator's finger is on.
+        // hitCircle is exclusive — one or the other.
+        if (s_page == 3 && held) {
+            if (hitCircle(tx, ty, CX, CONFIRM_OFF_CY, CONFIRM_BTN_R)) {
+                if (!s_offHeld) {
+                    s_offHeld = true;
+                    drawStopPage();
+                }
+            } else if (hitCircle(tx, ty, CX, CONFIRM_STOP_CY, CONFIRM_BTN_R)) {
+                if (!s_stopHeld) {
+                    s_stopHeld = true;
+                    drawStopPage();
+                }
             }
         }
         // Page 4: hold-to-sleep — arc hit test follows the bottom of
@@ -954,16 +993,23 @@ void gyroUIUpdate() {
             }
             drawColourPage();  // restore full page after flash
         }
-        if (s_stopHeld) {
+        if (s_stopHeld || s_offHeld) {
+            // #867 — STOP and OFF share the post-hold state-reset path;
+            // only the wire packet differs. gyroUdpSendOff() releases
+            // the claim with blackout=True (head goes dark);
+            // gyroUdpSendStop() releases without blackout (head holds
+            // last frame).
+            // #825 — both helpers allocate a fresh nonce + arm the
+            // retry slot. UI snaps back to IDLE immediately; the UDP
+            // layer retransmits until CMD_GYRO_STOP_ACK lands or the
+            // retry budget burns. Operator gets a responsive UI;
+            // orphan-claim risk is server-side (60 s stale-release
+            // fallback if all retries fail).
+            bool wasOff = s_offHeld;
             s_stopHeld = false;
-            // #825 — gyroUdpSendStop() now allocates a fresh nonce + arms
-            // the retry slot. UI snaps back to IDLE immediately; the UDP
-            // layer keeps retransmitting until CMD_GYRO_STOP_ACK arrives
-            // or the retry budget burns. Either way the operator sees a
-            // responsive UI; the orphan-claim risk is server-side
-            // (handled by the 60 s stale-release fallback if all
-            // retries somehow fail).
-            gyroUdpSendStop();
+            s_offHeld  = false;
+            if (wasOff) gyroUdpSendOff();
+            else        gyroUdpSendStop();
             gyroUdpSetStreaming(false, 0);
             s_state = UIState::IDLE;
             s_claimNonce = 0;

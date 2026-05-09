@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.112"
+VERSION = "1.7.114"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -126,6 +126,7 @@ CMD_GYRO_CLAIM_ACK     = 0x6A  # parent→gyro: claim established — {nonce(2),
 CMD_GYRO_STOP_ACK      = 0x6B  # parent→gyro: stop confirmed — {nonce(2)} (#825).
 CMD_GYRO_HEARTBEAT_REP = 0x6C  # gyro→parent: heartbeat reply — {uiState(1), claimNonce(2), seq(2)} (#825).
 CMD_AUTOBRI_PUSH       = 0x6D  # phone→parent: Android Auto Brightness master push (#861) — {master(1), flags(1), seq(1)}. 20 Hz fire-and-forget UDP; orchestrator coalesces by overwriting `_settings["globalBrightness"]` per packet. Replaces the prior HTTP /api/brightness fast path.
+CMD_GYRO_OFF           = 0x6E  # gyro→parent: explicit press-OFF (#867) — same nonce shape as CMD_GYRO_STOP but server releases the claim with blackout=True so the head goes dark. STOP leaves head at last frame; OFF blackouts the head AND releases. ACK reuses CMD_GYRO_STOP_ACK.
 
 # #825 — uiState codes carried in CMD_GYRO_HEARTBEAT_REP.
 GYRO_UI_IDLE        = 0
@@ -1553,6 +1554,68 @@ def _udp_listener():
                     _send_gyro_stop_ack(ip, stop_nonce)
             except Exception as e:
                 log.error("GYRO_STOP handler failed: %s", e, exc_info=True)
+        elif cmd == CMD_GYRO_OFF:
+            # #867 — discrete press-OFF: same payload shape and ACK as
+            # CMD_GYRO_STOP but the server calls release(blackout=True)
+            # so the claimed mover goes dark before the claim returns
+            # to whatever was driving it before the gyro session. STOP
+            # is "I'm done driving, hand control back at current
+            # frame"; OFF is "I'm done driving AND turn the head off
+            # right now." The puck advances UI on matching STOP_ACK.
+            off_nonce = None
+            if len(data) >= 10:
+                try:
+                    (off_nonce,) = struct.unpack_from("<H", data, 8)
+                except Exception:
+                    off_nonce = None
+            did_off = f"gyro-{ip}"
+            _gyro_touch_remote(did_off)
+            try:
+                # Idempotent dedupe under the same handshake state as
+                # STOP — nonce-collision across STOP/OFF is harmless
+                # because both paths converge on STOP_ACK and the
+                # claim is gone after either. Re-emit on ACK loss
+                # just replays the cached ACK.
+                with _gyro_handshake_lock:
+                    st_hs = _gyro_handshake.setdefault(did_off, {})
+                    prev_nonce = st_hs.get("stop_nonce")
+                    prev_ts = st_hs.get("stop_ack_ts") or 0
+                    is_replay = (
+                        off_nonce is not None
+                        and prev_nonce == off_nonce
+                        and (time.time() - prev_ts) < GYRO_HANDSHAKE_DEDUPE_S
+                    )
+                if is_replay:
+                    log.debug("GYRO_OFF replay from %s nonce=%d — re-sending ACK",
+                              ip, off_nonce)
+                    if off_nonce is not None:
+                        _send_gyro_stop_ack(ip, off_nonce)
+                    continue
+                log.info("GYRO_OFF from %s nonce=%s — releasing claim (blackout=True)",
+                          ip, off_nonce)
+                if _mover_engine:
+                    gf_off = _gyro_fixture_for_ip(ip)
+                    if gf_off and gf_off.get("assignedMoverId") is not None:
+                        _mover_engine.release(gf_off["assignedMoverId"],
+                                              did_off, blackout=True)
+                remote_off = _remotes.by_device(did_off)
+                if remote_off is not None:
+                    remote_off.end_session()
+                    try:
+                        _remotes.save()
+                    except Exception as e:
+                        log.error("remotes.save() during off failed: %s", e)
+                with _gyro_handshake_lock:
+                    st_hs = _gyro_handshake.setdefault(did_off, {})
+                    st_hs["start_nonce"] = None
+                    st_hs["mover_id"] = None
+                    if off_nonce is not None:
+                        st_hs["stop_nonce"] = off_nonce
+                        st_hs["stop_ack_ts"] = time.time()
+                if off_nonce is not None:
+                    _send_gyro_stop_ack(ip, off_nonce)
+            except Exception as e:
+                log.error("GYRO_OFF handler failed: %s", e, exc_info=True)
         elif cmd == CMD_GYRO_START:
             # #813 §4 — explicit press-START. Server-side handshake:
             # resolve fixture+mover, claim, start stream, lights on
@@ -18966,6 +19029,8 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
 
 
 

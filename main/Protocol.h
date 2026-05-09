@@ -52,6 +52,7 @@ constexpr uint8_t CMD_GYRO_CLAIM_ACK     = 0x6A; // parent→gyro: claim establi
 constexpr uint8_t CMD_GYRO_STOP_ACK      = 0x6B; // parent→gyro: stop confirmed (#825) — { nonce(2) }. Puck stops retrying STOP on matching nonce.
 constexpr uint8_t CMD_GYRO_HEARTBEAT_REP = 0x6C; // gyro→parent: heartbeat reply (#825) — { uiState(1), claimNonce(2), seq(2) }. 2 s cadence; reconciles divergent claim state and bootstraps after orchestrator restart.
 constexpr uint8_t CMD_AUTOBRI_PUSH       = 0x6D; // phone→parent: Android Auto Brightness master push (#861) — { master(1), flags(1), seq(1) }. 20 Hz fire-and-forget; orchestrator coalesces by overwriting `_settings["globalBrightness"]` per packet. Replaces the prior HTTP `POST /api/brightness` fast path which suffered TCP retransmit / connection-pool churn at audio rate.
+constexpr uint8_t CMD_GYRO_OFF           = 0x6E; // gyro→parent: explicit press-OFF (#867) — same nonce shape as CMD_GYRO_STOP but server releases the claim with blackout=True so the head goes dark. STOP releases the claim leaving the head at its last frame; OFF releases AND blackouts. ACK reuses CMD_GYRO_STOP_ACK with the matching nonce.
 
 // ── Action type codes ─────────────────────────────────────────────────────────
 // (uint8_t — avoids Mbed prototype-generator issues with enums)

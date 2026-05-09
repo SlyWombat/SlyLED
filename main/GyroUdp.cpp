@@ -68,6 +68,12 @@ static uint16_t s_pendingStopNonce  = 0;
 static uint32_t s_pendingStopLastMs = 0;
 static uint8_t  s_pendingStopTries  = 0;
 static bool     s_stopAcked         = false;
+// #867 — track whether the pending termination is a STOP or OFF so
+// retransmits resend the correct cmd byte. STOP and OFF share the
+// same retry slot (operator can't tap both concurrently); the
+// orchestrator ACKs both via CMD_GYRO_STOP_ACK with the matching
+// nonce, so the wait/match path is identical.
+static uint8_t  s_pendingStopCmd    = CMD_GYRO_STOP;
 
 // HB_REP advertised state (set by UI via gyroUdpSetUiState; sent every 2 s).
 static uint8_t  s_hbUiState     = 0;     // GYRO_UI_IDLE
@@ -174,11 +180,15 @@ static void txStartFrame(uint16_t nonce) {
     cmdUDP.endPacket();
 }
 
-static void txStopFrame(uint16_t nonce) {
+static void txTermFrame(uint8_t cmd, uint16_t nonce) {
+    // #867 — single low-level frame for STOP / OFF. Cmd byte switches
+    // between CMD_GYRO_STOP and CMD_GYRO_OFF; payload shape is
+    // identical (nonce-only). Retransmit path reads s_pendingStopCmd
+    // so OFF retries don't degrade to STOP on the wire.
     UdpHeader hdr;
     hdr.magic   = UDP_MAGIC;
     hdr.version = UDP_VERSION;
-    hdr.cmd     = CMD_GYRO_STOP;
+    hdr.cmd     = cmd;
     hdr.epoch   = (uint32_t)currentEpoch();
     GyroStartStopPayload p;
     p.nonce = nonce;
@@ -188,6 +198,10 @@ static void txStopFrame(uint16_t nonce) {
     cmdUDP.beginPacket(s_parentIP, UDP_PORT);
     cmdUDP.write(buf, sizeof(buf));
     cmdUDP.endPacket();
+}
+
+static void txStopFrame(uint16_t nonce) {
+    txTermFrame(CMD_GYRO_STOP, nonce);
 }
 
 static void txHeartbeatRep() {
@@ -236,12 +250,14 @@ void gyroUdpUpdate() {
     }
 
     // #825 — STOP retransmission. Same shape as START.
+    // #867 — extended to also retransmit OFF; cmd byte read from
+    // s_pendingStopCmd so an OFF stays OFF on retry.
     if (s_pendingStopNonce != 0
         && (now - s_pendingStopLastMs) >= GYRO_RETRY_INTERVAL_MS) {
         if (s_pendingStopTries < GYRO_RETRY_MAX) {
             s_pendingStopTries++;
             s_pendingStopLastMs = now;
-            txStopFrame(s_pendingStopNonce);
+            txTermFrame(s_pendingStopCmd, s_pendingStopNonce);
         }
     }
 
@@ -454,9 +470,26 @@ void gyroUdpSendStop() {
     s_pendingStopNonce  = s_stopNonceCounter;
     s_pendingStopLastMs = (uint32_t)millis();
     s_pendingStopTries  = 1;
+    s_pendingStopCmd    = CMD_GYRO_STOP;
     s_stopAcked         = false;
-    txStopFrame(s_pendingStopNonce);
+    txTermFrame(CMD_GYRO_STOP, s_pendingStopNonce);
     if (Serial) Serial.printf("[GyroUDP] STOP nonce=%u\n", s_pendingStopNonce);
+}
+
+void gyroUdpSendOff() {
+    // #867 — discrete CMD_GYRO_OFF packet. Same nonce machinery as
+    // STOP — the server ACKs via CMD_GYRO_STOP_ACK with the matching
+    // nonce — only difference is the orchestrator releases the claim
+    // with blackout=True so the head goes dark.
+    static uint16_t s_offNonceCounter = 0;
+    if (++s_offNonceCounter == 0) s_offNonceCounter = 1;
+    s_pendingStopNonce  = s_offNonceCounter;
+    s_pendingStopLastMs = (uint32_t)millis();
+    s_pendingStopTries  = 1;
+    s_pendingStopCmd    = CMD_GYRO_OFF;
+    s_stopAcked         = false;
+    txTermFrame(CMD_GYRO_OFF, s_pendingStopNonce);
+    if (Serial) Serial.printf("[GyroUDP] OFF nonce=%u\n", s_pendingStopNonce);
 }
 
 uint16_t gyroUdpSendStartWithNonce(uint16_t nonce) {

@@ -53,6 +53,12 @@ void gyroUdpSetStreaming(bool enabled, uint8_t fps = 0);
 // no CMD_GYRO_STOP_ACK arrives within GYRO_RETRY_INTERVAL_MS.
 void gyroUdpSendStop();
 
+// #867 — discrete CMD_GYRO_OFF: shares the pending-stop retry slot with
+// gyroUdpSendStop() (same nonce machinery, same CMD_GYRO_STOP_ACK), only
+// difference on the wire is the cmd byte. Server-side: release claim
+// with blackout=True so the head goes dark.
+void gyroUdpSendOff();
+
 // Send CMD_GYRO_COLOR (0x63) to parent — colour preset or flash pulse.
 // flags bit0 = flash (brief full-brightness pulse)
 void gyroUdpSendColor(uint8_t r, uint8_t g, uint8_t b, uint8_t flags);
