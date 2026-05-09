@@ -38,9 +38,34 @@ except ImportError:
     _TRAY = False
 
 
+def _installed_port_default():
+    """Read the operator-chosen port from `port.txt` next to the running
+    executable. The Windows installer (installer.iss) drops this file
+    after the wizard's port-prompt page so a direct double-click of
+    SlyLED.exe (no shortcut, no CLI args) still binds the port the
+    operator picked + the firewall allows. Falls back to 8080 when the
+    file isn't present (dev runs, source launches, fresh extracts).
+    """
+    try:
+        if getattr(sys, "frozen", False):
+            base = os.path.dirname(sys.executable)
+        else:
+            base = os.path.dirname(os.path.abspath(__file__))
+        path = os.path.join(base, "port.txt")
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as fh:
+                txt = fh.read().strip()
+            n = int(txt)
+            if 1024 <= n <= 65535:
+                return n
+    except Exception:
+        pass
+    return 8080
+
+
 def _parse():
     p = argparse.ArgumentParser(description="SlyLED Parent")
-    p.add_argument("--port",       type=int, default=8080)
+    p.add_argument("--port",       type=int, default=_installed_port_default())
     p.add_argument("--no-browser", action="store_true")
     return p.parse_args()
 

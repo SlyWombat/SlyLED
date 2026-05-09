@@ -3,7 +3,7 @@
 ; Or:    run build.bat — it calls iscc automatically if available.
 
 #define AppName      "SlyLED Orchestrator"
-#define AppVersion   "1.7.106"
+#define AppVersion   "1.7.107"
 #define AppPublisher "Electric RV Corporation"
 #define AppExeName   "SlyLED.exe"
 ; Unique GUID for this app — keep fixed across releases so updates overwrite
@@ -83,44 +83,149 @@ Name: "startuprun";  Description: "Start SlyLED when &Windows starts (runs minim
 Source: "dist\SlyLED.exe"; DestDir: "{app}"; Flags: ignoreversion; Components: core
 
 [Icons]
+; Every launcher passes the operator-chosen --port so all entry points
+; (Start menu, Desktop, Startup) bind to the port the firewall allows.
+; If the operator double-clicks SlyLED.exe directly without a shortcut,
+; main.py's port.txt fallback (dropped in {app}) honours the same value.
+;
 ; Start menu
-Name: "{group}\{#AppName}";          Filename: "{app}\{#AppExeName}"
+Name: "{group}\{#AppName}";          Filename: "{app}\{#AppExeName}"; Parameters: "--port {code:GetPort}"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 
 ; Desktop shortcut (optional)
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Parameters: "--port {code:GetPort}"; Tasks: desktopicon
 
 ; Windows startup (optional) — pass --no-browser so it doesn't open a tab every boot
-Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Parameters: "--no-browser"; Tasks: startuprun
+Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Parameters: "--port {code:GetPort} --no-browser"; Tasks: startuprun
 
 [Run]
-; Launch after install (skipped in silent mode)
+; Launch after install (skipped in silent mode). The port the operator
+; chose on the wizard's port-prompt page is passed as --port so the
+; orchestrator binds to the same port the firewall rule allows. Direct
+; double-click of SlyLED.exe (no shortcut) still uses --port via the
+; port.txt drop in {app} (read by main.py at startup).
 Filename: "{app}\{#AppExeName}"; \
+  Parameters: "--port {code:GetPort}"; \
   Description: "Launch {#AppName}"; \
   Flags: nowait postinstall skipifsilent
 
-; Add Windows Firewall inbound rules so children (on WiFi) can reach this PC
+; ── Windows Firewall inbound rules ──────────────────────────────────────
+; All five ports must be reachable from the LAN for the orchestrator to
+; talk to its children + DMX nodes:
+;   - HTTP/SPA: operator-chosen TCP port (default 8080) — browser + Android.
+;   - UDP 4210: child performer protocol (PING/PONG, ACTION, gyro orient).
+;   - UDP 4211: Android Auto Brightness UDP push (#861 — replaced the
+;     HTTP fast path that contended with the playback loop).
+;   - UDP 5568: sACN / E1.31 (DMX-over-IP, alternative to Art-Net).
+;   - UDP 6454: Art-Net (DMX bridge replies always come back here per
+;     reference_artnet_reply_port — discovery sockets must bind 6454 or
+;     replies are lost).
+; Rule names are fixed (don't include the port) so uninstall can delete
+; them without knowing what port the operator picked.
 Filename: "netsh"; \
-  Parameters: "advfirewall firewall add rule name=""SlyLED UDP 4210"" dir=in action=allow protocol=UDP localport=4210 description=""SlyLED child discovery"""; \
-  Flags: runhidden waituntilterminated; StatusMsg: "Configuring firewall (UDP 4210)..."
+  Parameters: "advfirewall firewall add rule name=""SlyLED HTTP"" dir=in action=allow protocol=TCP localport={code:GetPort} description=""SlyLED orchestrator HTTP/SPA"""; \
+  Flags: runhidden waituntilterminated; StatusMsg: "Configuring firewall (HTTP)..."
 Filename: "netsh"; \
-  Parameters: "advfirewall firewall add rule name=""SlyLED HTTP 8080"" dir=in action=allow protocol=TCP localport=8080 description=""SlyLED web UI"""; \
-  Flags: runhidden waituntilterminated; StatusMsg: "Configuring firewall (TCP 8080)..."
+  Parameters: "advfirewall firewall add rule name=""SlyLED Children"" dir=in action=allow protocol=UDP localport=4210 description=""SlyLED child performer protocol (PING/PONG/ACTION/GYRO)"""; \
+  Flags: runhidden waituntilterminated; StatusMsg: "Configuring firewall (UDP 4210 children)..."
+Filename: "netsh"; \
+  Parameters: "advfirewall firewall add rule name=""SlyLED Auto Brightness"" dir=in action=allow protocol=UDP localport=4211 description=""SlyLED Android Auto Brightness UDP push"""; \
+  Flags: runhidden waituntilterminated; StatusMsg: "Configuring firewall (UDP 4211 brightness)..."
+Filename: "netsh"; \
+  Parameters: "advfirewall firewall add rule name=""SlyLED sACN"" dir=in action=allow protocol=UDP localport=5568 description=""SlyLED sACN / E1.31 (DMX-over-IP)"""; \
+  Flags: runhidden waituntilterminated; StatusMsg: "Configuring firewall (UDP 5568 sACN)..."
+Filename: "netsh"; \
+  Parameters: "advfirewall firewall add rule name=""SlyLED Art-Net"" dir=in action=allow protocol=UDP localport=6454 description=""SlyLED Art-Net (DMX bridge replies)"""; \
+  Flags: runhidden waituntilterminated; StatusMsg: "Configuring firewall (UDP 6454 Art-Net)..."
 
 [UninstallRun]
 ; Kill any running instance before uninstalling
 Filename: "taskkill"; Parameters: "/f /im SlyLED.exe"; Flags: runhidden; RunOnceId: "KillSlyLED"
 
-
-; Remove firewall rules
-Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED UDP 4210"""; Flags: runhidden; RunOnceId: "FwUDP4210"
-Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED HTTP 8080"""; Flags: runhidden; RunOnceId: "FwTCP8080"
+; Remove firewall rules. Rule names match the [Run] block exactly so
+; netsh finds + deletes them regardless of which port the operator
+; picked at install time.
+Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED HTTP"""; Flags: runhidden; RunOnceId: "FwHTTP"
+Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED Children"""; Flags: runhidden; RunOnceId: "FwChildren"
+Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED Auto Brightness"""; Flags: runhidden; RunOnceId: "FwAutoBri"
+Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED sACN"""; Flags: runhidden; RunOnceId: "FwSACN"
+Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED Art-Net"""; Flags: runhidden; RunOnceId: "FwArtNet"
+; Legacy rule names from pre-v1.7.107 installs — clean up so they don't
+; leak across upgrades that change the rule taxonomy.
+Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED UDP 4210"""; Flags: runhidden; RunOnceId: "FwLegacyUDP4210"
+Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED HTTP 8080"""; Flags: runhidden; RunOnceId: "FwLegacyHTTP8080"
 
 [UninstallDelete]
 ; Remove the install directory if it's empty after uninstall
 Type: dirifempty; Name: "{app}"
 
 [Code]
+// ── Port-prompt wizard page ─────────────────────────────────────────────
+// Operator picks the HTTP/SPA port at install time. Default 8080 — but
+// some hosts have 8080 reserved by Hyper-V's dynamic port pool (per
+// reference_orchestrator_ports memory: "8080 blocked on this machine"),
+// so a one-time prompt at install lets the operator pick a free one
+// (5600, 8090, 9000, etc.) without editing config files post-install.
+//
+// The chosen port flows through to:
+//   * launcher Parameters: "--port {code:GetPort}" on every shortcut
+//   * post-install Run line that opens the orchestrator
+//   * netsh firewall TCP rule's localport=
+//   * a port.txt drop in {app} so direct double-clicks of SlyLED.exe
+//     (without a shortcut) honour the same port via main.py fallback
+var
+  PortPage: TInputQueryWizardPage;
+
+procedure InitializeWizard;
+begin
+  PortPage := CreateInputQueryPage(
+    wpSelectComponents,
+    'Network Port',
+    'Choose the TCP port the orchestrator listens on',
+    'SlyLED''s web UI binds this port. Browsers and the Android app '
+    + 'connect to http://<this-pc>:<port>/. Pick anything from 1024 to '
+    + '65535 — 8080 is the default. If your machine reserves 8080 (some '
+    + 'Windows hosts do via Hyper-V), pick another free port like 5600 '
+    + 'or 9000.');
+  PortPage.Add('Port (1024-65535):', False);
+  PortPage.Values[0] := '8080';
+end;
+
+function GetPort(Param: String): String;
+begin
+  // {code:GetPort} substitution called from [Run] / [Icons] / firewall
+  // rule. Returns the operator's chosen value or 8080 if the wizard
+  // page wasn't shown (silent install / unattended).
+  if PortPage = nil then
+    Result := '8080'
+  else begin
+    Result := Trim(PortPage.Values[0]);
+    if Result = '' then Result := '8080';
+  end;
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  PortVal: Integer;
+  PortStr: String;
+begin
+  Result := True;
+  if (PortPage <> nil) and (CurPageID = PortPage.ID) then begin
+    PortStr := Trim(PortPage.Values[0]);
+    if PortStr = '' then begin
+      MsgBox('Enter a port number (1024-65535).', mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
+    PortVal := StrToIntDef(PortStr, -1);
+    if (PortVal < 1024) or (PortVal > 65535) then begin
+      MsgBox('Port must be a number between 1024 and 65535.', mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
+  end;
+end;
+
 // #598 — drop a marker file if the user ticked the depth component.
 // The orchestrator reads this on first launch and kicks off the
 // install in the background so the user sees progress through the
@@ -128,6 +233,7 @@ Type: dirifempty; Name: "{app}"
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   MarkerFile: String;
+  PortFile: String;
 begin
   if CurStep = ssPostInstall then begin
     if WizardIsComponentSelected('depth') then begin
@@ -140,6 +246,11 @@ begin
       MarkerFile := ExpandConstant('{app}\ollama.install-requested');
       SaveStringToFile(MarkerFile, '1', False);
     end;
+    // Drop port.txt next to SlyLED.exe so a direct double-click of the
+    // exe (no shortcut) still binds the operator-chosen port. main.py
+    // reads this file when --port is not on the command line.
+    PortFile := ExpandConstant('{app}\port.txt');
+    SaveStringToFile(PortFile, GetPort(''), False);
   end;
 end;
 
