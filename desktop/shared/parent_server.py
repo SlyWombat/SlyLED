@@ -12251,7 +12251,29 @@ def _aim_wizard_compute(poses):
                        "and make sure pitch and yaw are perpendicular.")}
 
     forward_local = (fwd[0] / fwd_mag, fwd[1] / fwd_mag, fwd[2] / fwd_mag)
-    up_local      = yaw_axis
+    # #826 — `up_local` was previously `yaw_axis`, but yaw_axis has
+    # ambiguous sign: when the operator yaws CW vs CCW for "stage-LEFT"
+    # the extracted positive-sense axis flips, and a `up_local` anti-
+    # parallel to the operator's true body-up makes calibrate insert a
+    # 180° flip in `R_world_to_stage` that cancels the yaw correction.
+    # Empirical: aim_stage.x came out -0.5 (stage-RIGHT) for both
+    # gesture directions even though the wizard claimed to derive
+    # correct axes (operator comment 2026-05-09 + roundtrip test). The
+    # fix is to derive up by enforcing right-handed chirality against
+    # the unambiguous pitch_axis: `cross(forward, pitch_axis)` always
+    # picks the body-up direction that makes (forward, up, -pitch_axis)
+    # a right-handed triple, independent of yaw direction.
+    up_raw = _cross(forward_local, pitch_axis)
+    up_mag = _norm(up_raw)
+    if up_mag < 1e-6:
+        # Pitch and forward are parallel — shouldn't happen because
+        # forward = cross(yaw, pitch) is by construction perpendicular
+        # to pitch. Surface as degenerate axes if it does.
+        return None, None, {
+            "err": "degenerate_axes",
+            "detail": ("Wizard math produced parallel forward and "
+                       "pitch axes — please retry the wizard.")}
+    up_local = (up_raw[0] / up_mag, up_raw[1] / up_mag, up_raw[2] / up_mag)
 
     # Optional roll sanity check: roll axis should be ~co-linear with
     # forward_local. |dot| > 0.85 → frame is orthogonal as expected.

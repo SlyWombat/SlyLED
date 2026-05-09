@@ -626,6 +626,212 @@ def test_phone_calibrate_with_nonidentity_quat_identity_delta_aims_at_target():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# O. #826 EMPIRICAL AIM-AXIS WIZARD — round-trip property cells.
+#
+# These cells are the regression gate the issue spec requires: synthesize
+# three operator pose quats per a given grip, feed them through the live
+# `/api/remotes/aim-wizard` endpoint, build a Remote with the derived
+# `forward_local` / `up_local`, calibrate against the same target the
+# operator was aiming at, then replay each pose as a live orient and
+# assert `aim_stage` lands in the operator's intended stage direction.
+#
+# Why this matters: the wizard's job is to make the operator's gesture
+# produce the head movement they intended. That's a round-trip property
+# the previous test_parent shallow check (unit + orthogonal axes) did not
+# cover. Pre-#826-fix the math derived `up_local = yaw_axis`, which
+# carried sign ambiguity from the operator's yaw direction and flipped
+# the live aim_stage 180° via R_world_to_stage. Cells below failed; the
+# fix (`up_local = cross(forward, pitch_axis)` for right-handed body
+# frame) flipped them green.
+
+def _wizard_run(name, q_neutral, q_pitch, q_yaw):
+    """Drive the live wizard endpoint and return (forward_local, up_local).
+
+    Uses the Flask test_client so the test exercises the same code path
+    the Android dialog hits (no in-process refactoring of `_aim_wizard
+    _compute`); a regression in either the route or the math surfaces
+    here."""
+    import os as _os, sys as _sys
+    _sys.path.insert(
+        0, _os.path.join(_os.path.dirname(__file__),
+                          "..", "desktop", "shared"))
+    import parent_server as _ps
+    with _ps.app.test_client() as c:
+        c.post("/api/reset", headers={"X-SlyLED-Confirm": "true"})
+        r = c.post("/api/remotes/aim-wizard", json={
+            "deviceId": f"contract-{name}",
+            "poses": [
+                {"role": "neutral",       "quat": list(q_neutral)},
+                {"role": "pitch_forward", "quat": list(q_pitch)},
+                {"role": "yaw_left",      "quat": list(q_yaw)},
+            ],
+        })
+        body = r.get_json()
+        if r.status_code != 200 or not body.get("ok"):
+            raise AssertionError(f"wizard failed: {body}")
+        return tuple(body["forwardLocal"]), tuple(body["upLocal"])
+
+
+def _wizard_remote(name, q_neutral, q_pitch, q_yaw,
+                   target_aim_stage=(0.0, 1.0, 0.0)):
+    """Run wizard, then build + calibrate a phone Remote."""
+    fwd, up = _wizard_run(name, q_neutral, q_pitch, q_yaw)
+    r = Remote(id=826, kind=KIND_PHONE,
+                forward_local=fwd, up_local=up)
+    r.convention = OrientConvention.FLAT_PITCH_YAW
+    r.calibrate(target_aim_stage=target_aim_stage, quat=q_neutral)
+    return r, fwd, up
+
+
+def test_wizard_portrait_cw_yaw_round_trip():
+    """Operator in portrait grip yaws CW from above for stage-LEFT
+    intent (= rotation around body +Z by NEGATIVE angle). The wizard
+    should derive axes such that replaying that gesture produces
+    aim_stage with x > +0.3 (stage-LEFT per CLAUDE convention)."""
+    qn = (1.0, 0.0, 0.0, 0.0)
+    qp = quat_from_axis_angle((1.0, 0.0, 0.0), -math.radians(30))
+    qy = quat_from_axis_angle((0.0, 0.0, 1.0), -math.radians(30))
+    r, fwd, up = _wizard_remote("portrait-cw", qn, qp, qy)
+    print(f"      wizard fwd={tuple(round(v,2) for v in fwd)} "
+          f"up={tuple(round(v,2) for v in up)}")
+    r.update_from_quat(qy)
+    print(f"      yaw_left replay aim_stage = "
+          f"{tuple(round(v,3) for v in r.aim_stage)}")
+    _assert(r.aim_stage[0] > 0.3,
+            f"portrait CW-yaw round-trip → aim_stage.x > +0.3 "
+            f"(got {r.aim_stage[0]:.3f})")
+    _assert(r.aim_stage[1] > 0.5,
+            f"portrait CW-yaw → aim_stage.y > +0.5 "
+            f"(got {r.aim_stage[1]:.3f})")
+
+
+def test_wizard_portrait_ccw_yaw_round_trip():
+    """Same operator, opposite yaw direction (CCW from above = positive
+    around body +Z). Wizard's chirality fix means the SAME gesture
+    replayed lands at the same stage-LEFT direction even though the
+    extracted yaw_axis sign is flipped — the round-trip is preserved
+    regardless of yaw-direction convention. This is the case the
+    pre-fix wizard failed."""
+    qn = (1.0, 0.0, 0.0, 0.0)
+    qp = quat_from_axis_angle((1.0, 0.0, 0.0), -math.radians(30))
+    qy = quat_from_axis_angle((0.0, 0.0, 1.0), +math.radians(30))
+    r, fwd, up = _wizard_remote("portrait-ccw", qn, qp, qy)
+    print(f"      wizard fwd={tuple(round(v,2) for v in fwd)} "
+          f"up={tuple(round(v,2) for v in up)}")
+    r.update_from_quat(qy)
+    print(f"      yaw_left replay aim_stage = "
+          f"{tuple(round(v,3) for v in r.aim_stage)}")
+    _assert(r.aim_stage[0] > 0.3,
+            f"portrait CCW-yaw round-trip → aim_stage.x > +0.3 "
+            f"(got {r.aim_stage[0]:.3f})")
+    _assert(r.aim_stage[1] > 0.5,
+            f"portrait CCW-yaw → aim_stage.y > +0.5 "
+            f"(got {r.aim_stage[1]:.3f})")
+
+
+def test_wizard_portrait_pitch_forward_tilts_down():
+    """Pitch gesture's stage outcome is unambiguous (tilt DOWN).
+    Replay should give aim_stage.z < -0.3."""
+    qn = (1.0, 0.0, 0.0, 0.0)
+    qp = quat_from_axis_angle((1.0, 0.0, 0.0), -math.radians(30))
+    qy = quat_from_axis_angle((0.0, 0.0, 1.0), -math.radians(30))
+    r, _, _ = _wizard_remote("portrait-pitch", qn, qp, qy)
+    r.update_from_quat(qp)
+    print(f"      pitch_fwd replay aim_stage = "
+          f"{tuple(round(v,3) for v in r.aim_stage)}")
+    _assert(r.aim_stage[2] < -0.3,
+            f"wizard pitch_fwd → aim_stage.z < -0.3 "
+            f"(got {r.aim_stage[2]:.3f})")
+
+
+def test_wizard_neutral_replay_lands_at_calibrate_target():
+    """Replaying Q_neutral as a live orient should aim_stage at the
+    calibration target (0,1,0) within 1e-3. This is cell N from the
+    legacy matrix, retargeted at the wizard path."""
+    qn = (1.0, 0.0, 0.0, 0.0)
+    qp = quat_from_axis_angle((1.0, 0.0, 0.0), -math.radians(30))
+    qy = quat_from_axis_angle((0.0, 0.0, 1.0), -math.radians(30))
+    r, _, _ = _wizard_remote("portrait-neutral", qn, qp, qy)
+    r.update_from_quat(qn)
+    for i, (axis, want) in enumerate(zip("xyz", (0.0, 1.0, 0.0))):
+        _assert(_close(r.aim_stage[i], want, tol=1e-3),
+                f"wizard neutral replay → aim_stage.{axis}={want} "
+                f"(got {r.aim_stage[i]:.4f})")
+
+
+def test_wizard_landscape_grip_round_trip():
+    """Landscape grip: phone held with long edge horizontal, body +X
+    is the pointer (right edge of phone aims at stage), body +Y is
+    sky-up, body +Z is screen-out (toward operator). At neutral the
+    body→world quat maps body +X to stage +Y; that's a 90° CCW
+    rotation around stage +Z.
+
+    Pitch fwd: rotation around body +Y by POSITIVE 30°. Right-hand
+    rule on +Y axis by +30° takes (1,0,0) → (cos30, 0, -sin30) — x
+    stays, z goes negative = pointer tips down. That's pitch fwd in
+    landscape.
+
+    Yaw to stage-LEFT: rotation around body +Z (screen-out) by
+    NEGATIVE angle = CW from above when looking from operator-side
+    of phone. Same chirality logic as the portrait CW-yaw case: the
+    wizard's right-handed `up_local` derivation locks the round-trip
+    regardless of the operator's yaw-direction interpretation."""
+    q_n = quat_from_axis_angle((0.0, 0.0, 1.0), math.radians(90))
+    q_pitch_body = quat_from_axis_angle((0.0, 1.0, 0.0),
+                                          +math.radians(30))
+    q_p = quat_mul(q_n, q_pitch_body)
+    q_yaw_body = quat_from_axis_angle((0.0, 0.0, 1.0),
+                                        -math.radians(30))
+    q_y = quat_mul(q_n, q_yaw_body)
+    r, fwd, up = _wizard_remote("landscape", q_n, q_p, q_y)
+    print(f"      landscape fwd={tuple(round(v,2) for v in fwd)} "
+          f"up={tuple(round(v,2) for v in up)}")
+    # Pitch round-trip: aim_stage.z < -0.3 (tilt DOWN).
+    r.update_from_quat(q_p)
+    print(f"      landscape pitch_fwd aim_stage = "
+          f"{tuple(round(v,3) for v in r.aim_stage)}")
+    _assert(r.aim_stage[2] < -0.3,
+            f"landscape pitch_fwd → aim_stage.z < -0.3 "
+            f"(got {r.aim_stage[2]:.3f})")
+    # Yaw round-trip: aim_stage.x > +0.3 (pan stage-LEFT).
+    r.update_from_quat(q_y)
+    print(f"      landscape yaw_left aim_stage = "
+          f"{tuple(round(v,3) for v in r.aim_stage)}")
+    _assert(r.aim_stage[0] > 0.3,
+            f"landscape yaw_left → aim_stage.x > +0.3 "
+            f"(got {r.aim_stage[0]:.3f})")
+
+
+def test_wizard_orthonormal_axes():
+    """Hard-fast invariants on the wizard output regardless of grip:
+    forward_local and up_local must be unit vectors AND orthogonal.
+    Pre-fix the wizard could emit a non-orthogonal pair when yaw and
+    pitch axes were close-but-not-perpendicular. Post-fix the
+    cross(forward, pitch_axis) construction guarantees orthogonality
+    because forward is already perpendicular to pitch_axis."""
+    qn = (1.0, 0.0, 0.0, 0.0)
+    # Use deliberately oblique pitch and yaw axes (not pure +X / +Z).
+    pitch_axis = (1.0, 0.2, 0.0)
+    yaw_axis   = (0.1, 0.0, 1.0)
+    n_p = math.sqrt(sum(c*c for c in pitch_axis))
+    n_y = math.sqrt(sum(c*c for c in yaw_axis))
+    pitch_axis = tuple(c / n_p for c in pitch_axis)
+    yaw_axis   = tuple(c / n_y for c in yaw_axis)
+    qp = quat_from_axis_angle(pitch_axis, -math.radians(30))
+    qy = quat_from_axis_angle(yaw_axis,   -math.radians(30))
+    fwd, up = _wizard_run("oblique", qn, qp, qy)
+    fmag = math.sqrt(sum(v*v for v in fwd))
+    umag = math.sqrt(sum(v*v for v in up))
+    dot = sum(fwd[i] * up[i] for i in range(3))
+    _assert(_close(fmag, 1.0, tol=1e-3),
+            f"oblique-axes wizard → |forward_local|=1 (got {fmag:.4f})")
+    _assert(_close(umag, 1.0, tol=1e-3),
+            f"oblique-axes wizard → |up_local|=1 (got {umag:.4f})")
+    _assert(abs(dot) < 0.05,
+            f"oblique-axes wizard → forward ⊥ up (dot={dot:.4f})")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 ALL = [
     test_phone_portrait_pitch_forward_tilts_down,
@@ -654,6 +860,13 @@ ALL = [
     # N. CALIBRATE-FRAME parity (the live regression cell)
     test_phone_calibrate_with_nonidentity_quat_then_pitch,
     test_phone_calibrate_with_nonidentity_quat_identity_delta_aims_at_target,
+    # O. #826 wizard round-trip (the gate the issue spec requires)
+    test_wizard_portrait_cw_yaw_round_trip,
+    test_wizard_portrait_ccw_yaw_round_trip,
+    test_wizard_portrait_pitch_forward_tilts_down,
+    test_wizard_neutral_replay_lands_at_calibrate_target,
+    test_wizard_landscape_grip_round_trip,
+    test_wizard_orthonormal_axes,
 ]
 
 
