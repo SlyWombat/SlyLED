@@ -3,7 +3,7 @@
 ; Or:    run build.bat — it calls iscc automatically if available.
 
 #define AppName      "SlyLED Orchestrator"
-#define AppVersion   "1.7.107"
+#define AppVersion   "1.7.108"
 #define AppPublisher "Electric RV Corporation"
 #define AppExeName   "SlyLED.exe"
 ; Unique GUID for this app — keep fixed across releases so updates overwrite
@@ -34,11 +34,19 @@ VersionInfoCopyright=© Electric RV Corporation
 ; Inno Setup populates FileVersion from VersionInfoVersion, so File
 ; Version + Product Version both show the 4-component a.b.c.d string.)
 
-; Install without elevation when possible (no UAC for user-space install)
+; v1.7.108 — installer requires elevation. The [Run] netsh
+; advfirewall calls each need administrator (firewall rule
+; manipulation is privileged), and the orchestrator now declares 5
+; rules covering its full TCP + UDP surface. Pre-v1.7.108 the script
+; ran at PrivilegesRequired=lowest and the netsh adds silently failed
+; with "access denied" unless the operator manually right-click → "Run
+; as administrator". Requiring admin gives one UAC prompt at install
+; start, everything inside [Run] runs elevated, and the install moves
+; to C:\Program Files\SlyLED — the conventional location for an app
+; that owns inbound firewall rules anyway.
 DefaultDirName={autopf}\SlyLED
 DefaultGroupName=SlyLED
-PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog commandline
+PrivilegesRequired=admin
 
 OutputDir=dist
 OutputBaseFilename=SlyLED-Setup
