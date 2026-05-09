@@ -97,8 +97,16 @@ Moving-head aim uses **stage-frame fixture-internal angles**, not mechanical yok
 | 0x31 | RUNNER_STOP  | parent→child   | header only |
 | 0x40 | STATUS_REQ   | parent→child   | header only |
 | 0x41 | STATUS_RESP  | child→parent   | 8 bytes `<BBBBI` (activeAction, runnerActive, currentStep, rssi, uptime) |
+| 0x66 | GYRO_START   | gyro→parent    | 2 bytes — nonce (#825); legacy header-only still accepted |
+| 0x67 | CLAIM_DENIED | parent→gyro    | header only — claim refused (#772) |
+| 0x69 | GYRO_STOP    | gyro→parent    | 2 bytes — nonce (#825); legacy header-only still accepted |
+| 0x6A | CLAIM_ACK    | parent→gyro    | 4 bytes — nonce + moverId (#825) |
+| 0x6B | STOP_ACK     | parent→gyro    | 2 bytes — nonce (#825) |
+| 0x6C | HB_REP       | gyro→parent    | 5 bytes — uiState + claimNonce + seq (#825) |
 
 **v3→v4:** `ledStart[]` / `ledEnd[]` upgraded uint8 → uint16 (8 entries each, +16 bytes per ACTION/LOAD_STEP). Parent accepts both v3 and v4 PONGs.
+
+**#825 gyro handshake:** press-Start sends a fresh 16-bit nonce; orchestrator replies with CLAIM_ACK echoing the nonce. Puck advances UI only on matching ACK; CLAIM_DENIED reverts; ~1.5s overall timeout reverts with "NO RESPONSE". Server arms a 1.5s timer after CLAIM_ACK that releases the claim if no orient arrives (orphan-claim guard). Press-Stop carries a nonce too and is ACKed via STOP_ACK. Both sides exchange 2s heartbeats — gyro→parent HB_REP carries `uiState + claimNonce` so divergent state is reconciled (puck IDLE + server claim → release; puck ACTIVE + no server claim → reconstruct, the orchestrator-restart bootstrap path). New CMD codes (0x6A/0x6B/0x6C) are back-compat-safe — older firmware silently ignores them; UDP_VERSION stays at 5.
 
 **PONG (133 bytes / 141 total):** `hostname[10] altName[16] description[32] stringCount(1) PongStrings×8 fwMajor(1) fwMinor(1)` where `PongString = <HHBBHB>` (`ledCount, lengthMm, ledType, cableDir, cableMm, stripDir`). `cableDir` bit 0 = folded.
 

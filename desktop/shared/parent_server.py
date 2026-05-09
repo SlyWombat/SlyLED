@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.63"
+VERSION = "1.7.80"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -113,7 +113,16 @@ CMD_GYRO_HEARTBEAT = 0x65  # parent→gyro: 2s cadence while claim active (#476)
 CMD_GYRO_START         = 0x66  # gyro→parent: explicit press-START — claim + start_stream (#772)
 CMD_GYRO_CLAIM_DENIED  = 0x67  # parent→gyro: claim refused, puck reverts to IDLE (#772)
 CMD_GYRO_BATT          = 0x68  # gyro→parent: battery telemetry (vbat100 + pct + flags), 10 s cadence (#813 follow-up)
-CMD_GYRO_STOP          = 0x69  # gyro→parent: discrete press-STOP — release claim + park + end_session (#819). Header only, no payload.
+CMD_GYRO_STOP          = 0x69  # gyro→parent: discrete press-STOP — release claim + park + end_session (#819). Nonce(2) since #825 (legacy header-only still accepted).
+CMD_GYRO_CLAIM_ACK     = 0x6A  # parent→gyro: claim established — {nonce(2), moverId(2)} (#825).
+CMD_GYRO_STOP_ACK      = 0x6B  # parent→gyro: stop confirmed — {nonce(2)} (#825).
+CMD_GYRO_HEARTBEAT_REP = 0x6C  # gyro→parent: heartbeat reply — {uiState(1), claimNonce(2), seq(2)} (#825).
+
+# #825 — uiState codes carried in CMD_GYRO_HEARTBEAT_REP.
+GYRO_UI_IDLE        = 0
+GYRO_UI_WAITING_ACK = 1
+GYRO_UI_ACTIVE      = 2
+GYRO_UI_STOPPING    = 3
 
 #  "  "  Paths  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1344,6 +1353,10 @@ def _udp_listener():
             # reads Remote.aim_stage via its tick loop — no legacy call
             # here any more.
             device_id = f"gyro-{ip}"
+            # #825 — first orient after CLAIM_ACK arms the claim and cancels
+            # the arm-check timer that would otherwise release it at t+1.5s.
+            # No-op when no in-flight handshake is tracked for this device.
+            _mark_gyro_armed(device_id)
             remote = _auto_register_remote(device_id, kind=KIND_PUCK)
             remote.update_from_euler_deg(
                 roll100/100.0, pitch100/100.0, yaw100/100.0,
@@ -1358,12 +1371,40 @@ def _udp_listener():
         elif cmd == CMD_GYRO_STOP:
             # #819 — discrete press-STOP. Replaces the v1.2.5-and-earlier
             # bit-3-on-orient overload (which mis-fired and auto-released
-            # the live claim ~25 ms after start). Same teardown as before:
-            # release claim w/ blackout, end the puck's primitive session
-            # so the next press-Start re-aligns from a known state.
+            # the live claim ~25 ms after start). Teardown: release claim
+            # w/ blackout, end the puck's primitive session so the next
+            # press-Start re-aligns from a known state.
+            #
+            # #825 — payload now carries a nonce(2). Header-only legacy
+            # variants (puck firmware ≤ v1.2.6) are still accepted with
+            # nonce=0 and no STOP_ACK — matches pre-#825 behaviour.
+            stop_nonce = None
+            if len(data) >= 10:
+                try:
+                    (stop_nonce,) = struct.unpack_from("<H", data, 8)
+                except Exception:
+                    stop_nonce = None
+            did_stop = f"gyro-{ip}"
             try:
-                log.info("GYRO_STOP from %s — releasing claim, clearing cal", ip)
-                did_stop = f"gyro-{ip}"
+                # Idempotent dedupe: a retransmitted STOP with the same
+                # nonce just replays the STOP_ACK; we don't double-release.
+                with _gyro_handshake_lock:
+                    st_hs = _gyro_handshake.setdefault(did_stop, {})
+                    prev_nonce = st_hs.get("stop_nonce")
+                    prev_ts = st_hs.get("stop_ack_ts") or 0
+                    is_replay = (
+                        stop_nonce is not None
+                        and prev_nonce == stop_nonce
+                        and (time.time() - prev_ts) < GYRO_HANDSHAKE_DEDUPE_S
+                    )
+                if is_replay:
+                    log.debug("GYRO_STOP replay from %s nonce=%d — re-sending ACK",
+                              ip, stop_nonce)
+                    if stop_nonce is not None:
+                        _send_gyro_stop_ack(ip, stop_nonce)
+                    continue
+                log.info("GYRO_STOP from %s nonce=%s — releasing claim, clearing cal",
+                          ip, stop_nonce)
                 if _mover_engine:
                     gf_stop = _gyro_fixture_for_ip(ip)
                     if gf_stop and gf_stop.get("assignedMoverId") is not None:
@@ -1376,6 +1417,23 @@ def _udp_listener():
                         _remotes.save()
                     except Exception as e:
                         log.error("remotes.save() during stop failed: %s", e)
+                with _gyro_handshake_lock:
+                    st_hs = _gyro_handshake.setdefault(did_stop, {})
+                    # Tear down any in-flight start-arm timer; the claim
+                    # is gone now anyway.
+                    t = st_hs.get("arm_timer")
+                    if t is not None:
+                        try: t.cancel()
+                        except Exception: pass
+                        st_hs["arm_timer"] = None
+                    st_hs["armed"] = False
+                    st_hs["start_nonce"] = None
+                    st_hs["mover_id"] = None
+                    if stop_nonce is not None:
+                        st_hs["stop_nonce"] = stop_nonce
+                        st_hs["stop_ack_ts"] = time.time()
+                if stop_nonce is not None:
+                    _send_gyro_stop_ack(ip, stop_nonce)
             except Exception as e:
                 log.error("GYRO_STOP handler failed: %s", e, exc_info=True)
         elif cmd == CMD_GYRO_START:
@@ -1383,16 +1441,60 @@ def _udp_listener():
             # claim + start_stream synchronously, send CMD_GYRO_CLAIM_DENIED
             # back on refusal so the puck can revert ACTIVE → IDLE with a
             # BUSY indication (Android parity).
+            #
+            # #825 — payload now carries a nonce(2) so the handshake is
+            # rock-solid against dropped ACKs. On success we send
+            # CMD_GYRO_CLAIM_ACK (the puck advances UI on this packet,
+            # not on the absence of DENIED) and arm a 1.5 s timer that
+            # releases the claim if no orient packet arrives by then —
+            # belt-and-braces against the puck never receiving the ACK.
             gf = _gyro_fixture_for_ip(ip)
             target_mover_id = gf.get("assignedMoverId") if gf else None
             device_id = f"gyro-{ip}"
+            start_nonce = None
+            if len(data) >= 10:
+                try:
+                    (start_nonce,) = struct.unpack_from("<H", data, 8)
+                except Exception:
+                    start_nonce = None
+
+            # Idempotent retransmission: same nonce within the dedupe
+            # window just replays the cached response (ACK or DENIED) —
+            # no second claim attempt.
+            with _gyro_handshake_lock:
+                st_hs = _gyro_handshake.setdefault(device_id, {})
+                prev_nonce = st_hs.get("start_nonce")
+                prev_resp = st_hs.get("start_response")
+                prev_ts = st_hs.get("ack_sent_ts") or 0
+                is_replay = (
+                    start_nonce is not None
+                    and prev_nonce == start_nonce
+                    and prev_resp is not None
+                    and (time.time() - prev_ts) < GYRO_HANDSHAKE_DEDUPE_S
+                )
+                cached_mover = st_hs.get("mover_id")
+            if is_replay:
+                log.debug("GYRO_START replay from %s nonce=%d resp=%s",
+                          ip, start_nonce, prev_resp)
+                if prev_resp == "ack" and cached_mover is not None:
+                    _send_gyro_claim_ack(ip, start_nonce, cached_mover)
+                else:
+                    _send_gyro_claim_denied(ip)
+                continue
+
             # #801 — refuse GYRO_START when the controller is Inactive
             # at the orchestrator level. Mirrors the Inactive contract
             # ("Connections accepted? No"). Same DENIED packet as the
             # claim-busy refusal; puck UI shows the same retry path.
             if gf is not None and not gf.get("gyroEnabled"):
-                log.info("GYRO_START from %s — controller Inactive, refusing", ip)
+                log.info("GYRO_START from %s nonce=%s — controller Inactive, refusing",
+                          ip, start_nonce)
                 _send_gyro_claim_denied(ip)
+                with _gyro_handshake_lock:
+                    st_hs = _gyro_handshake.setdefault(device_id, {})
+                    st_hs["start_nonce"] = start_nonce
+                    st_hs["start_response"] = "denied"
+                    st_hs["ack_sent_ts"] = time.time()
                 continue
             if target_mover_id is None:
                 log.info("GYRO_START from %s — no assigned mover, ignoring", ip)
@@ -1419,12 +1521,35 @@ def _udp_listener():
                                                  dname, "gyro",
                                                  smoothing=gf.get("smoothing", 0.15))
                 if not ok:
-                    log.info("GYRO_START from %s — claim DENIED (%s)", ip, reason)
+                    log.info("GYRO_START from %s nonce=%s — claim DENIED (%s)",
+                              ip, start_nonce, reason)
                     _send_gyro_claim_denied(ip)
+                    with _gyro_handshake_lock:
+                        st_hs = _gyro_handshake.setdefault(device_id, {})
+                        st_hs["start_nonce"] = start_nonce
+                        st_hs["start_response"] = "denied"
+                        st_hs["ack_sent_ts"] = time.time()
                 else:
                     _mover_engine.start_stream(target_mover_id, device_id)
-                    log.info("GYRO_START from %s — claim+start_stream ok mover=%d",
-                             ip, target_mover_id)
+                    if start_nonce is not None:
+                        _send_gyro_claim_ack(ip, start_nonce, target_mover_id)
+                        with _gyro_handshake_lock:
+                            _schedule_arm_check(device_id, target_mover_id, start_nonce)
+                        log.info(
+                            "GYRO_START from %s nonce=%d — claim+start_stream ok "
+                            "mover=%d (ACK sent, arm-check armed)",
+                            ip, start_nonce, target_mover_id)
+                    else:
+                        # Legacy puck (firmware ≤ v1.2.6, no nonce). Pre-
+                        # #825 behaviour: silent success, no ACK. The puck
+                        # advances UI on absence-of-DENIED; the orphan-
+                        # claim risk is exactly what #825 fixes for new
+                        # firmware, but back-compat keeps the old puck
+                        # working.
+                        log.info(
+                            "GYRO_START from %s (legacy, no nonce) — "
+                            "claim+start_stream ok mover=%d",
+                            ip, target_mover_id)
         elif cmd == CMD_GYRO_BATT and len(data) >= 12:
             # #813 follow-up — GyroBattPayload: vbat100(2) pct(1) flags(1).
             # Stamp into _gyro_state so /api/gyros and the SPA can surface
@@ -1496,6 +1621,96 @@ def _udp_listener():
                             except Exception as e:
                                 log.error("Remote %d calibrate failed: %s", remote.id, e)
                     _mover_engine.calibrate_end(target_mover_id, did)
+        elif cmd == CMD_GYRO_HEARTBEAT_REP and len(data) >= 13:
+            # #825 — periodic 2 s reply to the parent→gyro CMD_GYRO_HEARTBEAT.
+            # Carries the puck's current UI state and the nonce of the claim
+            # it considers "current". We reconcile divergence between the
+            # puck's view and the server's `_claims` dict:
+            #
+            #   • puck IDLE,  server has claim → puck rolled back silently;
+            #                                    release the orphan claim.
+            #   • puck ACTIVE, server has no claim → orchestrator just
+            #                                    restarted; reconstruct the
+            #                                    claim and send a fresh ACK
+            #                                    so the operator never sees
+            #                                    the puck UI blink.
+            #   • both agree → no action.
+            ui_state, claim_nonce, hb_seq = struct.unpack_from("<BHH", data, 8)
+            device_id_hb = f"gyro-{ip}"
+            try:
+                with _gyro_handshake_lock:
+                    st_hs = _gyro_handshake.setdefault(device_id_hb, {})
+                    last_seq = st_hs.get("last_seen_seq")
+                    st_hs["last_seen_seq"] = hb_seq
+                if last_seq == hb_seq:
+                    # Duplicate of a prior REP — already reconciled.
+                    pass
+                else:
+                    server_has_claim = False
+                    server_mover_id = None
+                    if _mover_engine is not None:
+                        for cl in _mover_engine.get_status() or []:
+                            if cl.get("deviceId") == device_id_hb:
+                                server_has_claim = True
+                                server_mover_id = cl.get("moverId")
+                                break
+                    log.debug(
+                        "GYRO_HB_REP from %s ui=%d claimNonce=%d seq=%d "
+                        "(server_has_claim=%s)",
+                        ip, ui_state, claim_nonce, hb_seq, server_has_claim)
+                    if ui_state == GYRO_UI_IDLE and server_has_claim:
+                        log.warning(
+                            "GYRO_HB_REP reconcile: puck %s reports IDLE but "
+                            "server holds claim on mover=%s — releasing orphan",
+                            ip, server_mover_id)
+                        try:
+                            if server_mover_id is not None:
+                                _mover_engine.release(server_mover_id,
+                                                      device_id_hb,
+                                                      blackout=True)
+                        except Exception as e:
+                            log.error("HB_REP orphan release failed: %s", e)
+                    elif (ui_state == GYRO_UI_ACTIVE
+                          and not server_has_claim
+                          and claim_nonce != 0
+                          and _mover_engine is not None):
+                        # Restart bootstrap. Re-establish the claim from
+                        # the puck's view; if the fixture is still wired
+                        # up the same way (mover assigned + Active), the
+                        # operator never sees a UI blink.
+                        gf_hb = _gyro_fixture_for_ip(ip)
+                        target_mover_id_hb = (
+                            gf_hb.get("assignedMoverId") if gf_hb else None
+                        )
+                        if (gf_hb is not None
+                            and gf_hb.get("gyroEnabled")
+                            and target_mover_id_hb is not None):
+                            dname_hb = _gyro_device_name(ip, gf_hb)
+                            ok_hb, reason_hb = _mover_engine.claim(
+                                target_mover_id_hb, device_id_hb, dname_hb,
+                                "gyro",
+                                smoothing=gf_hb.get("smoothing", 0.15))
+                            if ok_hb:
+                                _mover_engine.start_stream(
+                                    target_mover_id_hb, device_id_hb)
+                                _send_gyro_claim_ack(ip, claim_nonce,
+                                                      target_mover_id_hb)
+                                with _gyro_handshake_lock:
+                                    _schedule_arm_check(device_id_hb,
+                                                         target_mover_id_hb,
+                                                         claim_nonce)
+                                log.info(
+                                    "GYRO_HB_REP bootstrap: reconstructed "
+                                    "claim for %s mover=%d nonce=%d "
+                                    "(orchestrator restart recovery)",
+                                    ip, target_mover_id_hb, claim_nonce)
+                            else:
+                                log.info(
+                                    "GYRO_HB_REP bootstrap denied for %s: %s",
+                                    ip, reason_hb)
+                                _send_gyro_claim_denied(ip)
+            except Exception as e:
+                log.error("GYRO_HB_REP handler failed: %s", e, exc_info=True)
         elif cmd == CMD_PONG:
             # Handle PONGs from broadcast/direct pings
             info = _parse_pong(data, ip)
@@ -1544,6 +1759,135 @@ def _send_gyro_claim_denied(ip):
         sock.close()
     except Exception as e:
         log.debug("claim-denied to %s failed: %s", ip, e)
+
+
+# ── #825 — rock-solid press-Start/Stop handshake ─────────────────────────────
+#
+# `_gyro_handshake` tracks per-device handshake state so:
+#
+#   1. duplicate START packets carrying the same nonce are idempotent —
+#      we replay the cached response (ACK or DENIED) without re-running
+#      claim/start_stream;
+#   2. an arm-check timer fires 1.5 s after CLAIM_ACK is sent — if no
+#      orient packet has arrived from the device by then, we assume the
+#      ACK was lost and release the claim so it doesn't orphan.
+#
+# Per-device entry shape:
+#   {
+#     "start_nonce":     uint16 | None,   # nonce of last START seen
+#     "start_response":  "ack" | "denied" | None,
+#     "ack_sent_ts":     float | None,    # monotonic ts of last ACK send
+#     "armed":           bool,            # True once an orient arrived after ACK
+#     "mover_id":        int | None,      # mover bound to the active claim
+#     "stop_nonce":      uint16 | None,
+#     "stop_ack_ts":     float | None,
+#     "arm_timer":       threading.Timer | None,
+#     "last_seen_seq":   uint16 | None,   # last HB_REP seq we've processed
+#   }
+_gyro_handshake = {}
+_gyro_handshake_lock = threading.Lock()
+
+# Window (seconds) during which a duplicate START/STOP nonce replays the
+# cached response instead of running claim/release. Tuned to comfortably
+# cover the puck's retry budget (5 retries × 150 ms = 750 ms).
+GYRO_HANDSHAKE_DEDUPE_S = 5.0
+
+# Time (seconds) to wait for an orient packet after sending CLAIM_ACK
+# before assuming the ACK was lost and releasing the claim. The puck's
+# own retry budget is shorter (~750 ms); this window has slack for both
+# the wire round-trip and the puck's ACTIVE-state IMU spin-up.
+GYRO_ARM_DEADLINE_S = 1.5
+
+
+def _send_gyro_claim_ack(ip, nonce, mover_id):
+    """#825 — confirm a successful press-Start to the puck.
+
+    Payload: nonce(2) + moverId(2). The puck matches `nonce` against the
+    START it sent and advances WAITING_ACK → ACTIVE. `moverId` lets it
+    sanity-check it's been bound to the mover it's expecting.
+    """
+    try:
+        pkt = _hdr(CMD_GYRO_CLAIM_ACK) + struct.pack("<HH",
+                                                      int(nonce) & 0xFFFF,
+                                                      int(mover_id) & 0xFFFF)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.sendto(pkt, (ip, UDP_PORT))
+    except Exception as e:
+        log.debug("claim-ack to %s failed: %s", ip, e)
+
+
+def _send_gyro_stop_ack(ip, nonce):
+    """#825 — confirm a successful press-Stop to the puck."""
+    try:
+        pkt = _hdr(CMD_GYRO_STOP_ACK) + struct.pack("<H", int(nonce) & 0xFFFF)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.sendto(pkt, (ip, UDP_PORT))
+    except Exception as e:
+        log.debug("stop-ack to %s failed: %s", ip, e)
+
+
+def _mark_gyro_armed(device_id):
+    """#825 — called from the orient handler. Flags the in-flight claim as
+    armed (puck has clearly received CLAIM_ACK and is streaming). Cancels
+    the pending arm-check timer."""
+    with _gyro_handshake_lock:
+        st = _gyro_handshake.get(device_id)
+        if not st or st.get("armed"):
+            return
+        st["armed"] = True
+        t = st.get("arm_timer")
+        if t is not None:
+            try:
+                t.cancel()
+            except Exception:
+                pass
+            st["arm_timer"] = None
+
+
+def _arm_check_release(device_id, mover_id, nonce):
+    """#825 — fired by `threading.Timer` GYRO_ARM_DEADLINE_S seconds after
+    CLAIM_ACK is sent. If no orient has arrived in that window, the puck
+    almost certainly never received the ACK; release the claim so it
+    doesn't sit orphan until the 60 s stale threshold."""
+    with _gyro_handshake_lock:
+        st = _gyro_handshake.get(device_id)
+        if not st or st.get("armed"):
+            return
+        if st.get("start_nonce") != nonce:
+            # A newer START already superseded this one; let it run.
+            return
+        st["arm_timer"] = None
+    log.warning(
+        "GYRO arm-check fired for %s mover=%s nonce=%d — no orient within "
+        "%.1fs, releasing orphan claim", device_id, mover_id, nonce,
+        GYRO_ARM_DEADLINE_S)
+    try:
+        if _mover_engine is not None and mover_id is not None:
+            _mover_engine.release(mover_id, device_id, blackout=True)
+    except Exception as e:
+        log.error("arm-check release failed: %s", e, exc_info=True)
+
+
+def _schedule_arm_check(device_id, mover_id, nonce):
+    """#825 — arm a one-shot timer that releases the claim if no orient
+    arrives in time. Caller holds `_gyro_handshake_lock`."""
+    st = _gyro_handshake.setdefault(device_id, {})
+    old = st.get("arm_timer")
+    if old is not None:
+        try:
+            old.cancel()
+        except Exception:
+            pass
+    t = threading.Timer(GYRO_ARM_DEADLINE_S, _arm_check_release,
+                        args=(device_id, mover_id, nonce))
+    t.daemon = True
+    t.start()
+    st["arm_timer"] = t
+    st["armed"] = False
+    st["mover_id"] = mover_id
+    st["start_nonce"] = nonce
+    st["start_response"] = "ack"
+    st["ack_sent_ts"] = time.time()
 
 
 def _heartbeat_loop():
@@ -8910,7 +9254,12 @@ def api_camera_track_start(fid):
     try:
         import urllib.request as _ur
         payload = {
-            "cam": body.get("cam", 0),
+            # #830 — fall back to the fixture's `cameraIdx` so two camera
+            # fixtures sharing one node (Stage Right cameraIdx=0, Stage
+            # Left cameraIdx=1) actually reach the right /dev/video*. An
+            # explicit `cam` in the request body still wins for manual
+            # API use; UI-driven starts now route correctly.
+            "cam": body.get("cam", f.get("cameraIdx", 0)),
             "orchestratorUrl": f"http://{local_ip}:{port}",
             "cameraId": fid,
             "fps": body.get("fps", f.get("trackFps", 2)),
@@ -13496,8 +13845,15 @@ def _apply_handover_slew(fid, uni, addr, ch_map, engine):
         engine.get_universe(uni).set_channel(addr + pts_offset, 0)
 
 
-def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
-    """Evaluate active Track actions -- compute real-time pan/tilt for moving heads."""
+def _evaluate_track_actions(elapsed, engine, dmx_fixtures, timeline_track_fids=None):
+    """Evaluate active Track actions -- compute real-time pan/tilt for moving heads.
+
+    `timeline_track_fids` (#829): when provided, an iterable of fixture
+    ids assigned to the running timeline's tracks. Track actions whose
+    own `trackFixtureIds` is empty fall back to this scope rather than
+    "every mover on the rig". `None` preserves the legacy "all movers"
+    behaviour for callers that don't have a timeline scope to pass.
+    """
     track_actions = [a for a in _actions if a.get("type") == 18]
     if not track_actions:
         return
@@ -13525,16 +13881,36 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
             }
     if not fx_lookup:
         return
+    # #829 — timeline-track-scoped default. When the running timeline
+    # only assigned the Track action to a subset of fixtures, that
+    # subset is the default scope; the action's own `trackFixtureIds`
+    # narrows further when set.
+    timeline_scope = (set(int(x) for x in timeline_track_fids)
+                      if timeline_track_fids is not None else None)
     for ta in track_actions:
-        # Resolve target objects:
-        #   trackObjectIds set → use those specific objects
-        #   trackObjectType set → filter moving objects by type (e.g. "figure8-target")
-        #   neither → all temporal moving objects (camera detections, not patrol objects)
+        # #827 / #828 — Resolve target objects:
+        #   trackObjectType set → filter moving objects by that type
+        #   trackObjectIds set → search ALL moving objects (#828: was
+        #       silently filtering to _temporal which excluded patrol
+        #       props, contradicting the inline doc-comment)
+        #   trackMode == "all-moving" → patrol props + camera detections
+        #   default (or trackMode == "camera-moving") → camera detections only
         obj_type = ta.get("trackObjectType")
         target_ids = ta.get("trackObjectIds", [])
+        track_mode = ta.get("trackMode")
         if obj_type:
             candidates = [o for o in moving_objects if o.get("objectType") == obj_type]
+        elif target_ids:
+            # #828 — explicit IDs: search the whole moving-object set so
+            # patrol-prop ids resolve. Pre-fix the _temporal pre-filter
+            # made `targets` empty for any patrol-only id list and the
+            # action silently skipped.
+            candidates = list(moving_objects)
+        elif track_mode == "all-moving":
+            # #827 — operator opted in to patrol props + camera dets.
+            candidates = list(moving_objects)
         else:
+            # Default ("camera-moving" or unset): camera detections only.
             candidates = [o for o in moving_objects if o.get("_temporal")]
         targets = [o for o in candidates if o["id"] in target_ids] if target_ids else candidates
         # If this action has explicit trackObjectIds but none exist, skip entirely —
@@ -13542,9 +13918,20 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
         # Only auto-discover actions (no trackObjectIds) blackout when no targets found.
         if target_ids and not targets:
             continue
-        # Resolve fixtures
+        # #829 — Resolve fixtures with timeline-track scoping:
+        #   action.trackFixtureIds set     → those specific fixtures (most explicit)
+        #   timeline_track_fids supplied   → fall back to the running
+        #                                    timeline's track assignments
+        #                                    (matches every other action type's behaviour)
+        #   neither                        → every eligible mover (legacy)
         fix_ids = ta.get("trackFixtureIds", [])
-        heads = [fx_lookup[fid] for fid in (fix_ids or fx_lookup.keys()) if fid in fx_lookup]
+        if fix_ids:
+            scope = [int(x) for x in fix_ids]
+        elif timeline_scope is not None:
+            scope = [fid for fid in timeline_scope if fid in fx_lookup]
+        else:
+            scope = list(fx_lookup.keys())
+        heads = [fx_lookup[fid] for fid in scope if fid in fx_lookup]
         if not heads:
             continue
         # Global offset
@@ -13794,6 +14181,16 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
     if not result:
         log.info("DMX playback: no bake result but Track actions present — running for tracking")
         result = {"fixtures": {}}
+    # #829 — collect the set of fixtures this timeline's tracks are
+    # assigned to. Track actions with no explicit `trackFixtureIds`
+    # default to this scope rather than "every mover on the rig".
+    _tl_obj = next((t for t in _timelines if t.get("id") == tid), None)
+    timeline_track_fids = set()
+    for _tr in (_tl_obj.get("tracks", []) if _tl_obj else []):
+        _fid = _tr.get("fixtureId")
+        if _fid is not None:
+            try: timeline_track_fids.add(int(_fid))
+            except (TypeError, ValueError): pass
     baked_fixtures = result.get("fixtures", {})
     # Collect DMX fixtures with their baked segments
     dmx_fixtures = []
@@ -13989,7 +14386,8 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
         # ── Track action: real-time pan/tilt for moving heads following objects ──
         if frame_count % 40 == 0:  # reap temporals every 1s
             _reap_temporal_objects()
-        _evaluate_track_actions(elapsed, engine, dmx_fixtures)
+        _evaluate_track_actions(elapsed, engine, dmx_fixtures,
+                                 timeline_track_fids=timeline_track_fids)
         frame_count += 1
         if frame_count == 1:
             log.info("DMX playback: first frame sent at elapsed=%.1fs", elapsed)
@@ -14284,6 +14682,14 @@ def _dmx_playback_single(tid, go_epoch, duration):
     result = _bake_result.get(tid)
     if not result:
         return
+    # #829 — same timeline-scope collection as _dmx_playback_loop.
+    _tl_obj = next((t for t in _timelines if t.get("id") == tid), None)
+    timeline_track_fids = set()
+    for _tr in (_tl_obj.get("tracks", []) if _tl_obj else []):
+        _fid = _tr.get("fixtureId")
+        if _fid is not None:
+            try: timeline_track_fids.add(int(_fid))
+            except (TypeError, ValueError): pass
     baked_fixtures = result.get("fixtures", {})
     dmx_fixtures = []
     for f in _fixtures:
@@ -14411,7 +14817,8 @@ def _dmx_playback_single(tid, go_epoch, duration):
         _evaluate_object_patrols(elapsed)
         if frame_count % 40 == 0:
             _reap_temporal_objects()
-        _evaluate_track_actions(elapsed, engine, dmx_fixtures)
+        _evaluate_track_actions(elapsed, engine, dmx_fixtures,
+                                 timeline_track_fids=timeline_track_fids)
         frame_count += 1
     # Blackout on segment end (#364) — zero RGB, dimmer, pan/tilt, and all extras.
     # #763 — leave claimed fixtures alone; the operator owns their output.
@@ -15915,7 +16322,7 @@ def api_fw_registry():
     surface in operator-facing OTA UI. Diagnostic builds stay in the
     on-disk registry.json for the build pipeline; this endpoint just
     hides them from the SPA + Android."""
-    reg = load_registry(_FW_DIR)
+    reg = load_registry(_FW_DIR, _FW_CACHE_DIR)
     public = [e for e in reg.get("firmware", []) if not e.get("diagnostic")]
     return jsonify({**reg, "firmware": public})
 
@@ -15939,16 +16346,30 @@ def api_fw_library():
     keeps building them; only the public surface is filtered.
     """
     from firmware_manager import _verify_sha256
-    # Prefer the live GitHub-main registry so an installer that's a few
-    # releases behind shows the current pinned versions when the operator
-    # clicks "Reload list". `/api/firmware/fetch` already does this for
-    # downloads (see #807 GitHub-registry OTA fallback); the library
-    # listing was missed and froze at install-time bundle versions.
-    remote = _fetch_remote_registry()
-    if remote and isinstance(remote.get("firmware"), list):
-        reg = remote
-    else:
-        reg = load_registry(_FW_DIR)
+    # Registry source precedence (#832 / #807):
+    #   1. APPDATA override (`_FW_CACHE_DIR/registry.json`) — what
+    #      `build_release.ps1` writes after a local firmware bump, so the
+    #      Library reflects locally-built versions ahead of GitHub.
+    #   2. GitHub main branch — covers the "installed exe is two releases
+    #      behind" case where the bundle has stale pins; #807 added this.
+    #   3. PyInstaller-bundled `_FW_DIR/registry.json` — install-time
+    #      fallback when there's no internet and no local override.
+    # Pre-#832-bugfix the GitHub fetch ran first and shadowed the APPDATA
+    # override, so `Reload list` quietly displayed the main-branch view
+    # while the operator's freshly-built v1.2.7 sat ignored next door.
+    override = _FW_CACHE_DIR / "registry.json"
+    reg = None
+    if override.exists():
+        try:
+            reg = json.loads(override.read_text(encoding="utf-8-sig"))
+        except Exception:
+            reg = None
+    if reg is None:
+        remote = _fetch_remote_registry()
+        if remote and isinstance(remote.get("firmware"), list):
+            reg = remote
+        else:
+            reg = load_registry(_FW_DIR, _FW_CACHE_DIR)
     entries = []
     for e in reg.get("firmware", []):
         if e.get("diagnostic"):
@@ -16003,17 +16424,25 @@ def api_fw_fetch():
     from firmware_manager import download_firmware, _registry_fetch_assets
     body = request.get_json(silent=True) or {}
     fid = body.get("id") or ""
-    # Prefer the live GitHub-main registry so an old installer fetching
-    # firmware after an OTA-check pulls the pinned-version + sha256 the
-    # current main-branch points at, not the snapshot the installer
-    # bundled. Falls back to the local bundle on network failure.
-    remote = _fetch_remote_registry()
-    if remote and isinstance(remote.get("firmware"), list):
-        entry = next((e for e in remote["firmware"] if e.get("id") == fid), None)
-    else:
-        entry = None
+    # Registry source precedence (#832 / #807): see api_fw_library above.
+    # Local APPDATA override wins so a freshly-built local firmware can
+    # be flashed via the Library Download button without first pushing
+    # to GitHub.
+    entry = None
+    override = _FW_CACHE_DIR / "registry.json"
+    if override.exists():
+        try:
+            override_reg = json.loads(override.read_text(encoding="utf-8-sig"))
+            entry = next((e for e in override_reg.get("firmware", [])
+                          if e.get("id") == fid), None)
+        except Exception:
+            entry = None
     if entry is None:
-        reg = load_registry(_FW_DIR)
+        remote = _fetch_remote_registry()
+        if remote and isinstance(remote.get("firmware"), list):
+            entry = next((e for e in remote["firmware"] if e.get("id") == fid), None)
+    if entry is None:
+        reg = load_registry(_FW_DIR, _FW_CACHE_DIR)
         entry = next((e for e in reg.get("firmware", []) if e.get("id") == fid), None)
     if not entry:
         return jsonify(ok=False, err="unknown firmware id"), 404
@@ -16047,19 +16476,46 @@ def api_fw_refresh_all():
     """#567 — bulk-download every registry entry that has a release asset
     but isn't cached locally. Skips entries already on disk so repeat
     clicks are cheap."""
-    from firmware_manager import download_firmware, _registry_fetch_assets
+    from firmware_manager import download_firmware, _registry_fetch_assets, _verify_sha256
     assets = _registry_fetch_assets()
     if assets is None:
         return jsonify(ok=False, err="could not reach GitHub releases"), 502
-    reg = load_registry(_FW_DIR)
+    # Mirror api_fw_library's source precedence so a freshly-bumped
+    # local registry drives downloads. Without this, refresh-all would
+    # see only the install-bundled registry and report "already local"
+    # for the version the operator just rebuilt past.
+    reg = None
+    override = _FW_CACHE_DIR / "registry.json"
+    if override.exists():
+        try:
+            reg = json.loads(override.read_text(encoding="utf-8-sig"))
+        except Exception:
+            reg = None
+    if reg is None:
+        reg = load_registry(_FW_DIR, _FW_CACHE_DIR)
     results = []
     for e in reg.get("firmware", []):
         fname = e.get("file") or ""
         if not fname:
             continue
+        expected = e.get("sha256")
         cache_p = _FW_CACHE_DIR / fname
         bundle_p = _FW_DIR / fname
-        if cache_p.is_file() or bundle_p.is_file():
+        # sha-aware "already local". A v1.2.6 bin sitting in the cache
+        # must NOT mask a v1.2.7 registry entry — the previous "any
+        # file is good enough" check made #832-style local bumps
+        # invisible to refresh-all.
+        already_local = False
+        for p in (cache_p, bundle_p):
+            if not p.is_file():
+                continue
+            if not expected:
+                already_local = True
+                break
+            if _verify_sha256(p, expected) is True:
+                already_local = True
+                break
+        if already_local:
             results.append({"id": e.get("id"), "status": "already-local"})
             continue
         if not e.get("releaseAsset"):
@@ -16214,7 +16670,7 @@ def api_fw_flash():
     if remote and isinstance(remote.get("firmware"), list):
         fw = next((f for f in remote["firmware"] if f.get("id") == fw_id), None)
     if fw is None:
-        reg = load_registry(_FW_DIR)
+        reg = load_registry(_FW_DIR, _FW_CACHE_DIR)
         fw = next((f for f in reg.get("firmware", []) if f.get("id") == fw_id), None)
     if not fw:
         return jsonify(ok=False, err="firmware not found in registry"), 404
@@ -16640,7 +17096,7 @@ def _load_registry_for_ota():
     remote = _fetch_remote_registry()
     if remote and isinstance(remote.get("firmware"), list):
         return remote.get("firmware", [])
-    return load_registry(_FW_DIR).get("firmware", [])
+    return load_registry(_FW_DIR, _FW_CACHE_DIR).get("firmware", [])
 
 
 def _fetch_github_release():
@@ -17020,6 +17476,22 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

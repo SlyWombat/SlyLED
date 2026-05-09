@@ -157,8 +157,16 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
                 }
             }
 
-            // Phone control modes — DMX moving head per-fixture row with
-            // Controller / Pointer toggle (#427).
+            // Phone control — DMX moving head per-fixture row with the
+            // Controller toggle. Pointer mode (#427) was removed in v1.7.66
+            // because its server-side dependency (the SMART calibration
+            // pipeline + GET /api/calibration/mover/{id}/status capability
+            // probe) was deleted in #784 PR-7. The button always returned
+            // "Couldn't read calibration status: 404". The ViewModel
+            // entry-points (enterPointerMode / exitPointerMode /
+            // aimPointerTarget) and PointerModeOverlay file are kept dead
+            // for now in case SMART is reinstated; remove the dead code
+            // once that question settles.
             if (dmxFixtures.isNotEmpty()) {
                 item {
                     Card(modifier = Modifier.fillMaxWidth()) {
@@ -169,7 +177,7 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                "Controller = phone mimics the head. Pointer = phone aims like a laser pointer (needs SMART calibration).",
+                                "Controller mode — phone gestures drive the moving-head pan/tilt.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -198,18 +206,6 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
                                         )
                                         Spacer(Modifier.width(4.dp))
                                         Text("Controller")
-                                    }
-                                    OutlinedButton(
-                                        onClick = { viewModel.enterPointerMode(f.id) }
-                                    ) {
-                                        Icon(
-                                            Icons.Default.MyLocation,
-                                            contentDescription = null,
-                                            tint = CyanSecondary,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Spacer(Modifier.width(4.dp))
-                                        Text("Pointer")
                                     }
                                 }
                             }

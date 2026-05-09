@@ -655,8 +655,8 @@ class MoverControlEngine:
             return ((pose[0] / 65535.0, pose[1] / 65535.0)
                      if pose is not None else (None, None))
         except Exception as e:
-            log.debug("aim_to_pan_tilt: AimSphere failed for mover %s: %s",
-                      mover_id, e)
+            log.warning("aim_to_pan_tilt: AimSphere failed for mover %s: %s",
+                        mover_id, e)
             return (None, None)
 
     # #784 PR-5 (2026-05-03) — `_get_smart_model` removed. The SMART

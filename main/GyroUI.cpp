@@ -26,6 +26,7 @@
 #include "GyroIMU.h"
 #include "GyroUdp.h"
 #include "GyroLogo.h"
+#include "Protocol.h"   // GYRO_UI_* state constants (#825)
 #include <Arduino.h>
 #include <WiFi.h>            // #813 — WiFi.status() drives Start-button gate
 #include <esp_sleep.h>
@@ -89,7 +90,15 @@ static void hueToRGB(int16_t hue, uint8_t* r, uint8_t* g, uint8_t* b) {
 
 // ── State ────────────────────────────────────────────────────────────────────
 
-enum class UIState : uint8_t { LOGO, IDLE, ACTIVE };
+// #825 — WAITING_ACK is a transient state between IDLE and ACTIVE while
+// the press-Start handshake is in flight. UI shows a "Connecting…" splash;
+// only a matching CMD_GYRO_CLAIM_ACK advances to ACTIVE. CLAIM_DENIED
+// reverts to IDLE with a brief "BUSY" indication; an overall timeout
+// (~1500 ms — comfortably longer than the 750 ms retry budget) reverts
+// with a "NO RESPONSE" indication.
+enum class UIState : uint8_t { LOGO, IDLE, WAITING_ACK, ACTIVE };
+
+static constexpr uint16_t START_ACK_TIMEOUT_MS = 1500;
 
 static UIState  s_state     = UIState::LOGO;
 static uint8_t  s_page      = 0;      // 0-3 when ACTIVE
@@ -142,6 +151,16 @@ static float s_calibLastYaw   = 0.0f;
 // paints the Settings page so operators can reach battery info and
 // Sleep before starting. Swipe back to clear.
 static bool s_idleSettings = false;
+
+// #825 — press-Start handshake bookkeeping. s_startNonce is the nonce we
+// advertised on the wire; the matching CLAIM_ACK from the server carries
+// it back. s_startSentMs starts the overall timeout window. s_claimNonce
+// is the nonce of the *currently-held* claim (post-ACK), surfaced in
+// CMD_GYRO_HEARTBEAT_REP so the orchestrator can reconcile.
+static uint16_t s_startNonce      = 0;
+static uint32_t s_startSentMs     = 0;
+static uint16_t s_claimNonce      = 0;
+static uint16_t s_nextNonce       = 1;   // monotonic; never 0 (reserved)
 
 // Selected colour preset index (page 1)
 
@@ -688,6 +707,10 @@ void gyroUIUpdate() {
         if (hb != 0 && (now - hb) > 20000u && s_state == UIState::ACTIVE) {
             gyroUdpSetStreaming(false, 0);
             s_state = UIState::IDLE;
+            // #825 — drop the claim-nonce; HB_REPs will advertise IDLE
+            // so the orchestrator releases its half of the claim too.
+            s_claimNonce = 0;
+            gyroUdpSetUiState(GYRO_UI_IDLE, 0);
             drawIdle();
         }
     }
@@ -878,20 +901,30 @@ void gyroUIUpdate() {
     if (!touching && s_wasTouching) {
         if (s_startHeld) {
             s_startHeld = false;
-            // Transition IDLE → ACTIVE. Clear any swiped-into-Settings
-            // state from IDLE so a return-to-IDLE later starts on the
-            // START screen, not Settings (#565).
+            // #825 — transition IDLE → WAITING_ACK, NOT directly to ACTIVE.
+            // We only advance to ACTIVE when CMD_GYRO_CLAIM_ACK arrives
+            // carrying a matching nonce; CLAIM_DENIED reverts; an overall
+            // timeout reverts with "NO RESPONSE". This eliminates the
+            // pre-#825 silent-failure window where the orchestrator held
+            // an orphan claim while the puck UI rolled back on its own.
             s_idleSettings = false;
-            s_state = UIState::ACTIVE;
-            s_page  = 0;
             s_calibHeld = false;
-            // #772 — explicit claim+start before any orient flows. Server
-            // replies with CMD_GYRO_CLAIM_DENIED if another device holds
-            // the mover; that path is handled in the periodic tick below
-            // and bounces us back to IDLE.
-            gyroUdpSendStart();
-            gyroUdpSetStreaming(true, 0);
-            drawCurrentPage();
+            // Allocate a fresh nonce; gyroUdpSendStartWithNonce() ships
+            // the first frame and stamps the retry slot for retransmits.
+            if (s_nextNonce == 0) s_nextNonce = 1;
+            s_startNonce = gyroUdpSendStartWithNonce(s_nextNonce++);
+            s_startSentMs = (uint32_t)millis();
+            s_state = UIState::WAITING_ACK;
+            // Don't start streaming orient yet — server hasn't confirmed
+            // the claim. Holding off until ACK keeps the engine from
+            // churning on aim updates that'd be discarded.
+            gyroUdpSetUiState(GYRO_UI_WAITING_ACK, s_startNonce);
+            // Splash: dim circle + "Connecting…" hint. Cheap to draw;
+            // operator gets immediate feedback their press registered.
+            gyroClearScreen(GC_BLACK);
+            gyroDrawCircle(CX, CY, BTN_MAIN_R, GC_GREY);
+            gyroDrawText(CX - 36, CY - 7, "CONNECT", 2, GC_GREY);
+            gyroDrawText(CX - 30, CY + 65, "waiting…", 1, GC_DKGREY);
         }
         if (s_calibHeld) {
             // #774 — don't commit calibrate-end yet. Start the debounce
@@ -923,9 +956,19 @@ void gyroUIUpdate() {
         }
         if (s_stopHeld) {
             s_stopHeld = false;
-            gyroUdpSendStop();  // tell server → release claim + blackout
+            // #825 — gyroUdpSendStop() now allocates a fresh nonce + arms
+            // the retry slot. UI snaps back to IDLE immediately; the UDP
+            // layer keeps retransmitting until CMD_GYRO_STOP_ACK arrives
+            // or the retry budget burns. Either way the operator sees a
+            // responsive UI; the orphan-claim risk is server-side
+            // (handled by the 60 s stale-release fallback if all
+            // retries somehow fail).
+            gyroUdpSendStop();
             gyroUdpSetStreaming(false, 0);
             s_state = UIState::IDLE;
+            s_claimNonce = 0;
+            s_startNonce = 0;
+            gyroUdpSetUiState(GYRO_UI_IDLE, 0);
             drawIdle();
         }
         if (s_sleepHeld) {
@@ -963,20 +1006,53 @@ void gyroUIUpdate() {
         drawCalibratePage();
     }
 
-    // #772 — server refused the claim (another device holds the mover).
-    // Bounce back to IDLE with a brief BUSY indication so the operator
-    // gets the same feedback Android shows ("Mover claimed by another
-    // device" toast). Polled here once per loop; one-shot read.
+    // #772 / #825 — server refused the claim (another device holds the
+    // mover, or controller marked Inactive). Bounce back to IDLE with a
+    // brief BUSY indication. Polled here once per loop; one-shot read.
     if (gyroUdpClaimDeniedConsume()) {
         gyroUdpSetStreaming(false, 0);
+        gyroUdpClearStartPending();
         s_state = UIState::IDLE;
         s_calibHeld = false;
         s_startHeld = false;
+        s_startNonce = 0;
+        s_claimNonce = 0;
+        gyroUdpSetUiState(GYRO_UI_IDLE, 0);
         gyroClearScreen(GC_RED);
         gyroDrawText(CX - 18, CY - 8, "BUSY", 2, GC_WHITE);
         gyroDrawText(CX - 60, CY + 16, "Mover held by other", 1, GC_WHITE);
         delay(700);
         drawIdle();
+    }
+
+    // #825 — WAITING_ACK resolution paths.
+    if (s_state == UIState::WAITING_ACK) {
+        uint16_t ackedMover = 0;
+        if (gyroUdpStartAckedConsume(&ackedMover)) {
+            // Claim is live. Advance to ACTIVE, start the orient stream,
+            // and remember the nonce so HB_REPs can advertise it.
+            s_claimNonce = s_startNonce;
+            s_startNonce = 0;
+            s_state = UIState::ACTIVE;
+            s_page  = 0;
+            gyroUdpSetStreaming(true, 0);
+            gyroUdpSetUiState(GYRO_UI_ACTIVE, s_claimNonce);
+            drawCurrentPage();
+        } else if ((uint32_t)millis() - s_startSentMs > START_ACK_TIMEOUT_MS) {
+            // Retry budget burned without an ACK or DENIED. Most likely
+            // orchestrator is unreachable. Show a "NO RESPONSE" splash
+            // and revert to IDLE; the operator can hold START again.
+            gyroUdpClearStartPending();
+            s_state = UIState::IDLE;
+            s_startNonce = 0;
+            s_claimNonce = 0;
+            gyroUdpSetUiState(GYRO_UI_IDLE, 0);
+            gyroClearScreen(GC_DKGREY);
+            gyroDrawText(CX - 30, CY - 12, "NO RESP", 2, GC_RED);
+            gyroDrawText(CX - 60, CY + 16, "Server unreachable", 1, GC_WHITE);
+            delay(700);
+            drawIdle();
+        }
     }
 
 periodic:

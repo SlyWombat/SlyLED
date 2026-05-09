@@ -32,6 +32,14 @@ class SettingsViewModel @Inject constructor(
     // #804 — shared with LiveStageViewModel; both surfaces drive the same singleton.
     val autoBrightnessState: StateFlow<MicAutoBrightness.Mode> = mic.state
     val autoBrightnessEnvelope: StateFlow<Float> = mic.envelope
+    // #820 — raw mic peak (pre-follower) so the UI can show "mic is dead"
+    // vs "floor too high" at a glance.
+    val autoBrightnessRawPeak: StateFlow<Float> = mic.rawPeak
+    // #820 — beat detection (see LiveStageViewModel for rationale).
+    val autoBrightnessBeatPulse: StateFlow<Float> = mic.beatPulse
+    val autoBrightnessBpm: StateFlow<Float> = mic.bpm
+    val autoBrightnessBeatCount: StateFlow<Int> = mic.beatCount
+    val autoBrightnessMaster: StateFlow<Float> = mic.master
     // #804 — tunables exposed as flows so Settings + Stage UIs both
     // recompose when either surface (or the persisted-prefs load) edits
     // them. Pre-fix the UI cached values via `remember`, so a Stage
@@ -42,6 +50,9 @@ class SettingsViewModel @Inject constructor(
     val autoBrightnessCeilingFlow: StateFlow<Float> = mic.ceilingFlow
     val autoBrightnessAttackMsFlow: StateFlow<Float> = mic.attackMsFlow
     val autoBrightnessReleaseMsFlow: StateFlow<Float> = mic.releaseMsFlow
+    // #820 — semantic Audio Source kind. See AudioSourceKind enum.
+    val autoBrightnessAudioSourceKindFlow: StateFlow<com.slywombat.slyled.audio.AudioSourceKind> =
+        mic.audioSourceKindFlow
     private val _autoBrightnessEnabled = MutableStateFlow(false)
     val autoBrightnessEnabled: StateFlow<Boolean> = _autoBrightnessEnabled.asStateFlow()
     private var lastFastBrightnessJob: Job? = null
@@ -52,7 +63,19 @@ class SettingsViewModel @Inject constructor(
         ceiling: Float? = null,
         attackMs: Float? = null,
         releaseMs: Float? = null,
-    ) = mic.configure(sensitivity, floor, ceiling, attackMs, releaseMs)
+        audioSourceKind: com.slywombat.slyled.audio.AudioSourceKind? = null,
+    ) = mic.configure(sensitivity, floor, ceiling, attackMs, releaseMs, audioSourceKind)
+
+    // #820 — preview / live capture lifecycle. See LiveStageViewModel
+    // for the rationale; same surface so the Settings panel can drive
+    // the meter without committing to live brightness writes.
+    fun startAutoBrightnessPreview() = mic.startPreview(viewModelScope)
+    fun stopAutoBrightnessPreview() {
+        if (!_autoBrightnessEnabled.value) mic.stop()
+    }
+    fun setAutoBrightnessMediaProjection(
+        mp: android.media.projection.MediaProjection?
+    ) = mic.setMediaProjection(mp)
 
     fun setAutoBrightnessEnabled(enabled: Boolean) {
         if (enabled == _autoBrightnessEnabled.value) return
@@ -109,10 +132,28 @@ class SettingsViewModel @Inject constructor(
     private val _dmxProfiles = MutableStateFlow<List<DmxProfile>>(emptyList())
     val dmxProfiles: StateFlow<List<DmxProfile>> = _dmxProfiles
 
+    // #824 — orchestrator version, fetched from /api/status. Surfaced on the
+    // Settings footer alongside the APK's BuildConfig.VERSION_NAME so the
+    // operator can spot a half-shipped release where Android lags the
+    // server (or vice versa).
+    private val _serverVersion = MutableStateFlow("")
+    val serverVersion: StateFlow<String> = _serverVersion.asStateFlow()
+
     init {
         loadSettings()
         loadDmxStatus()
         loadDmxSettings()
+        loadServerVersion()
+    }
+
+    fun loadServerVersion() {
+        viewModelScope.launch {
+            try {
+                _serverVersion.value = repository.getStatus().version
+            } catch (_: Exception) {
+                _serverVersion.value = ""
+            }
+        }
     }
 
     fun loadSettings() {

@@ -378,6 +378,20 @@ class Remote:
         self._apply_quat(tuple(float(x) for x in quat))
 
     def _apply_quat(self, q):
+        # #824 — phone-only yaw-direction flip. Live test 2026-05-05:
+        # operator yaws phone +90° (pointer now at stage-left), head pans
+        # to stage-right — the rotation around the up-axis comes out
+        # mirrored. Other axes (pitch, roll) are correct, so a global
+        # quat conjugate would over-correct. Negating only the
+        # z-component of the unit quaternion mirrors rotations around
+        # the world-up axis without touching pitch or roll: q is
+        # (w, x, y, z) where z carries the around-Z rotation.
+        # Confirmed against the #824 contract matrix
+        # (tests/test_orient_contract.py): with this flip the phone-
+        # portrait-yaw entry passes; phone-portrait-pitch/-roll stay
+        # passing. Puck (kind=gyro-puck) is unaffected by this branch.
+        if self.kind == KIND_PHONE and q is not None:
+            q = (q[0], q[1], q[2], -q[3])
         self.last_quat_world = q
         self.last_data = time.time()
         # #812 — auto-recover from a transient comms drop. The "connection

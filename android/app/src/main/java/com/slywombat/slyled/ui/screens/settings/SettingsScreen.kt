@@ -33,6 +33,7 @@ import com.slywombat.slyled.data.model.DmxProfile
 import com.slywombat.slyled.ui.theme.GreenOnline
 import com.slywombat.slyled.ui.theme.RedError
 import com.slywombat.slyled.viewmodel.SettingsViewModel
+import kotlin.math.pow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -359,23 +360,58 @@ fun SettingsScreen(
                 Text("Disconnect")
             }
 
-            // App version footer — tap to copy to clipboard for bug reports.
-            // Source of truth is BuildConfig from the APK itself, so sideloaded
-            // builds can't lie about which version is actually running (#508).
-            val versionStr = "SlyLED v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
-            Text(
-                text = versionStr,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp)
-                    .clickable {
+            // #824 — version footer. App and orchestrator track independently
+            // (decoupled in build_release.ps1), so the two version strings
+            // will diverge naturally on any release that touches only one
+            // side. Pre-fix the banner fired on ANY difference, training
+            // the operator to ignore it; now it fires only when the
+            // orchestrator is below the APK's declared minimum (see
+            // Compatibility.MIN_ORCHESTRATOR_VERSION) — i.e. on a real
+            // known-incompatibility, not arbitrary drift.
+            val appVersion = BuildConfig.VERSION_NAME
+            val orchVersion by viewModel.serverVersion.collectAsState()
+            val versionStr = "App v$appVersion (${BuildConfig.VERSION_CODE}) " +
+                              "/ Orchestrator v${if (orchVersion.isEmpty()) "?" else orchVersion}"
+            val orchTooOld = com.slywombat.slyled.data.repository.Compatibility
+                .orchestratorBelowFloor(orchVersion)
+            if (orchTooOld) {
+                Spacer(Modifier.height(8.dp))
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Warning, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "Orchestrator v$orchVersion is older than this APK's " +
+                                    "minimum (${com.slywombat.slyled.data.repository.Compatibility.MIN_ORCHESTRATOR_VERSION}). " +
+                                    "Update the orchestrator before running live.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+            Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                Text(
+                    text = "App:           v$appVersion (${BuildConfig.VERSION_CODE})",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = "Orchestrator:  v${if (orchVersion.isEmpty()) "?" else orchVersion}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (orchTooOld) MaterialTheme.colorScheme.error
+                             else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.clickable {
                         val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         cm.setPrimaryClip(ClipData.newPlainText("SlyLED version", versionStr))
                         Toast.makeText(context, "Copied $versionStr", Toast.LENGTH_SHORT).show()
                     }
-            )
+                )
+            }
 
             Spacer(Modifier.height(16.dp))
         }
@@ -827,33 +863,235 @@ private fun AutoBrightnessSection(
             }
             Spacer(Modifier.height(8.dp))
 
-            // Mic source — placeholder; v1 always uses default mic.
+            // #820 — Audio Sources picker (replaces the prior six-AudioSource-
+            // constant dropdown). Four semantic sources operators actually
+            // think in: Microphone / Playback Capture / Remote Submix /
+            // USB Audio. State-aware hints surface device-specific
+            // unavailability (no USB, Remote Submix denied, MediaProjection
+            // consent pending). Switching restarts capture transparently
+            // — preview mode keeps the meter live while Auto Brightness
+            // is off so the operator can audition each source.
+            val rawPeak by viewModel.autoBrightnessRawPeak.collectAsState()
+            val audioKind by viewModel.autoBrightnessAudioSourceKindFlow.collectAsState()
+            // #820 — Playback Capture consent launcher; same surface as
+            // the Stage modal. Fires when the operator selects
+            // PLAYBACK_CAPTURE so the system shows the screen-recording
+            // dialog. On grant the VM gets a MediaProjection and the
+            // capture pipeline restarts under the playback configuration.
+            val requestPlaybackConsent =
+                com.slywombat.slyled.audio.rememberPlaybackCaptureLauncher { mp ->
+                    viewModel.setAutoBrightnessMediaProjection(mp)
+                }
+            // Auto-start preview on this tab whenever permission is held
+            // and Auto Brightness is off; live capture is unaffected.
+            val abEnabled = enabled
+            val hasPerm = remember(state) { viewModel.autoBrightnessHasPermission() }
+            DisposableEffect(hasPerm, abEnabled) {
+                if (hasPerm && !abEnabled) viewModel.startAutoBrightnessPreview()
+                onDispose { viewModel.stopAutoBrightnessPreview() }
+            }
             Text(
-                "Mic Source",
+                "Audio Sources",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            OutlinedTextField(
-                value = "Built-in (default)",
-                onValueChange = {},
-                readOnly = true,
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+            val srcOptions = listOf(
+                com.slywombat.slyled.audio.AudioSourceKind.MICROPHONE to "Microphone",
+                com.slywombat.slyled.audio.AudioSourceKind.PLAYBACK_CAPTURE to
+                    "Playback Capture (loopback)",
+                com.slywombat.slyled.audio.AudioSourceKind.REMOTE_SUBMIX to "Remote Submix",
+                com.slywombat.slyled.audio.AudioSourceKind.USB_AUDIO to "USB Audio",
             )
+            srcOptions.forEach { (kind, label) ->
+                Column {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                viewModel.configureAutoBrightness(audioSourceKind = kind)
+                                if (kind == com.slywombat.slyled.audio.AudioSourceKind.PLAYBACK_CAPTURE) {
+                                    requestPlaybackConsent()
+                                }
+                            }
+                            .padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = audioKind == kind,
+                            onClick = {
+                                viewModel.configureAutoBrightness(audioSourceKind = kind)
+                                if (kind == com.slywombat.slyled.audio.AudioSourceKind.PLAYBACK_CAPTURE) {
+                                    requestPlaybackConsent()
+                                }
+                            },
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(label, style = MaterialTheme.typography.bodyMedium)
+                    }
+                    if (audioKind == kind) {
+                        // (hint, isError). Informational hints render in
+                        // the muted on-surface variant; failure hints
+                        // render in error red so the operator notices.
+                        val (hint, isError) = when {
+                            kind == com.slywombat.slyled.audio.AudioSourceKind.PLAYBACK_CAPTURE
+                                && state == MicAutoBrightness.Mode.NeedsPlaybackConsent ->
+                                    "Consent declined or pending. Tap Playback Capture again to retry." to true
+                            kind == com.slywombat.slyled.audio.AudioSourceKind.PLAYBACK_CAPTURE ->
+                                    ("Captures audio from apps playing through the device speakers " +
+                                    "(Spotify, YouTube, etc.). Android shares the screen-recording " +
+                                    "consent dialog for this — SlyLED only reads the audio stream, " +
+                                    "not screen content.") to false
+                            kind == com.slywombat.slyled.audio.AudioSourceKind.REMOTE_SUBMIX
+                                && state == MicAutoBrightness.Mode.RemoteSubmixDenied ->
+                                    "Remote Submix isn't available on this device — denied by the OS." to true
+                            kind == com.slywombat.slyled.audio.AudioSourceKind.USB_AUDIO
+                                && state == MicAutoBrightness.Mode.NoUsbDevice ->
+                                    "No USB input device detected. Plug in a USB mic or audio interface." to true
+                            else -> null to false
+                        }
+                        if (hint != null) {
+                            Text(
+                                hint,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isError) RedError
+                                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 32.dp, top = 2.dp),
+                            )
+                        }
+                    }
+                }
+            }
             Spacer(Modifier.height(12.dp))
 
-            // Live meter
-            Text(
-                "Envelope",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            // #820 — Raw audio input meter (pre-follower). sqrt scale so
+            // typical music peaks of 0.05–0.15 are visible (the linear
+            // mapping was unreadable; pre-fix the operator only saw the
+            // leading colour pip change red→green and reported "the
+            // meter does not move"). Numeric readout to the right gives
+            // the underlying value for diagnostics.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    "Raw audio input (peak)",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "%.4f".format(rawPeak),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (rawPeak > 0.0005f) GreenOnline else RedError,
+                )
+            }
+            // Cube-root scaling — typical post-AGC room peak of 0.005–0.05
+            // maps to 17–37 % bar fill, visibly moving without
+            // saturating on louder content.
             LinearProgressIndicator(
-                progress = { envelope.coerceIn(0f, 1f) },
+                progress = { rawPeak.coerceIn(0f, 1f).toDouble().pow(1.0 / 3.0).toFloat() },
+                modifier = Modifier.fillMaxWidth().height(10.dp),
+                color = if (rawPeak > 0.0005f) GreenOnline else RedError,
+                trackColor = MaterialTheme.colorScheme.outlineVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+
+            // Live envelope meter (post-follower). Cube-root scaled so
+            // the post-LPF RMS values (typically 0.005–0.05 for music)
+            // are visible — pre-fix the linear bar showed sub-1 % fill
+            // and read as "doing nothing" even with audio playing.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    "Envelope (after sensitivity / floor / ceiling)",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "%.4f".format(envelope),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            LinearProgressIndicator(
+                progress = { envelope.coerceIn(0f, 1f).toDouble().pow(1.0 / 3.0).toFloat() },
                 modifier = Modifier.fillMaxWidth().height(10.dp),
                 color = if (state == MicAutoBrightness.Mode.Clipping) RedError else GreenOnline,
                 trackColor = MaterialTheme.colorScheme.outlineVariant,
             )
+            Spacer(Modifier.height(8.dp))
+
+            // #820 — Brightness output bar. The operator-meaningful
+            // signal: floor + (ceiling-floor) * max(envelope, beatPulse).
+            // With floor=0.4, the bar baselines at 40 % and swings up
+            // to 100 % on each beat. Linear scale (the bar IS the
+            // brightness; it should match what the lights are doing 1:1).
+            val master by viewModel.autoBrightnessMaster.collectAsState()
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    "Brightness output (sent to lights)",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    "%d / 255".format((master * 255f).toInt()),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            LinearProgressIndicator(
+                progress = { master.coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth().height(14.dp),
+                color = androidx.compose.ui.graphics.Color(0xFFFB923C), // amber
+                trackColor = MaterialTheme.colorScheme.outlineVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+
+            // Beat indicator (pulsing dot + persistent BPM readout).
+            val beatPulse by viewModel.autoBrightnessBeatPulse.collectAsState()
+            val bpm by viewModel.autoBrightnessBpm.collectAsState()
+            val beatCount by viewModel.autoBrightnessBeatCount.collectAsState()
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                androidx.compose.foundation.Canvas(modifier = Modifier.size(36.dp)) {
+                    val r = 6f + 28f * beatPulse.coerceIn(0f, 1f)
+                    drawCircle(
+                        color = androidx.compose.ui.graphics.Color(0xFF334155),
+                        radius = size.minDimension / 2f,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5f),
+                    )
+                    drawCircle(
+                        color = androidx.compose.ui.graphics.Color(0xFFFB7185),
+                        radius = r.coerceAtMost(size.minDimension / 2f),
+                        alpha = 0.4f + 0.6f * beatPulse.coerceIn(0f, 1f),
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Beat",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        if (bpm > 0f) "${bpm.toInt()} BPM" else "— BPM (waiting for beats)",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                Text(
+                    "$beatCount beats",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Spacer(Modifier.height(12.dp))
 
             // Tunables — single source of truth is the StateFlow on the

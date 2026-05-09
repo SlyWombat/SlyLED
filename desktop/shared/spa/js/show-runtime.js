@@ -74,8 +74,13 @@ function _rtRefresh(){
     var progEl=document.getElementById('rt-prog-fill');
     var nowEl=document.getElementById('rt-now-playing');
     if(d.running){
-      if(timeEl)timeEl.textContent=_fmtDur(d.totalElapsed||0)+' / '+_fmtDur(d.totalDurationS||0);
-      var pct=d.totalDurationS>0?Math.min(100,Math.round((d.totalElapsed/d.totalDurationS)*100)):0;
+      // #831 \u2014 show per-iteration position, not cumulative-since-start.
+      // totalElapsed grows past totalDurationS on every loop pass and
+      // pegs the bar at 100% forever; currentElapsed/currentDurationS
+      // reset on each loop and reflect what the operator actually
+      // wants to see ("how far into THIS pass are we?").
+      if(timeEl)timeEl.textContent=_fmtDur(d.currentElapsed||0)+' / '+_fmtDur(d.currentDurationS||0);
+      var pct=d.currentDurationS>0?Math.min(100,Math.round((d.currentElapsed/d.currentDurationS)*100)):0;
       if(progEl)progEl.style.width=pct+'%';
       if(nowEl)nowEl.textContent=d.currentName?('\u25b8 '+d.currentName):'';
     }else{

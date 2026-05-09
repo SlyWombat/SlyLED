@@ -5,6 +5,12 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- #804 — Auto Brightness (mic envelope follower) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- #820 — Audio Source = Playback Capture (loopback). Foreground
+         service of type mediaProjection is mandatory on Android 14 (API 34)
+         + before MediaProjection.createAudioRecord can be called. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
@@ -32,5 +38,15 @@
                 <data android:scheme="slyled" />
             </intent-filter>
         </activity>
+
+        <!-- #820 — Foreground service that holds MediaProjection alive
+             while AudioPlaybackCaptureConfiguration is recording. Service
+             type "mediaProjection" is required by Android 14+. The
+             notification is shown for the duration of the capture so the
+             operator always sees the system mic/projection indicator. -->
+        <service
+            android:name=".audio.PlaybackCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
     </application>
 </manifest>

@@ -25,6 +25,20 @@ class LiveStageViewModel @Inject constructor(
     // #804 — Auto Brightness state mirrors mic driver and feeds Stage button.
     val autoBrightnessState: StateFlow<MicAutoBrightness.Mode> = mic.state
     val autoBrightnessEnvelope: StateFlow<Float> = mic.envelope
+    // #820 — raw mic peak (pre-follower) so the UI can show "mic is dead"
+    // vs "floor too high" at a glance.
+    val autoBrightnessRawPeak: StateFlow<Float> = mic.rawPeak
+    // #820 — beat detection. UI renders a pulsing dot from beatPulse
+    // (snaps to 1.0 on each beat, decays exponentially), and a BPM
+    // readout that persists between beats so the operator sees the
+    // tempo carry forward.
+    val autoBrightnessBeatPulse: StateFlow<Float> = mic.beatPulse
+    val autoBrightnessBpm: StateFlow<Float> = mic.bpm
+    val autoBrightnessBeatCount: StateFlow<Int> = mic.beatCount
+    // #820 — final master brightness (0..1, post-floor/ceiling). The
+    // value the lights actually see — distinct from raw mic input
+    // (pre-DSP) and envelope (post-follower, pre-floor).
+    val autoBrightnessMaster: StateFlow<Float> = mic.master
     // Tunables exposed as flows so Stage and Settings UIs both recompose
     // when the *other* surface (or the persisted-prefs load) changes them.
     val autoBrightnessSensitivityFlow: StateFlow<Float> = mic.sensitivityFlow
@@ -32,6 +46,9 @@ class LiveStageViewModel @Inject constructor(
     val autoBrightnessCeilingFlow: StateFlow<Float> = mic.ceilingFlow
     val autoBrightnessAttackMsFlow: StateFlow<Float> = mic.attackMsFlow
     val autoBrightnessReleaseMsFlow: StateFlow<Float> = mic.releaseMsFlow
+    // #820 — semantic Audio Source kind. See AudioSourceKind enum.
+    val autoBrightnessAudioSourceKindFlow: StateFlow<com.slywombat.slyled.audio.AudioSourceKind> =
+        mic.audioSourceKindFlow
 
     private val _autoBrightnessEnabled = MutableStateFlow(false)
     val autoBrightnessEnabled: StateFlow<Boolean> = _autoBrightnessEnabled.asStateFlow()
@@ -166,14 +183,27 @@ class LiveStageViewModel @Inject constructor(
         }
     }
 
-    // #804 — auto-brightness control surface.
+    // #804 — auto-brightness control surface. #820 adds audioSourceKind.
     fun configureAutoBrightness(
         sensitivity: Float? = null,
         floor: Float? = null,
         ceiling: Float? = null,
         attackMs: Float? = null,
         releaseMs: Float? = null,
-    ) = mic.configure(sensitivity, floor, ceiling, attackMs, releaseMs)
+        audioSourceKind: com.slywombat.slyled.audio.AudioSourceKind? = null,
+    ) = mic.configure(sensitivity, floor, ceiling, attackMs, releaseMs, audioSourceKind)
+
+    // #820 — preview / live capture lifecycle. Preview lets the modal
+    // show the raw + envelope meters whenever the operator opens it,
+    // even with Auto Brightness toggled off, so they can audition each
+    // Audio Source without driving the lights.
+    fun startAutoBrightnessPreview() = mic.startPreview(viewModelScope)
+    fun stopAutoBrightnessPreview() {
+        if (!_autoBrightnessEnabled.value) mic.stop()
+    }
+    fun setAutoBrightnessMediaProjection(
+        mp: android.media.projection.MediaProjection?
+    ) = mic.setMediaProjection(mp)
 
     fun setAutoBrightnessEnabled(enabled: Boolean) {
         if (enabled == _autoBrightnessEnabled.value) return
