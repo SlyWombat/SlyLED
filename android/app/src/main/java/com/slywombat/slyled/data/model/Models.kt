@@ -448,7 +448,17 @@ data class ShowStatus(
 @Serializable
 data class ShowPlaylist(
     val order: List<Int> = emptyList(),
-    val loop: Boolean = false,
+    val loopAll: Boolean = false,
+    val items: List<PlaylistItem> = emptyList(),
+    val totalDurationS: Double = 0.0,
+)
+
+@Serializable
+data class PlaylistItem(
+    val id: Int = 0,
+    val name: String = "",
+    val durationS: Double = 0.0,
+    val baked: Boolean = false,
 )
 
 // ── DMX Status (parsed from nested {artnet:{...}, sacn:{...}} response) ──

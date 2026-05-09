@@ -22,6 +22,25 @@ private val Context.dataStore by preferencesDataStore(name = "slyled_prefs")
 data class UserPosition(val xMm: Float, val yMm: Float, val zMm: Float)
 
 /**
+ * #826 — Aim-wizard derived body-frame axes, persisted on-device. The
+ * orchestrator's per-Remote `forward_local`/`up_local` are clobbered by
+ * the legacy `Surface.ROTATION_*` grip-publish on every Controller-mode
+ * entry, so persistence has to live on the phone: store the wizard's
+ * output here, then re-publish from this on every controller-mode
+ * grip-publish so wizard'd devices skip the legacy ROTATION_* table
+ * entirely.
+ */
+data class WizardAxes(
+    val forward: FloatArray,
+    val up: FloatArray,
+) {
+    init {
+        require(forward.size == 3) { "forward must be 3 floats" }
+        require(up.size == 3) { "up must be 3 floats" }
+    }
+}
+
+/**
  * #804 — Auto Brightness operator-tunable settings, persisted across
  * app restarts. Mirrors the EnvelopeFollower defaults so loading
  * before any user interaction is a no-op.
@@ -63,6 +82,15 @@ class ServerPreferences @Inject constructor(
     private val AB_RELEASE_KEY = floatPreferencesKey("auto_brightness_release_ms")
     // #820 — semantic audio source kind, persisted as enum name string.
     private val AB_AUDIO_SOURCE_KIND_KEY = stringPreferencesKey("auto_brightness_audio_source_kind")
+
+    // #826 — aim-wizard derived axes (stage-frame).
+    private val WIZ_FWD_X_KEY = floatPreferencesKey("aim_wizard_forward_x")
+    private val WIZ_FWD_Y_KEY = floatPreferencesKey("aim_wizard_forward_y")
+    private val WIZ_FWD_Z_KEY = floatPreferencesKey("aim_wizard_forward_z")
+    private val WIZ_UP_X_KEY = floatPreferencesKey("aim_wizard_up_x")
+    private val WIZ_UP_Y_KEY = floatPreferencesKey("aim_wizard_up_y")
+    private val WIZ_UP_Z_KEY = floatPreferencesKey("aim_wizard_up_z")
+    private val WIZ_COMPLETED_AT_KEY = stringPreferencesKey("aim_wizard_completed_at")
 
     suspend fun save(host: String, port: Int) {
         context.dataStore.edit { prefs ->
@@ -116,6 +144,48 @@ class ServerPreferences @Inject constructor(
             p[AB_RELEASE_KEY] = prefs.releaseMs
             p[AB_AUDIO_SOURCE_KIND_KEY] = prefs.audioSourceKind.name
         }
+    }
+
+    /**
+     * #826 — save wizard-derived axes plus the ISO timestamp so a future
+     * "wizard ran on Y-M-D" hint in Settings can be rendered without a
+     * server round-trip. Caller should pass non-null three-element
+     * arrays from `AimWizardResult.{forwardLocal, upLocal}`.
+     */
+    suspend fun saveWizardAxes(
+        forward: FloatArray, up: FloatArray, completedAtIso: String,
+    ) {
+        require(forward.size == 3 && up.size == 3) {
+            "wizard axes must be 3-element vectors"
+        }
+        context.dataStore.edit { p ->
+            p[WIZ_FWD_X_KEY] = forward[0]
+            p[WIZ_FWD_Y_KEY] = forward[1]
+            p[WIZ_FWD_Z_KEY] = forward[2]
+            p[WIZ_UP_X_KEY] = up[0]
+            p[WIZ_UP_Y_KEY] = up[1]
+            p[WIZ_UP_Z_KEY] = up[2]
+            p[WIZ_COMPLETED_AT_KEY] = completedAtIso
+        }
+    }
+
+    /**
+     * #826 — load saved wizard axes. Returns null when the operator has
+     * never run the wizard on this device — caller falls back to the
+     * legacy `Surface.ROTATION_*` grip-publish table.
+     */
+    suspend fun loadWizardAxes(): WizardAxes? {
+        val p = context.dataStore.data.first()
+        val fx = p[WIZ_FWD_X_KEY] ?: return null
+        val fy = p[WIZ_FWD_Y_KEY] ?: return null
+        val fz = p[WIZ_FWD_Z_KEY] ?: return null
+        val ux = p[WIZ_UP_X_KEY] ?: return null
+        val uy = p[WIZ_UP_Y_KEY] ?: return null
+        val uz = p[WIZ_UP_Z_KEY] ?: return null
+        return WizardAxes(
+            forward = floatArrayOf(fx, fy, fz),
+            up = floatArrayOf(ux, uy, uz),
+        )
     }
 
     suspend fun loadAutoBrightness(): AutoBrightnessPrefs {

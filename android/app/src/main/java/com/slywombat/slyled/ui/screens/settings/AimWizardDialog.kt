@@ -44,9 +44,15 @@ import kotlinx.coroutines.launch
  *      direction. Press capture." → Q_neutral
  *   2. "From neutral, tip the phone forward toward the floor — the
  *      gesture you'd use to tilt the head DOWN. Press capture." → Q_pitch_fwd
- *   3. "Return to neutral. Then yaw the phone to your left — the
- *      gesture you'd use to pan the head to stage-left. Press capture."
- *      → Q_yaw_left
+ *   3. "Return to neutral. Now yaw the phone in the direction you'd
+ *      use to pan the head to STAGE-LEFT (the actor's left as the
+ *      actor faces the audience — typically the audience's RIGHT).
+ *      Press capture." → Q_yaw_left
+ *      Stage-anchored phrasing (per #826 operator comment 2026-05-09):
+ *      "your left" is ambiguous — operator-LEFT can be audience-RIGHT
+ *      or audience-LEFT depending on whether they read "your" from the
+ *      audience or actor perspective. A wrong-direction yaw here sign-
+ *      inverts up_local and silently flips every subsequent yaw aim.
  */
 
 private data class WizardStep(val role: String, val label: String, val instructions: String)
@@ -66,9 +72,18 @@ private val WIZARD_STEPS = listOf(
     ),
     WizardStep(
         "yaw_left",
-        "Step 3 — Yaw left",
-        "Return to neutral. Then yaw the phone to your LEFT — the gesture you'd use " +
-            "to pan the head to stage-LEFT. Press CAPTURE at the end of the gesture.",
+        "Step 3 — Pan to stage-left",
+        // #826 — anchor the gesture to STAGE-LEFT, not "your left".
+        // Operator-LEFT is ambiguous (audience-perspective vs actor-
+        // perspective vs facing-the-rig); a wrong-direction yaw here
+        // sign-inverts up_local and silently flips every yaw aim in
+        // the field. Stage-LEFT (the actor's left as the actor faces
+        // the audience — typically the audience's RIGHT) is the
+        // single anchor the orchestrator's stage frame uses.
+        "Return to neutral. Now yaw the phone in the direction you'd use " +
+            "to pan the head to STAGE-LEFT — the actor's left as the actor " +
+            "faces the audience (typically the audience's RIGHT). " +
+            "Press CAPTURE at the end of the gesture.",
     ),
 )
 

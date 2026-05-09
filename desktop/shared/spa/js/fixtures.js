@@ -240,29 +240,61 @@ function editFixture(id){
     h+='<button class="btn" onclick="'+calOnClick+'" style="'+calStyle+'" title="'+calTitle+'">Calibrate'+(f.moverCalibrated?' ✓':'')+'</button>';
     h+='</div>';
   }
-  // #864 — per-string position editor for multi-string LED fixtures.
-  // When the fixture's strings array carries more than one entry, expose
-  // X/Y/Z (mm) inputs per string. Each defaults to the string's own
-  // (x,y,z) if previously set, else the fixture's layout position. A
-  // string with all three blank means "inherit fixture position" — same
-  // as today; partial values are rejected on save.
-  if(ft==='led'&&f.strings&&f.strings.length>1){
+  // #864 / #866 — per-string position + rotation editor for multi-string
+  // LED fixtures. The fixture's `strings` array always carries 8 slots
+  // (PONG protocol constant) but only the slots with leds>0 are real
+  // strings reported by the firmware — show inputs for those only.
+  // Each row captures: stage-mm start position (x,y,z) and a rotation
+  // [rx, ry, rz] in degrees using the same convention as cameras and
+  // DMX fixtures (#586/#600). Default forward = stage +Y; rotation
+  // re-aims that. Length is `mm` from firmware (read-only). The
+  // rotation replaces the legacy NESW `sdir` token for rendering
+  // purposes — sdir stays on the record for back-compat.
+  var activeStrings=[];
+  if(ft==='led'&&f.strings){
+    for(var aiS=0;aiS<f.strings.length;aiS++){
+      if(f.strings[aiS]&&(f.strings[aiS].leds||0)>0)activeStrings.push(aiS);
+    }
+  }
+  if(ft==='led'&&activeStrings.length>0){
     h+='<div style="margin-top:.8em;border-top:1px solid #1e293b;padding-top:.6em">';
-    h+='<div style="font-weight:bold;font-size:.85em;margin-bottom:.4em">Per-String Positions <span style="color:#64748b;font-size:.75em">(stage mm — leave blank to inherit fixture position)</span></div>';
-    for(var ss=0;ss<f.strings.length;ss++){
+    h+='<div style="font-weight:bold;font-size:.85em;margin-bottom:.4em">Per-String Position &amp; Rotation <span style="color:#64748b;font-size:.75em">('+activeStrings.length+' active string'+(activeStrings.length===1?'':'s')+' reported)</span></div>';
+    for(var aIdx=0;aIdx<activeStrings.length;aIdx++){
+      var ss=activeStrings[aIdx];
       var sObj=f.strings[ss]||{};
       var sx=(sObj.x!=null)?sObj.x:'';
       var sy=(sObj.y!=null)?sObj.y:'';
       var sz=(sObj.z!=null)?sObj.z:'';
+      var srot=Array.isArray(sObj.rotation)?sObj.rotation:[];
+      var rx=(typeof srot[0]==='number')?srot[0]:'';
+      var ry=(typeof srot[1]==='number')?srot[1]:'';
+      var rz=(typeof srot[2]==='number')?srot[2]:'';
       var sLeds=sObj.leds||0;
-      h+='<div style="display:flex;align-items:center;gap:.3em;margin-bottom:.3em">';
-      h+='<span style="font-size:.78em;color:#94a3b8;min-width:80px">String '+(ss+1)+' <span style="color:#64748b">('+sLeds+' LEDs)</span></span>';
+      var sMm=sObj.mm||0;
+      h+='<div style="margin-bottom:.55em;padding:.4em .5em;background:#0f172a;border-radius:4px">';
+      h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.25em"><b>String '+(ss+1)+'</b> <span style="color:#64748b">'+sLeds+' LEDs · '+sMm+' mm</span></div>';
+      h+='<div style="display:flex;align-items:center;gap:.3em;margin-bottom:.25em">';
+      h+='<span style="font-size:.7em;color:#64748b;min-width:60px">Start</span>';
       h+='<label style="font-size:.7em;color:#64748b">X</label><input id="fx-str-'+ss+'-x" type="number" value="'+sx+'" placeholder="inherit" style="width:70px">';
       h+='<label style="font-size:.7em;color:#64748b">Y</label><input id="fx-str-'+ss+'-y" type="number" value="'+sy+'" placeholder="inherit" style="width:70px">';
       h+='<label style="font-size:.7em;color:#64748b">Z</label><input id="fx-str-'+ss+'-z" type="number" value="'+sz+'" placeholder="inherit" style="width:70px">';
       h+='</div>';
+      h+='<div style="display:flex;align-items:center;gap:.3em;flex-wrap:wrap">';
+      h+='<span style="font-size:.7em;color:#64748b;min-width:60px">Rotation</span>';
+      h+='<label style="font-size:.7em;color:#64748b" title="pitch (about X, +down)">rx</label><input id="fx-str-'+ss+'-rx" type="number" step="any" value="'+rx+'" placeholder="0" style="width:70px">';
+      h+='<label style="font-size:.7em;color:#64748b" title="roll (about Y, stage-forward)">ry</label><input id="fx-str-'+ss+'-ry" type="number" step="any" value="'+ry+'" placeholder="0" style="width:70px">';
+      h+='<label style="font-size:.7em;color:#64748b" title="yaw / pan (about Z, stage-up)">rz</label><input id="fx-str-'+ss+'-rz" type="number" step="any" value="'+rz+'" placeholder="0" style="width:70px">';
+      h+=' <span style="font-size:.65em;color:#64748b;margin-left:.4em">presets:</span>';
+      h+=' <button class="btn" type="button" style="font-size:.65em;padding:.1em .4em" onclick="_fxSetStrRot('+ss+',-90,0,0)" title="Vertical up: tilt -90">↑ up</button>';
+      h+=' <button class="btn" type="button" style="font-size:.65em;padding:.1em .4em" onclick="_fxSetStrRot('+ss+',90,0,0)" title="Vertical down: tilt +90">↓ down</button>';
+      h+=' <button class="btn" type="button" style="font-size:.65em;padding:.1em .4em" onclick="_fxSetStrRot('+ss+',0,0,90)" title="Stage-left: pan +90">+X</button>';
+      h+=' <button class="btn" type="button" style="font-size:.65em;padding:.1em .4em" onclick="_fxSetStrRot('+ss+',0,0,-90)" title="Stage-right: pan -90">-X</button>';
+      h+=' <button class="btn" type="button" style="font-size:.65em;padding:.1em .4em" onclick="_fxSetStrRot('+ss+',0,0,0)" title="Default forward (+Y)">+Y</button>';
+      h+=' <button class="btn" type="button" style="font-size:.65em;padding:.1em .4em" onclick="_fxSetStrRot('+ss+',0,0,180)" title="Toward audience (-Y)">-Y</button>';
+      h+='</div>';
+      h+='</div>';
     }
-    h+='<p style="color:#64748b;font-size:.72em;margin-top:.2em">Spatial bake (sphere/plane/box fields) and the 3D viewport use the per-string position when all three of X/Y/Z are filled in. Leave a string blank to keep it co-located at the fixture position.</p>';
+    h+='<p style="color:#64748b;font-size:.72em;margin-top:.2em">Start = stage-mm anchor of the first LED (leave blank to inherit fixture position). Rotation = [rx, ry, rz] degrees, same convention as cameras and DMX fixtures: default forward is stage +Y, rx&gt;0 pitches toward -Z, ry rolls about the strip axis, rz pans about stage-up. Strip length is firmware-reported mm.</p>';
     h+='</div>';
   }
   h+='<div style="margin-top:.8em"><button class="btn btn-on" onclick="saveFixture('+id+',\''+ft+'\')">Save</button></div>';
@@ -603,28 +635,36 @@ function saveFixture(id,ft){
   var nx=parseInt(document.getElementById('fx-px').value)||0;
   var ny=parseInt(document.getElementById('fx-py').value)||0;
   var nz=parseInt(document.getElementById('fx-pz').value)||0;
-  // #864 — fold per-string positions into the strings payload when the
-  // editor rendered them (multi-string LED fixtures only). A row with all
-  // three of X/Y/Z populated overrides the fixture's layout position for
-  // that string. A row left fully blank inherits the fixture position
-  // (server clears any prior x/y/z by accepting only the new array).
+  // #864 / #866 — fold per-string position and rotation into the
+  // strings payload. Editor only renders rows for active strings
+  // (leds>0); inactive slots (leds=0) round-trip unchanged. Position
+  // (x,y,z) and rotation (rx,ry,rz) are independently optional but
+  // each group is all-or-nothing — partial start XYZ or partial
+  // rotation is rejected to avoid silent half-set inheritance bugs.
   if(ft==='led'){
     var origFx=null;_fixtures.forEach(function(fx){if(fx.id===id)origFx=fx;});
-    if(origFx&&origFx.strings&&origFx.strings.length>1
-        &&document.getElementById('fx-str-0-x')){
+    if(origFx&&origFx.strings&&document.querySelector('[id^="fx-str-"][id$="-x"]')){
       var perStrErr=null;
       var newStrings=origFx.strings.map(function(s,ss){
-        var copy={};for(var k in s){if(k!=='x'&&k!=='y'&&k!=='z')copy[k]=s[k];}
-        var rx=document.getElementById('fx-str-'+ss+'-x');
-        var ry=document.getElementById('fx-str-'+ss+'-y');
-        var rz=document.getElementById('fx-str-'+ss+'-z');
-        var vx=rx?rx.value.trim():'';
-        var vy=ry?ry.value.trim():'';
-        var vz=rz?rz.value.trim():'';
+        var copy={};for(var k in s){if(k!=='x'&&k!=='y'&&k!=='z'&&k!=='rotation'&&k!=='aim')copy[k]=s[k];}
+        var ex=document.getElementById('fx-str-'+ss+'-x');
+        if(!ex)return copy; // inactive string slot — keep as-is
+        var ey=document.getElementById('fx-str-'+ss+'-y');
+        var ez=document.getElementById('fx-str-'+ss+'-z');
+        var vx=ex.value.trim(),vy=ey?ey.value.trim():'',vz=ez?ez.value.trim():'';
         var filled=(vx!=='')+(vy!=='')+(vz!=='');
-        if(filled===0)return copy;
-        if(filled!==3){perStrErr='String '+(ss+1)+': fill all of X / Y / Z, or leave them all blank.';return copy;}
-        copy.x=parseFloat(vx);copy.y=parseFloat(vy);copy.z=parseFloat(vz);
+        if(filled===3){copy.x=parseFloat(vx);copy.y=parseFloat(vy);copy.z=parseFloat(vz);}
+        else if(filled!==0){perStrErr='String '+(ss+1)+' Start: fill all of X / Y / Z, or leave them all blank.';return copy;}
+        var erx=document.getElementById('fx-str-'+ss+'-rx');
+        var ery=document.getElementById('fx-str-'+ss+'-ry');
+        var erz=document.getElementById('fx-str-'+ss+'-rz');
+        var vrx=erx?erx.value.trim():'',vry=ery?ery.value.trim():'',vrz=erz?erz.value.trim():'';
+        var rFilled=(vrx!=='')+(vry!=='')+(vrz!=='');
+        if(rFilled===3){
+          copy.rotation=[parseFloat(vrx),parseFloat(vry),parseFloat(vrz)];
+        }else if(rFilled!==0){
+          perStrErr='String '+(ss+1)+' Rotation: fill all of rx / ry / rz, or leave them all blank.';return copy;
+        }
         return copy;
       });
       if(perStrErr){alert(perStrErr);return;}
@@ -648,6 +688,14 @@ function saveFixture(id,ft){
       loadSetup();
     });
   });
+}
+
+// #866 — preset helper: stamp a [rx, ry, rz] degree triple into a string row.
+function _fxSetStrRot(ss,rx,ry,rz){
+  var erx=document.getElementById('fx-str-'+ss+'-rx');
+  var ery=document.getElementById('fx-str-'+ss+'-ry');
+  var erz=document.getElementById('fx-str-'+ss+'-rz');
+  if(erx)erx.value=rx;if(ery)ery.value=ry;if(erz)erz.value=rz;
 }
 
 function delFixture(id){

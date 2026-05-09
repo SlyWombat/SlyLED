@@ -8,6 +8,7 @@ import com.slywombat.slyled.data.model.DmxProfile
 import com.slywombat.slyled.data.model.DmxStatus
 import com.slywombat.slyled.data.model.Settings
 import com.slywombat.slyled.data.model.Stage
+import com.slywombat.slyled.data.repository.ServerPreferences
 import com.slywombat.slyled.data.repository.SlyLedRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
@@ -27,6 +28,7 @@ import javax.inject.Inject
 class SettingsViewModel @Inject constructor(
     private val repository: SlyLedRepository,
     private val mic: MicAutoBrightness,
+    private val serverPrefs: ServerPreferences,
 ) : ViewModel() {
 
     // #804 — shared with LiveStageViewModel; both surfaces drive the same singleton.
@@ -279,9 +281,34 @@ class SettingsViewModel @Inject constructor(
     // pose quaternions on-device and posts them via this method;
     // server-side derives forward_local / up_local from the rotation
     // deltas (see `_aim_wizard_compute` in parent_server.py).
+    //
+    // The result is ALSO persisted on-device via `ServerPreferences`.
+    // Server persistence alone is not sufficient: every Controller-mode
+    // entry calls `publishGripFromSurfaceRotation` which POSTs the
+    // legacy `Surface.ROTATION_*` table to `/api/remotes/grip` and
+    // overwrites the wizard's axes on the orchestrator. Saving on the
+    // phone lets the controller-mode publish read wizard axes from
+    // local storage and bypass the legacy table for wizard'd devices.
     suspend fun submitAimWizard(
         poses: List<Pair<String, FloatArray>>,
-    ): SlyLedRepository.AimWizardResult = repository.submitAimWizard(poses)
+    ): SlyLedRepository.AimWizardResult {
+        val result = repository.submitAimWizard(poses)
+        if (result.ok) {
+            val fwd = result.forwardLocal
+            val up = result.upLocal
+            if (fwd != null && fwd.size == 3 && up != null && up.size == 3) {
+                try {
+                    serverPrefs.saveWizardAxes(
+                        forward = fwd, up = up,
+                        completedAtIso = java.time.Instant.now().toString(),
+                    )
+                } catch (e: Exception) {
+                    Log.w("SettingsVM", "saveWizardAxes failed: ${e.message}")
+                }
+            }
+        }
+        return result
+    }
 
     fun factoryReset() {
         viewModelScope.launch {

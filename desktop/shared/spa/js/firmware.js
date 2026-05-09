@@ -51,7 +51,23 @@ function _renderOtaTable(d){
   }
   var outdated=d.children.filter(function(c){return c.needsUpdate&&c.board!=='wled';});
   document.getElementById('ota-update-all').style.display=outdated.length>0?'inline-block':'none';
-  var h='<p style="font-size:.82em;color:#aaa;margin-bottom:.5em">Latest: v'+escapeHtml(d.latest)+'</p>';
+  // #866 — per-board latest header. Boards have independent version
+  // tracks (gyro v1.x, ESP32 v7.x, DMX bridge v7.5.20, etc.) so a
+  // single fleet-max number is meaningless. Aggregate distinct latest
+  // versions per board label and render them inline. `c.latestVersion`
+  // is already populated per-row by /api/firmware/check.
+  var perBoard={};
+  d.children.forEach(function(c){
+    if(c.board==='wled'||!c.latestVersion)return;
+    var lbl=c.board==='esp32'?'ESP32':c.board==='d1mini'?'D1 Mini':c.board;
+    perBoard[lbl]=c.latestVersion;
+  });
+  var hdr=Object.keys(perBoard).sort().map(function(k){
+    return escapeHtml(k)+': v'+escapeHtml(perBoard[k]);
+  }).join(' &middot; ');
+  var h=hdr
+    ?'<p style="font-size:.82em;color:#aaa;margin-bottom:.5em">Latest &mdash; '+hdr+'</p>'
+    :'';
   h+='<table class="tbl"><tr><th>Fixture</th><th>Board</th><th>IP</th><th>Current</th><th>Status</th><th>Action</th></tr>';
   d.children.forEach(function(c){
     var boardColors={'ESP32':'#2563eb','D1 Mini':'#7c3aed','Giga':'#059669','WLED':'#f59e0b','d1mini':'#7c3aed','esp32':'#2563eb'};
@@ -67,7 +83,9 @@ function _renderOtaTable(d){
       st='<span class="badge boff">Offline</span>';
       act='<span style="color:#666">—</span>';
     }else if(c.needsUpdate){
-      st='<span class="badge" style="background:#f60;color:#fff">v'+escapeHtml(d.latest)+' available</span>';
+      // #866 — per-row latest comes from c.latestVersion (board-track
+      // aware) not d.latest (fleet-max across all tracks).
+      st='<span class="badge" style="background:#f60;color:#fff">v'+escapeHtml(c.latestVersion||'?')+' available</span>';
       act='<button class="btn btn-on" id="ota-btn-'+c.id+'" onclick="otaSingleUpdate('+c.id+')">Update</button>';
     }else{
       st='<span class="badge bon">Up to date</span>';
@@ -280,6 +298,31 @@ function fetchFirmware(id,btn){
     }else{
       if(btn){btn.disabled=false;btn.textContent='Download';}
       if(typeof toastError==='function')toastError('Download failed: '+((r&&r.err)||'unknown'));
+    }
+  });
+}
+
+// #866 follow-up — Reload list must force-fetch firmware/registry.json
+// from GitHub-main and overwrite APPDATA. Without this, a stale APPDATA
+// copy on the operator's machine permanently shadows newer publishes
+// (e.g. DAVEBOOK-5 still showing gyro v1.2.7 after gyro-v1.2.8 was
+// released and the orchestrator was reinstalled). The endpoint busts
+// the in-memory remote-registry TTL, persists the fresh registry to
+// APPDATA, and returns it inline so we can re-render in one round-trip.
+function reloadFirmwareRegistry(btn){
+  if(btn){btn.disabled=true;var old=btn.textContent;btn.textContent='Reloading…';btn.dataset._old=old;}
+  ra('POST','/api/firmware/registry/refresh',{},function(r){
+    if(btn){btn.disabled=false;btn.textContent=btn.dataset._old||'↻ Reload list';}
+    if(r&&r.ok){
+      if(typeof toastSuccess==='function')toastSuccess('Registry refreshed from GitHub');
+      // OTA table also derives from the registry; refresh both.
+      checkOtaUpdates();
+      renderFirmwareLibrary();
+    }else{
+      if(typeof toastError==='function')toastError('Reload failed: '+((r&&r.err)||'unknown'));
+      // Fall back to a local re-render so the operator sees something
+      // sensible even when GitHub is unreachable.
+      renderFirmwareLibrary();
     }
   });
 }

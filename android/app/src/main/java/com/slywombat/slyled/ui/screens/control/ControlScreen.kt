@@ -452,7 +452,7 @@ private fun PlaylistSection(
                     )
                     Spacer(Modifier.width(4.dp))
                     Switch(
-                        checked = playlist.loop,
+                        checked = playlist.loopAll,
                         onCheckedChange = { onToggleLoop(it) }
                     )
                 }

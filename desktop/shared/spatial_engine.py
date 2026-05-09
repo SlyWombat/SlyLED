@@ -116,12 +116,31 @@ def resolve_linear_fixture(child_pos, string_cfg, fixture_points=None, rotation=
 
     Args:
         child_pos: [x, y, z] of the child in mm
-        string_cfg: dict with keys: leds, mm, sdir (0=E,1=N,2=W,3=S), plus optional points
+        string_cfg: dict with keys: leds, mm, plus optional rotation, points, sdir
         fixture_points: list of [x,y,z] control points in mm (overrides auto-compute)
-        rotation: [rx, ry, rz] degrees — fixture rotation override (applied after direction)
+        rotation: [rx, ry, rz] degrees — fixture-level rotation. Applied
+            to the resolved pixel cloud only when the string itself has
+            no `rotation` (legacy / sdir paths). When the string carries
+            its own `rotation` it's authoritative and the fixture-level
+            rotation is NOT composed on top — same semantics as a camera
+            or DMX fixture's rotation, which is stage-frame absolute.
 
     Returns:
         list of [x, y, z] pixel positions in mm
+
+    Direction resolution (#866):
+      1. `points` (Catmull-Rom control list) wins.
+      2. Else `rotation` = [rx, ry, rz] degrees on the string itself
+         — same convention as cameras and DMX fixtures (#586/#600,
+         see `camera_math.rotation_from_layout` /
+         `build_camera_to_stage`). Default forward is stage +Y; the
+         rotation re-aims that. Length comes from `mm`. This is the
+         authoritative path post-#866 — it's the only one that
+         expresses vertical strips, since the legacy `sdir` token
+         only encoded E/N/W/S in the stage X-Y plane.
+      3. Else legacy `sdir` (0=E +X, 1=N +Y, 2=W -X, 3=S -Y) — kept
+         for back-compat with pre-#866 data and single-string LED
+         fixtures the operator never edits per-string.
     """
     leds = string_cfg.get("leds", 0)
     if leds <= 0:
@@ -133,12 +152,32 @@ def resolve_linear_fixture(child_pos, string_cfg, fixture_points=None, rotation=
             pixels = [_rotate_vec(p, child_pos, rotation) for p in pixels]
         return pixels
 
-    # Auto-compute: straight line from child_pos in strip direction
     length = string_cfg.get("mm", 1000)
-    sdir = string_cfg.get("sdir", 0)
-    # Direction vectors: E=+X, N=+Y, W=-X, S=-Y (in layout mm space)
-    dirs = [[1,0,0], [0,1,0], [-1,0,0], [0,-1,0]]
-    d = dirs[sdir] if sdir < 4 else dirs[0]
+    str_rot = string_cfg.get("rotation")
+    use_string_rotation = (
+        isinstance(str_rot, (list, tuple)) and len(str_rot) == 3
+        and all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                for v in str_rot)
+    )
+    if use_string_rotation:
+        # Default forward = stage +Y. Apply the camera/fixture rotation
+        # convention so strings, cameras, and DMX fixtures share one
+        # orientation grammar (#586/#600).
+        from camera_math import rotation_from_layout, build_camera_to_stage
+        tilt, pan, roll = rotation_from_layout(str_rot)
+        R = build_camera_to_stage(tilt, pan, roll)
+        # Cam-local forward is +Z; the matrix already folds in the frame
+        # swap, so column 2 of R is the stage-frame default-forward
+        # vector after rotation.
+        if hasattr(R, "shape"):
+            d = [float(R[0, 2]), float(R[1, 2]), float(R[2, 2])]
+        else:
+            d = [float(R[0][2]), float(R[1][2]), float(R[2][2])]
+    else:
+        sdir = string_cfg.get("sdir", 0)
+        # Direction vectors: E=+X, N=+Y, W=-X, S=-Y (legacy 2D plane only)
+        dirs = [[1, 0, 0], [0, 1, 0], [-1, 0, 0], [0, -1, 0]]
+        d = dirs[sdir] if sdir < 4 else dirs[0]
 
     start = list(child_pos)
     end = [child_pos[0] + d[0] * length,
@@ -147,8 +186,12 @@ def resolve_linear_fixture(child_pos, string_cfg, fixture_points=None, rotation=
 
     pixels = catmull_rom_sample([start, end], leds)
 
-    # Apply fixture rotation override (e.g., child says "east" but fixture is vertical)
-    if rotation and any(r != 0 for r in rotation):
+    # Fixture-level rotation only composes with the legacy direction
+    # paths. When the string carries its own rotation it's the single
+    # source of truth (mirrors the way a camera's rotation isn't
+    # composed with a parent transform).
+    if (not use_string_rotation
+            and rotation and any(r != 0 for r in rotation)):
         pixels = [_rotate_vec(p, child_pos, rotation) for p in pixels]
 
     return pixels

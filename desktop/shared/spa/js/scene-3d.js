@@ -638,17 +638,31 @@ function s3dLoadChildren(){
           var strCol=new THREE.Color(_strCol[si%_strCol.length]);
           var lenMm=s.mm||0;if(lenMm<500)lenMm=Math.max(s.leds*16,500);
           var lenM=lenMm/1000;
-          var dir=_s3dDir(s.sdir||0);
-          // #864 — per-string position offset. When the string carries
-          // its own (x,y,z) the line origin shifts from the group center
-          // (fixture position) to the string's stage location. Stage→
-          // Three.js: X→X, Y(depth)→Z, Z(height)→Y. A string without
-          // x/y/z continues to start at the group origin (legacy).
+          // #864 — per-string position offset. Stage→Three.js: X→X,
+          // Y(depth)→Z, Z(height)→Y. A string without x/y/z starts at
+          // the fixture group origin.
           var startLocal=new THREE.Vector3(0,0,0);
           if(typeof s.x==='number'&&typeof s.y==='number'&&typeof s.z==='number'){
             startLocal.set((s.x-(c.x||0))/1000,(s.z-(c.z||0))/1000,(s.y-(c.y||0))/1000);
           }
-          var endLocal=startLocal.clone().add(new THREE.Vector3(dir.x*lenM,dir.y*lenM,dir.z*lenM));
+          // #866 — direction comes from the per-string `rotation`
+          // ([rx, ry, rz] degrees, same convention as cameras and DMX
+          // fixtures, #586/#600). Default forward is stage +Y; rotation
+          // re-aims that. Falls back to the legacy `sdir` token when
+          // the string has no rotation. Stage→Three.js axis swap on the
+          // resulting direction: stage X→three X, stage Y→three Z,
+          // stage Z→three Y.
+          var dxL,dyL,dzL;
+          var sRot=Array.isArray(s.rotation)&&s.rotation.length===3
+                   ?s.rotation:null;
+          if(sRot){
+            var sd=_s3dStringDirFromRot(sRot);
+            dxL=sd[0]; dyL=sd[2]; dzL=sd[1];
+          }else{
+            var dir=_s3dDir(s.sdir||0);
+            dxL=dir.x; dyL=dir.y; dzL=dir.z;
+          }
+          var endLocal=startLocal.clone().add(new THREE.Vector3(dxL*lenM,dyL*lenM,dzL*lenM));
           var pts=[startLocal,endLocal];
           var lineGeo=new THREE.BufferGeometry().setFromPoints(pts);
           var lineMat=new THREE.LineBasicMaterial({color:strCol,linewidth:2});
@@ -845,6 +859,32 @@ function _s3dDir(sdir){
   // Stage Z=height maps to Three.js Y-up
   var dirs=[new THREE.Vector3(1,0,0),new THREE.Vector3(0,1,0),new THREE.Vector3(-1,0,0),new THREE.Vector3(0,-1,0)];
   return dirs[sdir]||dirs[0];
+}
+
+// #866 — JS mirror of camera_math.build_camera_to_stage applied to the
+// cam-local +Z (forward) vector. Returns the stage-frame unit direction
+// for a string with rotation = [rx, ry, rz] degrees, matching the
+// camera/DMX-fixture rotation convention (#586/#600). Default forward
+// (rotation [0,0,0]) is stage +Y. Sign rules: rx>0 pitches DOWN
+// (forward tips toward -Z), rz>0 pans toward stage-left (+X), ry rolls.
+// Returns a [sx, sy, sz] tuple in stage frame (NOT three.js).
+function _s3dStringDirFromRot(rot){
+  if(!rot||rot.length!==3)return [0,1,0];
+  var tilt=(+rot[0]||0)*Math.PI/180;  // rx — pitch about X
+  var roll=(+rot[1]||0)*Math.PI/180;  // ry — roll about stage-forward Y
+  var pan =(+rot[2]||0)*Math.PI/180;  // rz — yaw/pan about stage-up Z
+  // Start: cam-local +Z forward → after FRAME_SWAP that's stage +Y.
+  var v=[0,1,0];
+  // Ry(+roll) — rotation around Y (stage-forward axis, before yaw).
+  var cr=Math.cos(roll),sr=Math.sin(roll);
+  v=[cr*v[0]+sr*v[2], v[1], -sr*v[0]+cr*v[2]];
+  // Rx(-tilt): [[1,0,0],[0,ct,st],[0,-st,ct]] — see camera_math.py:73.
+  var ct=Math.cos(tilt),st=Math.sin(tilt);
+  v=[v[0], ct*v[1]+st*v[2], -st*v[1]+ct*v[2]];
+  // Rz(-pan): [[cp,sp,0],[-sp,cp,0],[0,0,1]] — see camera_math.py:78.
+  var cp=Math.cos(pan),sp=Math.sin(pan);
+  v=[cp*v[0]+sp*v[1], -sp*v[0]+cp*v[1], v[2]];
+  return v;
 }
 function _s3dSyncToLd(){
   // Write 3D group positions back into ld.children and objects

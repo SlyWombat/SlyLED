@@ -209,7 +209,7 @@ class ControlViewModel @Inject constructor(
                 // Re-fetch and POST updated playlist with loop flag
                 repository.getShowPlaylist() // ensure we have latest
                 // The server expects the full playlist object
-                _playlist.value = current.copy(loop = enabled)
+                _playlist.value = current.copy(loopAll = enabled)
                 _message.value = if (enabled) "Loop enabled" else "Loop disabled"
             } catch (e: Exception) { _message.value = "Error: ${e.message}" }
         }
@@ -279,19 +279,38 @@ class ControlViewModel @Inject constructor(
     // change → fresh publish), so a portrait→landscape mid-session
     // updates server-side mapping without operator action.
     fun publishGripFromSurfaceRotation(surfaceRotation: Int) {
-        // Android `Surface.ROTATION_*` values: 0/1/2/3 — mapped to the
-        // pointer axis in the phone's NATURAL device frame, which is
-        // what `getQuaternionFromVector` produces (the orient/quat the
-        // server consumes is in the natural frame, NOT the
-        // remapCoordinateSystem-rotated operator frame).
-        val (forward, up) = when (surfaceRotation) {
-            1 /* Surface.ROTATION_90  */ -> floatArrayOf(1f, 0f, 0f) to floatArrayOf(0f, 0f, 1f)
-            2 /* Surface.ROTATION_180 */ -> floatArrayOf(0f, -1f, 0f) to floatArrayOf(0f, 0f, 1f)
-            3 /* Surface.ROTATION_270 */ -> floatArrayOf(-1f, 0f, 0f) to floatArrayOf(0f, 0f, 1f)
-            else /* ROTATION_0, default portrait */ ->
-                floatArrayOf(0f, 1f, 0f) to floatArrayOf(0f, 0f, 1f)
-        }
+        // #826 — wizard-first publish. If the operator has run the aim
+        // wizard on this device, replay the wizard-derived axes to the
+        // server; otherwise fall back to the legacy Surface.ROTATION_*
+        // table for un-wizarded devices. Same wire shape either way:
+        // POST /api/remotes/grip with {forwardLocal, upLocal}.
+        //
+        // Persistence has to live on the phone (not just the server)
+        // because Controller-mode entry races with the wizard write —
+        // pre-fix this very call clobbered the wizard's axes every time
+        // the operator entered Controller mode, making the wizard a
+        // no-op end-to-end (operator comment on #826 2026-05-09).
         viewModelScope.launch {
+            val wizardAxes = try {
+                serverPrefs.loadWizardAxes()
+            } catch (e: Exception) {
+                Log.w(TAG, "loadWizardAxes failed (non-fatal): ${e.message}")
+                null
+            }
+            val (forward, up) = if (wizardAxes != null) {
+                wizardAxes.forward to wizardAxes.up
+            } else {
+                // Legacy Surface.ROTATION_* table — pointer axis in the
+                // phone's NATURAL device frame (matches what
+                // getQuaternionFromVector produces). Only reached when
+                // no wizard has run on this device.
+                when (surfaceRotation) {
+                    1 /* ROTATION_90  */ -> floatArrayOf(1f, 0f, 0f) to floatArrayOf(0f, 0f, 1f)
+                    2 /* ROTATION_180 */ -> floatArrayOf(0f, -1f, 0f) to floatArrayOf(0f, 0f, 1f)
+                    3 /* ROTATION_270 */ -> floatArrayOf(-1f, 0f, 0f) to floatArrayOf(0f, 0f, 1f)
+                    else /* ROTATION_0 */ -> floatArrayOf(0f, 1f, 0f) to floatArrayOf(0f, 0f, 1f)
+                }
+            }
             try {
                 repository.publishRemoteGrip(forward, up)
             } catch (e: Exception) {

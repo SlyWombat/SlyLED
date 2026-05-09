@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.109"
+VERSION = "1.7.110"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -2616,13 +2616,24 @@ def api_fixtures_get():
     return jsonify(_fixtures)
 
 def _validate_fixture_strings(strings):
-    """#864 — validate optional per-string position fields (x/y/z).
+    """#864 / #866 — validate optional per-string position (x/y/z) and
+    rotation ([rx, ry, rz] degrees) fields.
 
     Strings without x/y/z continue to inherit the fixture's layout
     position (legacy behaviour). When any of x/y/z is provided, all three
     must be numeric — partial overrides are rejected so a half-set string
     can't silently inherit one axis from the fixture and override the
     other two.
+
+    Strings without `rotation` fall through to the legacy `sdir` token
+    (E/N/W/S in the stage X-Y plane). When `rotation` is provided it
+    must be a 3-element numeric array using the project's stage-frame
+    rotation convention (#586/#600 — same shape as camera/DMX
+    `rotation`, parsed by `camera_math.rotation_from_layout`). The
+    string's default-forward is stage +Y; rotation re-aims that. This
+    is what lets a strip be vertical (rotation [-90, 0, 0] = pitch up
+    so the strip runs along stage +Z), which the legacy `sdir` token
+    cannot express.
     """
     if not isinstance(strings, list):
         return "strings must be a list"
@@ -2637,6 +2648,13 @@ def _validate_fixture_strings(strings):
             v = s[k]
             if not isinstance(v, (int, float)) or isinstance(v, bool):
                 return f"strings[{i}].{k} must be numeric (mm)"
+        if "rotation" in s:
+            rot = s["rotation"]
+            if (not isinstance(rot, (list, tuple)) or len(rot) != 3
+                    or not all(isinstance(v, (int, float))
+                               and not isinstance(v, bool) for v in rot)):
+                return (f"strings[{i}].rotation must be a 3-element numeric "
+                        f"array [rx, ry, rz] in degrees")
     return None
 
 
@@ -17746,6 +17764,72 @@ def api_fw_registry():
     return jsonify({**reg, "firmware": public})
 
 
+@app.post("/api/firmware/registry/refresh")
+def api_fw_registry_refresh():
+    """Force-refresh the firmware registry from GitHub-main and persist
+    it as the APPDATA override.
+
+    The default `_resolve_registry` precedence is APPDATA > GitHub >
+    bundle. That's correct for the dev workflow (build_release.ps1
+    writes APPDATA at version-bump time so the next orchestrator
+    process sees the new pin without a re-install) but it means a stale
+    APPDATA copy permanently shadows newer GitHub-main publishes —
+    operators see "v1.2.7 available" forever even after gyro-v1.2.8
+    ships, regardless of how many times they reinstall (the bundle
+    inside the new installer never wins against the older APPDATA
+    file). Per the operator directive, "Reload List" must fetch the
+    fresh registry from GitHub.
+
+    This endpoint:
+      1. Busts the in-memory remote-registry TTL cache.
+      2. Force-fetches `firmware/registry.json` from GitHub `main`.
+      3. Writes the result to `_FW_CACHE_DIR/registry.json` (APPDATA
+         override) so it survives the next orchestrator restart and
+         flips the precedence chain back into a healthy state.
+      4. Returns the refreshed registry (same shape as `/api/firmware/
+         registry`) so the SPA can re-render without a second round-
+         trip.
+    """
+    # 1 — bust the in-memory TTL cache so step 2 hits GitHub fresh
+    # rather than handing back whatever we read 4 minutes ago.
+    cache = _remote_registry_cache
+    cache["data"] = None
+    cache["ts"] = 0
+    cache["ok"] = False
+
+    # 2 — force fetch.
+    fresh = _fetch_remote_registry()
+    if fresh is None or not isinstance(fresh.get("firmware"), list):
+        return jsonify(ok=False,
+                        err="could not fetch registry from GitHub main "
+                            "— check network connectivity and "
+                            "raw.githubusercontent.com"), 502
+
+    # 3 — persist as APPDATA override. This is what makes the refresh
+    # durable across orchestrator restarts; without it, every restart
+    # would fall back to the stale bundled registry from the installer.
+    try:
+        _FW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        override_path = _FW_CACHE_DIR / "registry.json"
+        override_path.write_text(json.dumps(fresh, indent=2),
+                                  encoding="utf-8")
+        log.info("Registry refresh: wrote %d entries to %s",
+                 len(fresh.get("firmware", [])), override_path)
+    except Exception as e:
+        # Fetch succeeded but write failed — surface the error so the
+        # operator knows the refresh isn't durable. The in-memory cache
+        # still serves the fresh data for this session.
+        log.warning("Registry refresh: APPDATA write failed: %s", e)
+        return jsonify(ok=False,
+                        err=f"fetched but couldn't persist: {e}",
+                        firmware=[e for e in fresh.get("firmware", [])
+                                   if not e.get("diagnostic")]), 500
+
+    # 4 — return the fresh registry so the SPA can re-render directly.
+    public = [e for e in fresh.get("firmware", []) if not e.get("diagnostic")]
+    return jsonify(ok=True, **{**fresh, "firmware": public})
+
+
 @app.get("/api/firmware/library")
 def api_fw_library():
     """#567 — return every registry entry annotated with its local
@@ -18580,9 +18664,14 @@ def api_firmware_check():
             "downloadUrl": download_url,
         })
 
-    # The top-level "latest" is informational — the latest of any board.
-    top_latest = max((r["latestVersion"] for r in results), default="0.0")
-    return jsonify({"latest": top_latest, "children": results})
+    # #866 — `latest` field removed. Previously the fleet-max version
+    # across all board tracks (gyro v1.x, ESP32 v7.x, DMX bridge
+    # v7.5.20, etc.), which was meaningless once tracks diverged and
+    # caused the Firmware tab to mis-label gyro v1.2.7 as "v7.5.20
+    # available". The SPA now reads per-row `latestVersion` and
+    # aggregates per board for the header. Each `c.latestVersion` in
+    # the children list IS authoritative for that child's board track.
+    return jsonify({"children": results})
 
 @app.post("/api/firmware/ota/<int:cid>")
 def api_firmware_ota(cid):
@@ -18820,6 +18909,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
