@@ -288,17 +288,26 @@ def test_hb_rep_does_not_release_on_idle():
             "HB_REP handler does NOT call release() (#813 §7.2 anti-pattern)")
 
 
-def test_hb_rep_bootstraps_on_active_with_no_server_claim():
-    """#813 §5.3 — orchestrator-restart bootstrap is the legitimate use
-    of HB_REP. Puck=ACTIVE + server has no claim → reconstruct from
-    heartbeat-rep payload."""
+def test_hb_rep_does_not_reconstruct_claim():
+    """#872 — HB_REP-ACTIVE → reconstruct is now anti-pattern. Per
+    operator (2026-05-09): "Once Start is pressed, when we lock and
+    hold." Press-Start is the SOLE orchestrator-side claim entry
+    trigger. After an orchestrator restart the operator presses Start
+    again. The reconstruct path is removed because it enabled the SPA
+    Release / press-Stop oscillation bug class — heartbeat couldn't
+    distinguish "operator just released" from "orchestrator just
+    restarted", and reconstructed in both cases."""
     body = _hb_rep_handler_body()
-    _assert("GYRO_UI_ACTIVE" in body
-            and "_mover_engine.claim(" in body
-            and "_send_gyro_claim_ack(" in body,
-            "HB_REP reconstructs the claim when puck=ACTIVE but server has none")
-    _assert("_gyro_lights_on(" in body,
-            "HB_REP-bootstrap path also turns the lights on (#813 §1.1 parity)")
+    _assert("_mover_engine.claim(" not in body,
+            "HB_REP handler does NOT call claim() (#872 §7.2 anti-pattern)")
+    _assert("_send_gyro_claim_ack(" not in body,
+            "HB_REP handler does NOT send CLAIM_ACK (#872 §7.2)")
+    _assert("_send_gyro_claim_denied(" not in body,
+            "HB_REP handler does NOT send CLAIM_DENIED (#872 §7.2)")
+    _assert("start_stream(" not in body,
+            "HB_REP handler does NOT call start_stream (#872 §7.2)")
+    _assert("_gyro_lights_on(" not in body,
+            "HB_REP handler does NOT turn lights on (#872 §7.2)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -335,7 +344,7 @@ ALL = [
     test_stale_hard_secs_bumped_to_600,
     test_hb_rep_handler_present,
     test_hb_rep_does_not_release_on_idle,
-    test_hb_rep_bootstraps_on_active_with_no_server_claim,
+    test_hb_rep_does_not_reconstruct_claim,
     test_start_dedupe_replay_does_not_double_claim,
 ]
 

@@ -274,4 +274,16 @@ constexpr uint8_t GYRO_UI_WAITING_ACK = 1;
 constexpr uint8_t GYRO_UI_ACTIVE      = 2;
 constexpr uint8_t GYRO_UI_STOPPING    = 3;
 
+// #872 — CMD_GYRO_CLAIM_DENIED reason codes (1-byte payload).
+// See `docs/gyro-claim-lifecycle.md` §3.6. Pre-#872 servers send a
+// header-only DENIED; the puck reads that as reason 0 (legacy /
+// unspecified) and renders the original "BUSY / Mover held by other"
+// message. Newer servers send the reason byte and the puck renders an
+// actionable message keyed off the code.
+constexpr uint8_t GYRO_DENIED_IDLE                = 0;
+constexpr uint8_t GYRO_DENIED_CONTROLLER_INACTIVE = 1;
+constexpr uint8_t GYRO_DENIED_ALREADY_CLAIMED     = 2;
+constexpr uint8_t GYRO_DENIED_NO_MOVER_ASSIGNED   = 3;
+constexpr uint8_t GYRO_DENIED_ENGINE_UNAVAILABLE  = 4;
+
 #endif  // PROTOCOL_H

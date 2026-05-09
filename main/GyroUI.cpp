@@ -1202,23 +1202,52 @@ void gyroUIUpdate() {
         drawColourPage();
     }
 
-    // #772 / #825 — server refused the claim (another device holds the
-    // mover, or controller marked Inactive). Bounce back to IDLE with a
-    // brief BUSY indication. Polled here once per loop; one-shot read.
-    if (gyroUdpClaimDeniedConsume()) {
-        gyroUdpSetStreaming(false, 0);
-        gyroUdpClearStartPending();
-        s_state = UIState::IDLE;
-        s_calibHeld = false;
-        s_startHeld = false;
-        s_startNonce = 0;
-        s_claimNonce = 0;
-        gyroUdpSetUiState(GYRO_UI_IDLE, 0);
-        gyroClearScreen(GC_RED);
-        gyroDrawText(CX - 18, CY - 8, "BUSY", 2, GC_WHITE);
-        gyroDrawText(CX - 60, CY + 16, "Mover held by other", 1, GC_WHITE);
-        delay(700);
-        drawIdle();
+    // #772 / #825 / #872 — server refused the claim. Bounce back to
+    // IDLE with a reason-specific indication. Polled here once per
+    // loop; one-shot read of the flag + reason byte.
+    {
+        uint8_t deniedReason = 0;
+        if (gyroUdpClaimDeniedConsume(&deniedReason)) {
+            gyroUdpSetStreaming(false, 0);
+            gyroUdpClearStartPending();
+            s_state = UIState::IDLE;
+            s_calibHeld = false;
+            s_startHeld = false;
+            s_startNonce = 0;
+            s_claimNonce = 0;
+            gyroUdpSetUiState(GYRO_UI_IDLE, 0);
+            gyroClearScreen(GC_RED);
+            // Title line + body line. Layout matches the original BUSY
+            // screen so the operator's visual rhythm is preserved; only
+            // the body text is reason-keyed.
+            const char* title = "BUSY";
+            const char* body  = "Mover held by other";
+            switch (deniedReason) {
+                case GYRO_DENIED_CONTROLLER_INACTIVE:
+                    title = "OFF";
+                    body  = "Enable in Setup";
+                    break;
+                case GYRO_DENIED_ALREADY_CLAIMED:
+                    title = "BUSY";
+                    body  = "Held by another remote";
+                    break;
+                case GYRO_DENIED_NO_MOVER_ASSIGNED:
+                    title = "NONE";
+                    body  = "No head assigned";
+                    break;
+                case GYRO_DENIED_ENGINE_UNAVAILABLE:
+                    title = "DOWN";
+                    body  = "DMX engine off";
+                    break;
+                default:
+                    // GYRO_DENIED_IDLE (0) or unknown — legacy strings.
+                    break;
+            }
+            gyroDrawText(CX - 18, CY - 8, title, 2, GC_WHITE);
+            gyroDrawText(CX - 60, CY + 16, body, 1, GC_WHITE);
+            delay(700);
+            drawIdle();
+        }
     }
 
     // #825 — WAITING_ACK resolution paths.

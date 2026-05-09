@@ -135,6 +135,17 @@ GYRO_UI_WAITING_ACK = 1
 GYRO_UI_ACTIVE      = 2
 GYRO_UI_STOPPING    = 3
 
+# #872 — CMD_GYRO_CLAIM_DENIED reason codes (1-byte payload).
+# See `docs/gyro-claim-lifecycle.md` §3.6 for the operator-facing
+# string table the puck firmware renders. Older firmware (<1.2.11)
+# ignores the byte and falls back to the legacy "BUSY / Mover held
+# by other" string.
+GYRO_DENIED_IDLE                = 0  # unspecified / replayed-from-cache
+GYRO_DENIED_CONTROLLER_INACTIVE = 1  # gyroEnabled=False on the gyro fixture
+GYRO_DENIED_ALREADY_CLAIMED     = 2  # _mover_engine.claim() returned False
+GYRO_DENIED_NO_MOVER_ASSIGNED   = 3  # target_mover_id is None
+GYRO_DENIED_ENGINE_UNAVAILABLE  = 4  # _mover_engine is None / not running
+
 #  "  "  Paths  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
 BASE = Path(__file__).parent
@@ -1748,11 +1759,15 @@ def _udp_listener():
 
             # Idempotent retransmission: same nonce within the dedupe
             # window just replays the cached response (ACK or DENIED) —
-            # no second claim attempt.
+            # no second claim attempt. #872: replays carry the original
+            # reason so the puck renders the same message it would have
+            # rendered for the first DENIED.
             with _gyro_handshake_lock:
                 st_hs = _gyro_handshake.setdefault(device_id, {})
                 prev_nonce = st_hs.get("start_nonce")
                 prev_resp = st_hs.get("start_response")
+                prev_reason = st_hs.get("start_response_reason",
+                                        GYRO_DENIED_IDLE)
                 prev_ts = st_hs.get("ack_sent_ts") or 0
                 is_replay = (
                     start_nonce is not None
@@ -1762,32 +1777,46 @@ def _udp_listener():
                 )
                 cached_mover = st_hs.get("mover_id")
             if is_replay:
-                log.debug("GYRO_START replay from %s nonce=%d resp=%s",
-                          ip, start_nonce, prev_resp)
+                log.debug("GYRO_START replay from %s nonce=%d resp=%s reason=%s",
+                          ip, start_nonce, prev_resp, prev_reason)
                 if prev_resp == "ack" and cached_mover is not None:
                     _send_gyro_claim_ack(ip, start_nonce, cached_mover)
                 else:
-                    _send_gyro_claim_denied(ip)
+                    _send_gyro_claim_denied(ip, prev_reason)
                 continue
 
-            # #801 — refuse GYRO_START when the controller is Inactive
-            # at the orchestrator level. Mirrors the Inactive contract
-            # ("Connections accepted? No"). Same DENIED packet as the
-            # claim-busy refusal; puck UI shows the same retry path.
+            def _record_denied(reason):
+                """Send DENIED with `reason` and cache it so a same-nonce
+                retransmission replays the same reason (#872 §3.6)."""
+                _send_gyro_claim_denied(ip, reason)
+                with _gyro_handshake_lock:
+                    st_hs2 = _gyro_handshake.setdefault(device_id, {})
+                    st_hs2["start_nonce"] = start_nonce
+                    st_hs2["start_response"] = "denied"
+                    st_hs2["start_response_reason"] = reason
+                    st_hs2["ack_sent_ts"] = time.time()
+
+            # #801 / #872 — refuse GYRO_START when the controller is
+            # Inactive at the orchestrator level. Reason 1 lets the puck
+            # render "Gyro is disabled — enable in Setup" instead of the
+            # legacy ambiguous "Mover held by other".
             if gf is not None and not gf.get("gyroEnabled"):
                 log.info("GYRO_START from %s nonce=%s — controller Inactive, refusing",
                           ip, start_nonce)
-                _send_gyro_claim_denied(ip)
-                with _gyro_handshake_lock:
-                    st_hs = _gyro_handshake.setdefault(device_id, {})
-                    st_hs["start_nonce"] = start_nonce
-                    st_hs["start_response"] = "denied"
-                    st_hs["ack_sent_ts"] = time.time()
+                _record_denied(GYRO_DENIED_CONTROLLER_INACTIVE)
                 continue
             if target_mover_id is None:
-                log.info("GYRO_START from %s — no assigned mover, ignoring", ip)
+                # #872 — was silent pre-fix; puck timed out without an
+                # actionable error. Now sends DENIED with reason 3 so the
+                # puck renders "No moving head assigned".
+                log.info("GYRO_START from %s — no assigned mover, refusing", ip)
+                _record_denied(GYRO_DENIED_NO_MOVER_ASSIGNED)
+                continue
             elif _mover_engine is None:
+                # #872 — was silent pre-fix; now reason 4.
                 log.warning("GYRO_START from %s — mover engine not available", ip)
+                _record_denied(GYRO_DENIED_ENGINE_UNAVAILABLE)
+                continue
             else:
                 # #823 — press-Start IS the operator's "I'm using this
                 # remote now" gesture; clear any hard-stale flag on the
@@ -1811,12 +1840,7 @@ def _udp_listener():
                 if not ok:
                     log.info("GYRO_START from %s nonce=%s — claim DENIED (%s)",
                               ip, start_nonce, reason)
-                    _send_gyro_claim_denied(ip)
-                    with _gyro_handshake_lock:
-                        st_hs = _gyro_handshake.setdefault(device_id, {})
-                        st_hs["start_nonce"] = start_nonce
-                        st_hs["start_response"] = "denied"
-                        st_hs["ack_sent_ts"] = time.time()
+                    _record_denied(GYRO_DENIED_ALREADY_CLAIMED)
                 else:
                     _mover_engine.start_stream(target_mover_id, device_id)
                     # #813 §1.1 / §4.2 step 6 — turn the lights on.
@@ -1931,26 +1955,30 @@ def _udp_listener():
                                 log.error("Remote %d calibrate failed: %s", remote.id, e)
                     _mover_engine.calibrate_end(target_mover_id, did)
         elif cmd == CMD_GYRO_HEARTBEAT_REP and len(data) >= 13:
-            # #825 — periodic 2 s reply to the parent→gyro CMD_GYRO_HEARTBEAT.
-            # Carries the puck's current UI state and the nonce of the claim
-            # it considers "current". We reconcile divergence between the
-            # puck's view and the server's `_claims` dict:
+            # #872 — HB_REP is diagnostics-only.
             #
-            #   • puck IDLE,  server has claim → puck rolled back silently;
-            #                                    release the orphan claim.
-            #   • puck ACTIVE, server has no claim → orchestrator just
-            #                                    restarted; reconstruct the
-            #                                    claim and send a fresh ACK
-            #                                    so the operator never sees
-            #                                    the puck UI blink.
-            #   • both agree → no action.
-            # #813 §5.3 + §7.2 — HB_REP is used ONLY for the orchestrator-
-            # restart bootstrap path (puck reports ACTIVE while server has
-            # no claim → reconstruct from heartbeat). The puck-IDLE-while-
-            # server-holds-claim branch is anti-pattern §7.2 and is
-            # deliberately NOT implemented: the operator may have rolled
-            # back the puck UI for any reason, and only an explicit STOP
-            # gesture or Inactive toggle releases the claim.
+            # Pre-#872 this handler reconstructed the claim from the
+            # puck's heartbeat ("orchestrator-restart bootstrap path",
+            # #813 §5.3) when the puck reported ACTIVE while the
+            # orchestrator had no claim. That path enabled the
+            # operator-visible bug class in #872: SPA Release / press-
+            # Stop was undone by the next 2 s heartbeat because the
+            # puck's UI was still ACTIVE and the reconstruct branch
+            # could not distinguish "operator just released" from
+            # "orchestrator just restarted".
+            #
+            # Operator's contract (2026-05-09): "Once Start is pressed,
+            # when we lock and hold." Press-Start is the SOLE
+            # orchestrator-side claim entry trigger. No auto-reclaim,
+            # no bootstrap. After an orchestrator restart, the
+            # operator presses Start again. See `docs/gyro-claim-
+            # lifecycle.md` §5.3 + §7.2.
+            #
+            # This handler may: parse the packet, log it, update
+            # `Remote.last_data`. It MUST NOT call `_mover_engine.claim`,
+            # `_mover_engine.release`, `start_stream`, `_send_gyro_*` —
+            # the spec invariant is enforced here, not at the call
+            # site of every future patch.
             ui_state, claim_nonce, hb_seq = struct.unpack_from("<BHH", data, 8)
             device_id_hb = f"gyro-{ip}"
             _gyro_touch_remote(device_id_hb)
@@ -1959,53 +1987,19 @@ def _udp_listener():
                     st_hs = _gyro_handshake.setdefault(device_id_hb, {})
                     last_seq = st_hs.get("last_seen_seq")
                     st_hs["last_seen_seq"] = hb_seq
-                if last_seq == hb_seq:
-                    # Duplicate of a prior REP — already processed.
-                    pass
-                elif (ui_state == GYRO_UI_ACTIVE
-                      and claim_nonce != 0
-                      and _mover_engine is not None):
-                    server_has_claim = any(
-                        cl.get("deviceId") == device_id_hb
-                        for cl in (_mover_engine.get_status() or []))
+                if last_seq != hb_seq:
+                    # Diagnostics-only log. `server_has_claim` divergence
+                    # used to drive the reconstruct branch; now it just
+                    # informs the log so cross-check between the puck's
+                    # view and the orchestrator's view is observable.
+                    server_has_claim = (
+                        _mover_engine is not None
+                        and any(cl.get("deviceId") == device_id_hb
+                                for cl in (_mover_engine.get_status() or [])))
                     log.debug(
                         "GYRO_HB_REP from %s ui=%d claimNonce=%d seq=%d "
-                        "(server_has_claim=%s)",
+                        "(server_has_claim=%s, diagnostics-only)",
                         ip, ui_state, claim_nonce, hb_seq, server_has_claim)
-                    if not server_has_claim:
-                        # Restart bootstrap (#813 §5.3). Re-establish the
-                        # claim from the puck's view; if the fixture is
-                        # still wired up (mover assigned + Active), the
-                        # operator never sees a UI blink.
-                        gf_hb = _gyro_fixture_for_ip(ip)
-                        target_mover_id_hb = (
-                            gf_hb.get("assignedMoverId") if gf_hb else None
-                        )
-                        if (gf_hb is not None
-                            and gf_hb.get("gyroEnabled")
-                            and target_mover_id_hb is not None):
-                            dname_hb = _gyro_device_name(ip, gf_hb)
-                            ok_hb, reason_hb = _mover_engine.claim(
-                                target_mover_id_hb, device_id_hb, dname_hb,
-                                "gyro",
-                                smoothing=gf_hb.get("smoothing", 0.15))
-                            if ok_hb:
-                                _mover_engine.start_stream(
-                                    target_mover_id_hb, device_id_hb)
-                                _gyro_lights_on(target_mover_id_hb)
-                                _send_gyro_claim_ack(ip, claim_nonce,
-                                                      target_mover_id_hb)
-                                _send_gyro_heartbeat(ip)
-                                log.info(
-                                    "GYRO_HB_REP bootstrap: reconstructed "
-                                    "claim for %s mover=%d nonce=%d "
-                                    "(orchestrator restart recovery)",
-                                    ip, target_mover_id_hb, claim_nonce)
-                            else:
-                                log.info(
-                                    "GYRO_HB_REP bootstrap denied for %s: %s",
-                                    ip, reason_hb)
-                                _send_gyro_claim_denied(ip)
             except Exception as e:
                 log.error("GYRO_HB_REP handler failed: %s", e, exc_info=True)
         elif cmd == CMD_AUTOBRI_PUSH and len(data) >= 11:
@@ -2064,13 +2058,16 @@ def _bootstrap_ssh_defaults():
         _save("ssh", _ssh)
         log.info("SSH defaults set: root/orangepi, key=%s", _ssh.get("sshKeyPath") or "(none)")
 
-def _send_gyro_claim_denied(ip):
-    """#772 — fire-and-forget CMD_GYRO_CLAIM_DENIED to a puck whose START
-    we just refused. Header-only payload; the puck's UDP dispatcher sets
-    a one-shot flag that the UI consumes on the next tick to bounce
-    ACTIVE → IDLE with a brief "BUSY" indication (Android parity)."""
+def _send_gyro_claim_denied(ip, reason=GYRO_DENIED_IDLE):
+    """#772 / #872 — fire-and-forget CMD_GYRO_CLAIM_DENIED to a puck
+    whose START we just refused. Payload is 1 byte: a reason code from
+    `GYRO_DENIED_*`. Firmware ≥ v1.2.11 reads it to render an
+    actionable message; older firmware ignores the byte and falls back
+    to the legacy "BUSY / Mover held by other" string. Reason 0
+    (`GYRO_DENIED_IDLE`) is the safe default — it preserves legacy
+    rendering when the call site hasn't been updated."""
     try:
-        pkt = _hdr(CMD_GYRO_CLAIM_DENIED)
+        pkt = _hdr(CMD_GYRO_CLAIM_DENIED) + struct.pack("<B", int(reason) & 0xFF)
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.sendto(pkt, (ip, UDP_PORT))
         sock.close()
@@ -12762,6 +12759,26 @@ def api_remote_end_session(remote_id):
     if r is None:
         return jsonify(ok=False, err="not found"), 404
     r.end_session()
+    _remotes.save()
+    return jsonify(ok=True, remote=r.live_dict())
+
+
+@app.post("/api/remotes/<int:remote_id>/clear-calibration")
+def api_remote_clear_calibration(remote_id):
+    """#872 Bug E — explicit operator gesture to clear a remote's
+    persisted calibration frame. Drops `R_world_to_stage`,
+    `calibrated`, and `calibrated_against` so the next orient stream
+    is treated as uncalibrated. Used when an operator suspects the
+    calibrate-from-here transform is wrong (e.g. #869 calibrate-frame
+    drift) and wants to restart with a fresh capture without rotating
+    against another mover or restarting the orchestrator."""
+    r = _remotes.get(remote_id)
+    if r is None:
+        return jsonify(ok=False, err="not found"), 404
+    r.R_world_to_stage = None
+    r.calibrated = False
+    r.calibrated_at = 0.0
+    r.calibrated_against = None
     _remotes.save()
     return jsonify(ok=True, remote=r.live_dict())
 

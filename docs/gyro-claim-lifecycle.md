@@ -95,12 +95,28 @@ UDP, port 4210, header is 8 bytes (`<HBBI` = magic `0x534C` + version `5` + cmd 
 | `0x64` | `GYRO_CALIBRATE` | gyro → parent | `calibrating, roll100, pitch100, yaw100` (7 B) | Hold-to-calibrate gesture start (`calibrating=1`) and end (`calibrating=0`). |
 | `0x65` | `GYRO_HEARTBEAT` | parent → gyro | `state, claimActive` (2 B) | Liveness ping. Sent every 2 s by `_heartbeat_loop` per active claim, plus once immediately after `CLAIM_ACK` so the puck has something to reply to before any other timer is meaningful. |
 | `0x66` | `GYRO_START` | gyro → parent | `nonce` (2 B; legacy header-only accepted) | Operator press-Start. Idempotent: same nonce ≤ 5 s ago replays the cached response (`CLAIM_ACK` or `CLAIM_DENIED`); no second engine call. Retry budget on the puck side: 5 × 150 ms = 750 ms. |
-| `0x67` | `GYRO_CLAIM_DENIED` | parent → gyro | header only | Refusal. Sent on `gyroEnabled=false`, missing `assignedMoverId`, or claim-busy. Puck reverts UI with brief "BUSY" indication. |
+| `0x67` | `GYRO_CLAIM_DENIED` | parent → gyro | `reason` (1 B; legacy header-only accepted) | Refusal with reason code (#872). Puck firmware ≥ v1.2.11 renders distinct messages per reason; older firmware sees the trailing byte ignored and renders the legacy "BUSY" indication. Reason codes in §3.6. |
 | `0x68` | `GYRO_BATT` | gyro → parent | `vbat100, pct, flags` (4 B) | Battery telemetry, 10 s cadence in all UI states. |
 | `0x69` | `GYRO_STOP` | gyro → parent | `nonce` (2 B; legacy header-only accepted) | Operator press-Stop. Idempotent: same nonce ≤ 5 s ago replays the cached `STOP_ACK`. Retry budget on the puck side: 5 × 150 ms. |
 | `0x6A` | `GYRO_CLAIM_ACK` | parent → gyro | `nonce, moverId` (4 B) | Confirms `CMD_GYRO_START` accepted. Puck advances `WAITING_ACK` → `ACTIVE` only on a CLAIM_ACK whose nonce matches the START it sent. |
 | `0x6B` | `GYRO_STOP_ACK` | parent → gyro | `nonce` (2 B) | Confirms `CMD_GYRO_STOP` accepted. Puck stops retransmitting STOP. |
 | `0x6C` | `GYRO_HEARTBEAT_REP` | gyro → parent | `uiState, claimNonce, seq` (5 B) | Puck's view of its own state. Sent every 2 s in **all** UI states. Provides the orchestrator-restart-bootstrap signal (§5.3) and a divergence indicator (§7 anti-patterns). |
+
+### 3.6 CLAIM_DENIED reason codes (#872)
+
+The 1-byte reason field is appended to `CMD_GYRO_CLAIM_DENIED` so the puck firmware can render an actionable message instead of the legacy single "Mover held by other" string that conflated four distinct failure modes.
+
+| Reason | Code | Server condition | Puck UI |
+|---|---|---|---|
+| `IDLE` | `0` | Reserved / unspecified | "Press Start failed" |
+| `CONTROLLER_INACTIVE` | `1` | `gyroEnabled=false` on the gyro fixture | "Gyro is disabled — enable in Setup" |
+| `ALREADY_CLAIMED` | `2` | `_mover_engine.claim()` returns `False` (mover held by another `device_id`) | "Mover held by another remote" |
+| `NO_MOVER_ASSIGNED` | `3` | `target_mover_id` is `None` | "No moving head assigned" |
+| `ENGINE_NOT_AVAILABLE` | `4` | `_mover_engine` is None / engine not running | "DMX engine not running" |
+
+**Back-compat:** the `parent_server.py` sender always emits 9 bytes (8 header + 1 reason). Firmware versions < 1.2.11 receive the same packet, parse only the header, and render the legacy generic message. UDP_VERSION is NOT bumped because the byte is purely additive.
+
+**Idempotent retransmission:** when the orchestrator replays a cached DENIED response (same nonce within the 5 s dedupe window), it MUST cache the reason code along with the response and replay the original reason — a second press of the same nonce after the operator fixed the underlying condition does not re-evaluate the condition; the dedupe replays the original verdict. The operator must press Start with a *fresh* nonce to retry. This matches CLAIM_ACK's idempotency contract.
 
 ### 3.2 Idempotency guarantees
 
@@ -252,14 +268,23 @@ If WiFi drops for <600 s, the orchestrator's `last_data` timestamp on the Remote
 
 ### 5.3 Orchestrator restart while a claim is held
 
-If the orchestrator restarts mid-session, its `_claims` dict starts empty. The puck is still on its ACTIVE page sending `CMD_GYRO_HEARTBEAT_REP(uiState=ACTIVE, claimNonce=N)` every 2 s. The CMD_GYRO_HEARTBEAT_REP handler reconstructs the claim from the heartbeat-rep payload alone:
+If the orchestrator restarts mid-session, its `_claims` dict starts empty. **The orchestrator does NOT reconstruct the claim automatically.** The operator presses Start again to re-establish the lock. Concretely:
 
-1. Parse `(uiState, claimNonce, seq)`.
-2. If `uiState == GYRO_UI_ACTIVE` and `claimNonce != 0` and the orchestrator's `_mover_engine` has no claim for this device_id, look up the gyro fixture by source IP.
-3. If `gyroEnabled` and `assignedMoverId` resolves, run the same claim + start_stream + send_ack + send_heartbeat sequence as a fresh press-Start, using `claimNonce` from the puck.
-4. Operator never sees a UI blink — head reacquires within one heartbeat cycle (~2 s).
+1. Orchestrator restart clears `_claims`.
+2. Puck continues sending `CMD_GYRO_HEARTBEAT_REP(uiState=ACTIVE, claimNonce=N)` every 2 s.
+3. The orchestrator logs the heartbeat for diagnostics (§7.6) and DOES NOTHING ELSE — no reconstruct, no implicit re-claim.
+4. The puck UI continues to show ACTIVE; orient packets continue to arrive; the orchestrator silently drops them because no claim exists for this device_id.
+5. Operator notices the head is no longer responding (it reverted to whatever DMX writer was driving it before the gyro session). Operator presses Start. Normal §3.3 flow re-claims.
 
-This is the second sequence diagram folded into the design. It is the **only** legitimate use of the puck's `uiState=ACTIVE` heartbeat; we never use the heartbeat-rep to *release* a claim — see §7.2.
+**Why this is the right trade-off (#872, operator 2026-05-09):**
+
+> "Once Start is pressed, when we lock and hold."
+
+Press-Start is the operator's contract for "I am taking control of this fixture". A heartbeat is not a contract — it's diagnostic telemetry. Auto-reclaim from a heartbeat creates a class of failure modes (orphan claim revival, race-against-operator-release, and #872's "I released and it came back") that are eliminated when the orchestrator's claim lifecycle has exactly one entry trigger. The few-seconds inconvenience after a rare server restart is the correct price.
+
+**Implementation:** the HB_REP handler in `parent_server.py` MUST NOT call `_mover_engine.claim()`. It is allowed to: parse the packet, log it, update `Remote.last_data` for the §6.3 silence-timer, and reply with `CMD_GYRO_HEARTBEAT` (so the puck knows the orchestrator is reachable). It is NOT allowed to: claim, start_stream, send `CMD_GYRO_CLAIM_ACK`, or send `CMD_GYRO_CLAIM_DENIED`.
+
+This invariant is enforced by the spec; it is not a per-issue patch. See §7.2 for the symmetric treatment of HB_REP-IDLE.
 
 ---
 
@@ -312,15 +337,21 @@ These are bug families that have been introduced and removed across #819, #823, 
 
 **History:** #825 pass-1 added `GYRO_ARM_DEADLINE_S = 1.5` and `_schedule_arm_check`. This violated #813's §"Eliminated bug classes": "Press-Start timing race: gone." Live test showed the calibrate-screen pause failure within hours. Pass-2 of #825 raised the window to 3 s and wired `_mark_gyro_armed` into more handlers, which masked the symptom for the immediate-tilt case but kept the calibrate-pause case broken. The realignment this document supports deletes the entire arm-check subsystem.
 
-### 7.2 HB_REP-IDLE → release
+### 7.2 HB_REP → claim mutation (any direction)
 
-**Anti-pattern:** "if the puck reports `uiState=IDLE` while the server holds a claim, release it as an orphan."
+**Anti-pattern:** "the heartbeat-rep can mutate the orchestrator's claim state in either direction" — release on IDLE, OR reconstruct on ACTIVE.
 
-**Why it's wrong:** the puck's UI may transiently show IDLE for reasons unrelated to operator intent — firmware reboot, brief WiFi reset, button-edge bounce. Per #813 §1, only an explicit operator gesture releases. Auto-releasing on a heartbeat-rep that says IDLE inverts the mental model and races the operator's next press-Start.
+**Why it's wrong:**
+- HB_REP-IDLE → release: the puck's UI may transiently show IDLE for reasons unrelated to operator intent — firmware reboot, brief WiFi reset, button-edge bounce. Per #813 §1, only an explicit operator gesture releases.
+- HB_REP-ACTIVE → reconstruct: the heartbeat is diagnostic, not a contract. Reconstructing creates the bug class identified in #872: SPA Release / press-Stop is undone within 2 s by the next heartbeat, because the puck UI is still ACTIVE and the reconstruct branch can't distinguish "operator just released" from "orchestrator just restarted". Both look identical from a heartbeat's perspective.
 
-**History:** #825 pass-1 introduced this branch in the HB_REP handler. The realignment this document supports deletes it.
+Per operator 2026-05-09 (#872): **press-Start is the sole orchestrator-side claim entry trigger.** No auto-reclaim, no bootstrap, no shortcut. HB_REP is one-way diagnostics from puck → orchestrator: "this is what I think I'm doing." The orchestrator never acts on it for claim lifecycle.
 
-The corresponding HB_REP-ACTIVE branch — the orchestrator-restart-bootstrap path (§5.3) — is **kept**, because it is consistent with the rock-solid principle: if the puck is actively driving a session and the orchestrator just rebooted, reconstructing the claim avoids an operator-visible UI blink.
+**History:**
+- #825 pass-1 introduced HB_REP-IDLE → release. Pass-2 of the realignment removed it.
+- #825 also introduced HB_REP-ACTIVE → reconstruct as the orchestrator-restart-bootstrap path. Operator initially accepted that trade-off (avoiding an operator-visible UI blink across server restarts). #872 reversed the decision: the bug class it enabled (SPA Release oscillating with auto-reclaim) is intolerable in the field. The reconstruct path is removed in the #872 PR.
+
+**Implementation invariant:** `parent_server.py`'s `CMD_GYRO_HEARTBEAT_REP` handler MUST NOT call `_mover_engine.claim`, `_mover_engine.release`, `_mover_engine.start_stream`, `_send_gyro_claim_ack`, `_send_gyro_claim_denied`, or any function that mutates the `_claims` dict. It MAY: parse the packet, log it, update `Remote.last_data`, and respond with `CMD_GYRO_HEARTBEAT` for liveness.
 
 ### 7.3 Periodic orchestrator-pushed lock packets
 

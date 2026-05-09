@@ -97,10 +97,14 @@ void gyroUdpSendStart();
 uint32_t gyroGetLastHeartbeatMs();  // millis() of last CMD_GYRO_HEARTBEAT, 0 if never
 bool     gyroServerClaimActive();   // server-reported claim-active flag
 
-// #772 — one-shot read of the CMD_GYRO_CLAIM_DENIED flag. Returns true the
-// first time it's polled after a deny packet arrives, then resets so the
-// UI doesn't loop on it. UI uses this to revert ACTIVE → IDLE.
-bool gyroUdpClaimDeniedConsume();
+// #772 / #872 — one-shot read of the CMD_GYRO_CLAIM_DENIED flag.
+// Returns true the first time it's polled after a deny packet arrives,
+// then resets so the UI doesn't loop on it. The 1-byte reason from the
+// payload is returned via `outReason` (NULL-safe; pass NULL for legacy
+// behaviour). Reason 0 = legacy / unspecified (also returned when
+// talking to a pre-#872 server that sent header-only DENIED). See
+// `Protocol.h` GYRO_DENIED_* for the reason enum.
+bool gyroUdpClaimDeniedConsume(uint8_t* outReason);
 
 // #825 — rock-solid press-Start/Stop handshake.
 //

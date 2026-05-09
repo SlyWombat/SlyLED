@@ -2663,7 +2663,8 @@ function _gyroConfigModalRender(childId, c){
   // thumb spans. CSS is inline so the modal works without an
   // app.css redeploy. Active = emerald track, Inactive = slate.
   var isActive=!!(gf&&gf.gyroEnabled);
-  h+='<div id="gcfg-active-row" style="display:flex;align-items:center;gap:.7em;padding:.7em .9em;background:#0f172a;border:1px solid '
+  h+='<div id="gcfg-active-row" data-child-id="'+childId+'"'
+    +' style="display:flex;align-items:center;gap:.7em;padding:.7em .9em;background:#0f172a;border:1px solid '
     +(isActive?'#059669':'#334155')+';border-radius:8px;margin-bottom:1em;'
     +(isActive?'box-shadow:0 0 12px rgba(16,185,129,.18);':'')+'">';
   h+='<label style="position:relative;display:inline-block;width:44px;height:24px;cursor:pointer;flex-shrink:0;margin:0">';
@@ -2758,11 +2759,16 @@ function _gyroConfigModalRender(childId, c){
     smEl.oninput=function(){document.getElementById('gcfg-sm-val').textContent=parseFloat(this.value).toFixed(2);};
   }
 
-  // Start live status polling (every 2s while modal open)
-  if(gf&&gf.assignedMoverId!=null){
-    _gyroLivePoll(childId,gf);
-    window._gcfgPoll=setInterval(function(){_gyroLivePoll(childId,gf);},2000);
-  }
+  // #872 Bug D — Live Status polling: always start the poll while
+  // the modal is open. _gyroLivePoll re-reads the fixture state from
+  // `_fixtures` on every tick, so a Save-time change of
+  // assignedMoverId / gyroEnabled / gyroChildId is picked up
+  // immediately without a separate re-arm. Pre-fix the poll's
+  // closure over `gf` froze its view at modal-open time, and a poll
+  // started before assignment was set never re-armed; Live Status
+  // stayed "Not connected" forever.
+  _gyroLivePoll(childId);
+  window._gcfgPoll=setInterval(function(){_gyroLivePoll(childId);},2000);
 }
 
 // #801 \u2014 `_gyroSendLock` deleted. The orchestrator's auto-lock-
@@ -2771,9 +2777,23 @@ function _gyroConfigModalRender(childId, c){
 // which round-trips through `_gyroConfigSave` \u2192 `PUT /api/fixtures/
 // <fid> {gyroEnabled}`.
 
-function _gyroLivePoll(childId,gf){
+function _gyroLivePoll(childId){
   var el=document.getElementById('gcfg-live');
   if(!el)return;  // modal closed
+  // #872 Bug D — re-read the fixture state from `_fixtures` on every
+  // tick so Save-time changes (assignedMoverId, gyroChildId,
+  // gyroEnabled) are picked up immediately. Pre-fix this function
+  // received a closed-over `gf` snapshot from the modal-open render,
+  // and silently mismatched the claim / remote when the assignment
+  // changed mid-modal.
+  var gf=(_fixtures||[]).find(function(f){
+    return f.fixtureType==='gyro'&&f.gyroChildId===childId;
+  });
+  if(!gf){
+    el.innerHTML='○ Not connected';
+    el.style.borderColor='#1e293b';
+    return;
+  }
   // Poll both the claim state (mover-control) and the primitive's stream
   // state (remote-orientation). Show the fullest picture — the puck can be
   // streaming orient data before any lock/claim exists.
@@ -2808,8 +2828,18 @@ function _gyroLivePoll(childId,gf){
           stateLabel='Streaming (uncal)';
           border='#059669';
         }
+        // #872 Bug E \u2014 when calibrated, surface a Clear button so the
+        // operator can reset the persisted frame without rotating
+        // against another mover or restarting. Hits the new
+        // POST /api/remotes/<id>/clear-calibration route.
+        var calBtn='';
+        if(remote.calibrated&&remote.id!=null){
+          calBtn=' <button class="btn" onclick="ra(\'POST\',\'/api/remotes/'+remote.id
+            +'/clear-calibration\',{},function(){_gyroLivePoll('+childId+');})"'
+            +' style="background:#334155;color:#cbd5e1;font-size:.7em;margin-left:.3em">Clear cal</button>';
+        }
         parts.push(dot+' <b>'+escapeHtml(remote.name||('remote '+remote.id))+'</b> \u2014 '+stateLabel
-          +' <span style="color:#64748b">('+age.toFixed(1)+'s ago)</span>');
+          +' <span style="color:#64748b">('+age.toFixed(1)+'s ago)</span>'+calBtn);
       }
       if(claim){
         parts.push('<b>Lock:</b> '+escapeHtml(claim.deviceName)+' ('+claim.state+')'
@@ -2829,10 +2859,18 @@ function _gyroLivePoll(childId,gf){
   });
 }
 
-// #801 polish — animate the toggle-switch visuals on every change so
-// the operator sees immediate feedback before pressing Save. Slides
-// the thumb, swaps the track colour, updates the label/hint text.
-// Save is still required to persist; this helper only repaints UI.
+// #801 polish / #872 Bug C — animate the toggle-switch visuals on
+// every change AND live-save the new state. Pre-#872 the toggle only
+// repainted UI; persistence required pressing Save, and the operator
+// could leave the modal with the visual showing "Active" while the
+// fixture was still gyroEnabled=false. The trap surfaced in #872 as
+// "press Start fails with 'Mover held by other'" because the silent
+// divergence reached the press-Start branch.
+//
+// Live-save fires `PUT /api/fixtures/<fid> {gyroEnabled: <new>}` so
+// the visual state always equals the persisted state. Mover
+// assignment + smoothing keep their Save-commit pattern (those are
+// dropdown / slider inputs that benefit from a deliberate commit).
 function _gyroConfigToggleVisual(input){
   var on=!!(input&&input.checked);
   var row=document.getElementById('gcfg-active-row');
@@ -2853,6 +2891,44 @@ function _gyroConfigToggleVisual(input){
   if(hint)hint.textContent=on
     ?'Auto-lock every 5s while disconnected'
     :'Orchestrator will not contact this gyro';
+
+  // #872 Bug C — live-save the toggle. Find the gyro fixture for
+  // this modal's child, PUT the new gyroEnabled, refresh _fixtures
+  // so the modal's other reads (Live Status poll, Save button) see
+  // the persisted state. Skip when no fixture exists yet (the
+  // POST-then-Save creation path stays unchanged).
+  try{
+    var modal=document.getElementById('gcfg-active-row');
+    var childId=modal&&modal.getAttribute('data-child-id');
+    if(childId){
+      childId=parseInt(childId,10);
+      var gf=(_fixtures||[]).find(function(f){
+        return f.fixtureType==='gyro'&&f.gyroChildId===childId;
+      });
+      if(gf){
+        var hs=document.getElementById('hs');
+        if(hs)hs.textContent=on?'Saving → Active…':'Saving → Inactive…';
+        ra('PUT','/api/fixtures/'+gf.id,{gyroEnabled:on},function(r){
+          if(r&&r.ok){
+            if(hs)hs.textContent=on
+              ?'Saved · Active (auto-lock running)'
+              :'Saved · Inactive';
+            // Refresh the cached fixture record so subsequent reads
+            // (Save handler, Live Status poll) see the new value.
+            loadFixtures(function(){});
+          }else{
+            // Roll back the visual to the pre-toggle state and
+            // surface the error so the operator can retry.
+            if(input){
+              input.checked=!on;
+              _gyroConfigToggleVisual(input);
+            }
+            if(hs)hs.textContent='Save failed: '+(r&&r.err||'unknown');
+          }
+        });
+      }
+    }
+  }catch(e){/* defensive — visuals already updated */}
 }
 
 function _gyroConfigSave(childId){

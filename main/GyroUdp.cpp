@@ -50,7 +50,11 @@ static uint32_t s_lastHeartbeatMs = 0;
 static uint8_t  s_serverClaimActive = 0;   // mirrored from the heartbeat payload
 // #772 — set when the server refuses a claim attempt; consumed by the UI
 // on the next tick to revert to IDLE with a brief "BUSY" indication.
-static bool     s_claimDenied = false;
+// #872 — `s_claimDeniedReason` carries the 1-byte reason from the
+// CMD_GYRO_CLAIM_DENIED payload (0 = legacy / unspecified). UI uses it
+// to render an actionable message.
+static bool     s_claimDenied       = false;
+static uint8_t  s_claimDeniedReason = 0;
 
 // #825 — rock-solid handshake bookkeeping.
 //
@@ -362,15 +366,21 @@ void gyroUdpHandleCmd(uint8_t cmd, IPAddress sender,
         }
 
     } else if (cmd == CMD_GYRO_CLAIM_DENIED) {
-        // #772 — server refused our claim. UI polls
-        // gyroUdpClaimDeniedConsume() and reverts to IDLE with a brief
-        // BUSY indication, mirroring Android's "Mover claimed by another
-        // device" toast. Also clear the pending-start retry slot so the
-        // wire goes quiet (#825).
+        // #772 / #872 — server refused our claim. The 1-byte reason
+        // payload (added in #872) lets us render an actionable message
+        // on the IDLE bounce instead of the legacy generic "BUSY".
+        // Pre-#872 servers send a header-only DENIED; treat that as
+        // reason 0 (legacy / unspecified) so old servers still trigger
+        // the same UI bounce. Also clear the pending-start retry slot
+        // so the wire goes quiet (#825).
         s_claimDenied = true;
+        s_claimDeniedReason = (plen >= 1) ? (uint8_t)payload[0] : 0;
         s_pendingStartNonce = 0;
         s_pendingStartTries = 0;
-        if (Serial) Serial.println("[GyroUDP] CLAIM_DENIED — mover busy");
+        if (Serial) {
+            Serial.print(F("[GyroUDP] CLAIM_DENIED reason="));
+            Serial.println(s_claimDeniedReason);
+        }
 
     } else if (cmd == CMD_GYRO_CLAIM_ACK
                && plen >= (int)sizeof(GyroClaimAckPayload)) {
@@ -442,12 +452,15 @@ void gyroUdpHandleCmd(uint8_t cmd, IPAddress sender,
 bool    gyroUdpStreaming()  { return s_streaming; }
 uint8_t gyroUdpTargetFps() { return s_targetFps; }
 
-bool gyroUdpClaimDeniedConsume() {
-    // #772 — one-shot read: returns true exactly once after the server
-    // sent CMD_GYRO_CLAIM_DENIED. Lets the UI revert to IDLE without a
-    // dedicated polling channel.
+bool gyroUdpClaimDeniedConsume(uint8_t* outReason) {
+    // #772 / #872 — one-shot read: returns true exactly once after the
+    // server sent CMD_GYRO_CLAIM_DENIED. The 1-byte reason from the
+    // payload is returned via `outReason` (NULL-safe). Pre-#872 server
+    // sent header-only DENIED → reason 0 (legacy / unspecified).
     bool denied = s_claimDenied;
+    if (outReason) *outReason = s_claimDeniedReason;
     s_claimDenied = false;
+    s_claimDeniedReason = 0;
     return denied;
 }
 
