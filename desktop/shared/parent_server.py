@@ -1176,18 +1176,88 @@ def _child_led_ranges(child):
             offset += leds
     return struct.pack("<8H", *ls), struct.pack("<8H", *le)
 
+# #871 — per-action-type mapping from the wire's `p8a/b/c/d` slots
+# back to the action body's named keys. Mirrors the render-function
+# signatures in `main/ChildLED.cpp:516-528` exactly:
+#
+#   case ACT_FADE:    renderFade(r, g, b, p8a, p8b, p8c, p16a, ...)
+#   case ACT_BREATHE: renderBreathe(r, g, b, p16a, p8a, ...)
+#   case ACT_CHASE:   renderChase(r, g, b, p16a, p8a, p8c, ...)
+#   case ACT_FIRE:    renderFire(r, g, b, p16a, p8a, p8b, ...)
+#   case ACT_COMET:   renderComet(r, g, b, p16a, p8a, p8c, p8d, ...)
+#   case ACT_TWINKLE: renderTwinkle(r, g, b, p16a, p8a, p8d, ...)
+#   ... (full list in ChildLED.cpp:516)
+#
+# Pre-#871 a `dict.get` chain (p8a → r2 → minBri → spacing → ...
+# → cooling → tailLen → density) walked all named aliases until one
+# was present. Bake materialises a fully-zero-defaulted params dict
+# (every alias key present, irrelevant ones at 0) so the chain
+# always short-circuited at the FIRST present alias, which for a
+# Fire effect was `r2 = 0` — `cooling` and `sparking` were never
+# read. Wire packet went out as `(t=6, r,g,b, p16a, 0, 0, 0, 0)`
+# and the firmware's fire algorithm produced no sparks.
+#
+# A `None` slot here means "this action type doesn't use that p8
+# slot" — the wire still gets a 0 for it.
+_ACT_P8_FIELDS = {
+    0:  (None,        None,         None,         None),       # ACT_BLACKOUT
+    1:  (None,        None,         None,         None),       # ACT_SOLID
+    2:  ("r2",        "g2",         "b2",         None),       # ACT_FADE
+    3:  ("minBri",    None,         None,         None),       # ACT_BREATHE
+    4:  ("spacing",   None,         "direction",  None),       # ACT_CHASE
+    5:  ("paletteId", None,         "direction",  None),       # ACT_RAINBOW
+    6:  ("cooling",   "sparking",   None,         None),       # ACT_FIRE
+    7:  ("tailLen",   None,         "direction",  "decay"),    # ACT_COMET
+    8:  ("density",   None,         None,         "fadeSpeed"),# ACT_TWINKLE
+    9:  (None,        None,         None,         None),       # ACT_STROBE — p8a=duty% per Protocol.h, but action body has no `duty` field today; bake doesn't compute one. Leave 0 until the action schema is extended.
+    10: (None,        None,         "direction",  None),       # ACT_WIPE_SEQ
+    11: (None,        None,         None,         None),       # ACT_SCANNER — p8a=barWidth per Protocol.h, but action body has no `barWidth` today.
+    12: ("density",   None,         None,         None),       # ACT_SPARKLE
+    13: ("r2",        "g2",         "b2",         None),       # ACT_GRADIENT
+}
+
+# Per-action-type mapping for the `p16a` 16-bit slot. Most effects
+# use `speedMs`; breathe/strobe use `periodMs`; twinkle/sparkle use
+# `spawnMs` (the slower spawn cadence reads better as period-style).
+_ACT_P16A_FIELD = {
+    2:  "speedMs",   3:  "periodMs", 4:  "speedMs",  5:  "speedMs",
+    6:  "speedMs",   7:  "speedMs",  8:  "spawnMs",  9:  "periodMs",
+    10: "speedMs",   11: "speedMs",  12: "spawnMs",
+}
+
+
 def _act_params(act):
-    """Extract generic param fields from an action dict, all coerced to int."""
-    t = act.get("type", 0)
-    r, g, b = act.get("r", 0), act.get("g", 0), act.get("b", 0)
-    p16a = act.get("speedMs", act.get("periodMs", act.get("spawnMs", 500)))
-    p8a = act.get("p8a", act.get("r2", act.get("minBri", act.get("spacing",
-           act.get("paletteId", act.get("cooling", act.get("tailLen",
-           act.get("density", 0))))))))
-    p8b = act.get("p8b", act.get("g2", act.get("sparking", 0)))
-    p8c = act.get("p8c", act.get("b2", act.get("direction", 0)))
-    p8d = act.get("p8d", act.get("decay", act.get("fadeSpeed", 0)))
-    return tuple(int(v or 0) for v in (t, r, g, b, p16a, p8a, p8b, p8c, p8d))
+    """Extract generic param fields from an action dict, all coerced to int.
+
+    #871 — type-dispatched lookup. Caller's `act` may have every
+    field zero-defaulted (the bake materialises a fully-keyed
+    params dict regardless of action type), so we MUST NOT rely on
+    a `dict.get` fallback chain — it would short-circuit at the
+    first present-but-zero alias and silently zero-out the
+    type-relevant field. Use the per-type map instead.
+    """
+    t = int(act.get("type", 0) or 0)
+    r = int(act.get("r", 0) or 0)
+    g = int(act.get("g", 0) or 0)
+    b = int(act.get("b", 0) or 0)
+    p16_field = _ACT_P16A_FIELD.get(t)
+    p16a = int(act.get(p16_field, 0) or 0) if p16_field else 0
+    fields = _ACT_P8_FIELDS.get(t, (None, None, None, None))
+    # Explicit caller-supplied `p8a` / `p8b` / `p8c` / `p8d` keys
+    # win over the type-dispatched lookup so a bake-time override
+    # path that already computed the slot value (e.g. a future
+    # auto-promote pipeline) can still drive the wire directly.
+    def _slot(slot_key, type_field):
+        if slot_key in act:
+            return int(act.get(slot_key, 0) or 0)
+        if type_field is None:
+            return 0
+        return int(act.get(type_field, 0) or 0)
+    p8a = _slot("p8a", fields[0])
+    p8b = _slot("p8b", fields[1])
+    p8c = _slot("p8c", fields[2])
+    p8d = _slot("p8d", fields[3])
+    return (t, r, g, b, p16a, p8a, p8b, p8c, p8d)
 
 def _load_step_pkt(idx, total, step, child, delay_ms=0):
     t, r, g, b, p16a, p8a, p8b, p8c, p8d = _act_params(step)
