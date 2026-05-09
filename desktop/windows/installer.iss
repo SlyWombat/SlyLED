@@ -3,7 +3,7 @@
 ; Or:    run build.bat — it calls iscc automatically if available.
 
 #define AppName      "SlyLED Orchestrator"
-#define AppVersion   "1.7.108"
+#define AppVersion   "1.7.109"
 #define AppPublisher "Electric RV Corporation"
 #define AppExeName   "SlyLED.exe"
 ; Unique GUID for this app — keep fixed across releases so updates overwrite
@@ -130,18 +130,43 @@ Filename: "{app}\{#AppExeName}"; \
 ;     replies are lost).
 ; Rule names are fixed (don't include the port) so uninstall can delete
 ; them without knowing what port the operator picked.
+;
+; v1.7.109 — delete-before-add. `netsh advfirewall firewall add rule`
+; does NOT replace an existing rule with the same name; it creates a
+; duplicate. Pre-fix behaviour on upgrade-with-port-change: the old
+; port's rule lingered and a new rule was added for the new port —
+; both active, old port still open. [UninstallRun] only fires on
+; uninstall (not upgrade), so it never cleaned up. Fix: prepend a
+; delete to each add. The delete returns "No rules match" (rc=1) when
+; no prior rule exists; that's harmless because Inno Setup's default
+; flag set ignores netsh's exit code unless `check` is specified.
+Filename: "netsh"; \
+  Parameters: "advfirewall firewall delete rule name=""SlyLED HTTP"""; \
+  Flags: runhidden waituntilterminated; StatusMsg: "Configuring firewall (HTTP)..."
 Filename: "netsh"; \
   Parameters: "advfirewall firewall add rule name=""SlyLED HTTP"" dir=in action=allow protocol=TCP localport={code:GetPort} description=""SlyLED orchestrator HTTP/SPA"""; \
   Flags: runhidden waituntilterminated; StatusMsg: "Configuring firewall (HTTP)..."
 Filename: "netsh"; \
+  Parameters: "advfirewall firewall delete rule name=""SlyLED Children"""; \
+  Flags: runhidden waituntilterminated; StatusMsg: "Configuring firewall (UDP 4210 children)..."
+Filename: "netsh"; \
   Parameters: "advfirewall firewall add rule name=""SlyLED Children"" dir=in action=allow protocol=UDP localport=4210 description=""SlyLED child performer protocol (PING/PONG/ACTION/GYRO)"""; \
   Flags: runhidden waituntilterminated; StatusMsg: "Configuring firewall (UDP 4210 children)..."
+Filename: "netsh"; \
+  Parameters: "advfirewall firewall delete rule name=""SlyLED Auto Brightness"""; \
+  Flags: runhidden waituntilterminated; StatusMsg: "Configuring firewall (UDP 4211 brightness)..."
 Filename: "netsh"; \
   Parameters: "advfirewall firewall add rule name=""SlyLED Auto Brightness"" dir=in action=allow protocol=UDP localport=4211 description=""SlyLED Android Auto Brightness UDP push"""; \
   Flags: runhidden waituntilterminated; StatusMsg: "Configuring firewall (UDP 4211 brightness)..."
 Filename: "netsh"; \
+  Parameters: "advfirewall firewall delete rule name=""SlyLED sACN"""; \
+  Flags: runhidden waituntilterminated; StatusMsg: "Configuring firewall (UDP 5568 sACN)..."
+Filename: "netsh"; \
   Parameters: "advfirewall firewall add rule name=""SlyLED sACN"" dir=in action=allow protocol=UDP localport=5568 description=""SlyLED sACN / E1.31 (DMX-over-IP)"""; \
   Flags: runhidden waituntilterminated; StatusMsg: "Configuring firewall (UDP 5568 sACN)..."
+Filename: "netsh"; \
+  Parameters: "advfirewall firewall delete rule name=""SlyLED Art-Net"""; \
+  Flags: runhidden waituntilterminated; StatusMsg: "Configuring firewall (UDP 6454 Art-Net)..."
 Filename: "netsh"; \
   Parameters: "advfirewall firewall add rule name=""SlyLED Art-Net"" dir=in action=allow protocol=UDP localport=6454 description=""SlyLED Art-Net (DMX bridge replies)"""; \
   Flags: runhidden waituntilterminated; StatusMsg: "Configuring firewall (UDP 6454 Art-Net)..."
