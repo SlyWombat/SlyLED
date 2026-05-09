@@ -418,22 +418,46 @@ function emu3dBuildFixtures(){
       }
 
       // LED string dots (stored for color updates)
+      // #864 / #866 — per-string position offset + per-string
+      // rotation. Same convention as scene-3d.js's Layout-tab path:
+      // start = (s.x, s.y, s.z) stage-mm if all three set, else
+      // fixture group origin; direction from s.rotation via the
+      // shared `_s3dStringDirFromRot` helper (mirror of camera_math
+      // build_camera_to_stage); legacy `sdir` only when no rotation.
+      // Stage→Three.js axis swap: stage X→three X, stage Y→three Z,
+      // stage Z→three Y.
       if(c.strings&&c.strings.length){
         for(var si=0;si<c.strings.length;si++){
           var s=c.strings[si];if(!s||!s.leds)continue;
           var lenMm=s.mm||0;if(lenMm<500)lenMm=Math.max(s.leds*16,500);
           var lenM=lenMm/1000;
-          var sdir=_s3dDir(s.sdir||0);
-          var endLocal=new THREE.Vector3(sdir.x*lenM,sdir.y*lenM,sdir.z*lenM);
+
+          var startLocal=new THREE.Vector3(0,0,0);
+          if(typeof s.x==='number'&&typeof s.y==='number'&&typeof s.z==='number'){
+            startLocal.set((s.x-(c.x||0))/1000,(s.z-(c.z||0))/1000,(s.y-(c.y||0))/1000);
+          }
+
+          var dxL,dyL,dzL;
+          var sRot=Array.isArray(s.rotation)&&s.rotation.length===3
+                   ?s.rotation:null;
+          if(sRot&&typeof _s3dStringDirFromRot==='function'){
+            var sd=_s3dStringDirFromRot(sRot);
+            dxL=sd[0]; dyL=sd[2]; dzL=sd[1];
+          }else{
+            var sdir=_s3dDir(s.sdir||0);
+            dxL=sdir.x; dyL=sdir.y; dzL=sdir.z;
+          }
+          var endLocal=startLocal.clone().add(new THREE.Vector3(dxL*lenM,dyL*lenM,dzL*lenM));
+
           // Line
-          var lineGeo=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0),endLocal]);
+          var lineGeo=new THREE.BufferGeometry().setFromPoints([startLocal,endLocal]);
           var lineMat=new THREE.LineBasicMaterial({color:0x555555});
           grp.add(new THREE.Line(lineGeo,lineMat));
           // LED dots
           var dotCount=Math.min(s.leds,50);
           for(var di=0;di<dotCount;di++){
             var t=(di+0.5)/dotCount;
-            var dp=new THREE.Vector3().lerpVectors(new THREE.Vector3(0,0,0),endLocal,t);
+            var dp=new THREE.Vector3().lerpVectors(startLocal,endLocal,t);
             var dotGeo=new THREE.SphereGeometry(0.03,4,4);
             var dotMat=new THREE.MeshBasicMaterial({color:0x333340});
             var dot=new THREE.Mesh(dotGeo,dotMat);
