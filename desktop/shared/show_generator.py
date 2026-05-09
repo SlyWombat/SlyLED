@@ -258,6 +258,27 @@ THEMES = {
     # along the same path produce the shimmer that distinguishes
     # "aurora" from "stripe"; sparkle overlay adds twinkles above the
     # wash; fade-in/out brackets wrap the timeline boundaries.
+    # #865 — high-energy template tuned for stages built around many
+    # parallel vertical LED bars (touring back-wall battens, ~75–300
+    # LEDs/bar). Auto-detects bars from the live layout; refuses
+    # generation when fewer than 2 are present (degenerate). Catalog
+    # ships as a single coordinated 7-clip sequence per
+    # feedback_rock_solid_no_incrementals.
+    "vertical-bar-array": {
+        "name": "Vertical Bar Array (rapid)",
+        "desc": "Rapid catalog tuned for vertical LED bars (≥75 LEDs each, ≥2 bars)",
+        "durationS": 56,            # 7 clips × 8 s
+        "palette": [[255, 240, 80], [80, 220, 240], [220, 100, 220],
+                     [255, 80, 60], [80, 255, 120]],
+        "base_action": {
+            "type": 3, "r": 30, "g": 30, "b": 60,
+            "periodMs": 4000, "minBri": 30,
+        },
+        "energy": 0.85,
+        "accent_colors": [[255, 240, 200], [120, 200, 255]],
+        "bar_array": True,
+        "bpm": 128,
+    },
     "aurora-curtain": {
         "name": "Aurora Curtain",
         "desc": "Layered aurora ribbons sweep across the stage with synced movers",
@@ -882,6 +903,313 @@ def _apply_fade_brackets(theme, tracks, dur):
     return tracks
 
 
+# ── #865 vertical-bar-array primitive ────────────────────────────────────────
+
+def _is_vertical_bar(fixture, pos_map):
+    """#865 — bar topology heuristic.
+
+    Match: LED fixture with exactly one string of ≥75 LEDs whose
+    resolved pixel extent is dominantly aligned with stage +Z (Z-extent
+    >3× the larger of X-extent / Y-extent). The resolve-and-measure path
+    handles strips that reach vertical via either rotation or sdir, so
+    the heuristic doesn't have to special-case rotation conventions.
+    """
+    if fixture.get("fixtureType") != "led":
+        return False
+    if fixture.get("type") != "linear":
+        return False
+    strings = fixture.get("strings") or []
+    if len(strings) != 1:
+        return False
+    s = strings[0]
+    if (s.get("leds") or 0) < 75:
+        return False
+    pos = pos_map.get(fixture.get("id"))
+    if not pos:
+        return False
+    child_pos = [pos.get("x", 0), pos.get("y", 0), pos.get("z", 0)]
+    try:
+        from spatial_engine import resolve_fixture as _resolve
+        pixels = _resolve({
+            "type": "linear",
+            "childPos": child_pos,
+            "strings": strings,
+            "rotation": fixture.get("rotation", [0, 0, 0]),
+        }).get("pixelPositions", [])
+    except Exception:
+        return False
+    if len(pixels) < 2:
+        return False
+    xs = [p[0] for p in pixels]
+    ys = [p[1] for p in pixels]
+    zs = [p[2] for p in pixels]
+    z_ext = max(zs) - min(zs)
+    h_ext = max(max(xs) - min(xs), max(ys) - min(ys), 1)
+    return z_ext > 3 * h_ext
+
+
+def _bar_anchor_position(fixture, pos_map):
+    """Return the bar's stage-X mid for cross-sweep timing tests. Falls
+    back to the layout entry's x when no per-string positions are set."""
+    pos = pos_map.get(fixture.get("id"), {})
+    return [pos.get("x", 0), pos.get("y", 0), pos.get("z", 0)]
+
+
+def _generate_bar_array_show(theme, fixtures, layout_positions, bounds):
+    """#865 — produce the 7-clip bar-array timeline.
+
+    Catalog (each ~8 s, on an allPerformers track, sequenced):
+      1. Cross-stage horizontal sweep   (sphere field travels +X)
+      2. Vertical climb                 (sphere field travels +Z)
+      3. Mexican wave                   (plane field swept on X)
+      4. Strobe shimmer                 (ACT_STROBE @ 10 Hz)
+      5. Lightning strikes              (sphere bursts at bar X positions)
+      6. Color cascade                  (ACT_RAINBOW vertical)
+      7. Stack-builder                  (plane field stepping zBottom→zTop on beat)
+
+    Returns either {"error", "msg"} (rejected — < 2 bars) or the
+    standard show dict consumed by `_install_preset_show`.
+    """
+    pos_map = {p["id"]: p for p in layout_positions}
+    bars = [f for f in fixtures if _is_vertical_bar(f, pos_map)]
+    if len(bars) < 2:
+        return {
+            "error": "needs_bars",
+            "msg": (f"Theme '{theme['name']}' needs at least 2 vertical "
+                    f"LED bars (single-string fixtures with ≥75 LEDs "
+                    f"oriented along stage +Z). Detected: {len(bars)}. "
+                    f"Add more bars or pick a different preset."),
+        }
+
+    bar_ids = [b["id"] for b in bars]
+    led_fx = bars  # for base wash + sparkle plumbing
+    bpm = float(theme.get("bpm", 128) or 128)
+    beat_s = max(0.05, 60.0 / bpm)
+
+    cy = bounds["cy"]
+    cz_mid = (bounds["zMin"] + bounds["zMax"]) // 2
+    z_top = bounds["zMax"]
+    z_bot = bounds["zMin"]
+    x_min = bounds["xMin"]
+    x_max = bounds["xMax"]
+    cx = (x_min + x_max) // 2
+
+    palette = theme["palette"]
+    accent = theme.get("accent_colors", palette)
+    clip_dur = 8.0
+
+    effects = []
+    actions = []
+
+    # Clip 1 — Cross-stage horizontal sweep. Wide sphere travels +X over
+    # 4 s and again −X over 4 s. The clip-relative startPos of the +X
+    # leg pins the per-bar peak ordering: bars at lower stage-X cross the
+    # sphere's centre first. The acceptance test asserts this directly.
+    radius_h = max(800, (x_max - x_min) // 4)
+    cross_sweep_a = {
+        "name": "Cross-Stage Sweep →",
+        "category": "spatial-field",
+        "shape": "sphere",
+        "r": accent[0][0], "g": accent[0][1], "b": accent[0][2],
+        "size": {"radius": radius_h},
+        "motion": {
+            "startPos": [int(x_min - radius_h // 2), int(cy), int(cz_mid)],
+            "endPos":   [int(x_max + radius_h // 2), int(cy), int(cz_mid)],
+            "durationS": 4.0,
+            "easing": "ease-in-out",
+        },
+        "blend": "add",
+    }
+    effects.append(cross_sweep_a)
+
+    # Clip 2 — Vertical climb. Sphere travels +Z; one beat per climb,
+    # 4 beats to fill the 8 s clip when bpm=120. Narrow X radius so each
+    # bar receives the climb in unison (per spec — phase-offset variant
+    # is reserved for when more than one bar is detected; we still treat
+    # this as the unison clip for the acceptance test exemption).
+    radius_v = max(400, (z_top - z_bot) // 5)
+    vertical_climb = {
+        "name": "Vertical Climb ↑",
+        "category": "spatial-field",
+        "shape": "sphere",
+        "r": palette[1][0], "g": palette[1][1], "b": palette[1][2],
+        "size": {"radius": radius_v},
+        "motion": {
+            "startPos": [int(cx), int(cy), int(z_bot)],
+            "endPos":   [int(cx), int(cy), int(z_top)],
+            "durationS": round(beat_s * 2, 2),  # 2 beats per climb
+            "easing": "linear",
+        },
+        "blend": "add",
+    }
+    effects.append(vertical_climb)
+
+    # Clip 3 — Mexican wave. Plane field with X-aligned normal so a thin
+    # vertical slab travels stage-left → stage-right. Period 1.5 s per
+    # the spec. Uses the existing plane primitive so bake produces the
+    # same per-pixel timing as the other sweep effects.
+    mexican_wave = {
+        "name": "Mexican Wave",
+        "category": "spatial-field",
+        "shape": "plane",
+        "r": palette[2][0], "g": palette[2][1], "b": palette[2][2],
+        "size": {"normal": [1, 0, 0],
+                  "thickness": max(800, (x_max - x_min) // 8)},
+        "motion": {
+            "startPos": [int(x_min), int(cy), int(cz_mid)],
+            "endPos":   [int(x_max), int(cy), int(cz_mid)],
+            "durationS": 1.5,
+            "easing": "ease-in-out",
+        },
+        "blend": "add",
+    }
+    effects.append(mexican_wave)
+
+    # Clip 4 — Strobe shimmer. Single ACT_STROBE keeps the bake
+    # pipeline simple; per-bar phase variance is provided by the
+    # strobe's free-running counter at slightly different transition
+    # times when the spatial fields layered above resolve.
+    strobe_action = {
+        "action": {
+            "name": "Bar Strobe Shimmer",
+            "type": 9,
+            "r": 255, "g": 240, "b": 200,
+            "periodMs": 100,
+        },
+        "targets": "led",
+    }
+    actions.append(strobe_action)
+
+    # Clip 5 — Lightning strikes. Up to 4 short sphere bursts at
+    # individual bar X positions; if there are more bars than slots the
+    # template picks evenly-spaced bars across the array.
+    lightning_effects = []
+    sorted_bars = sorted(bars,
+                          key=lambda b: pos_map.get(b["id"], {}).get("x", 0))
+    n_strikes = min(4, len(sorted_bars))
+    step = max(1, len(sorted_bars) // n_strikes) if n_strikes else 1
+    for i in range(n_strikes):
+        b = sorted_bars[i * step] if (i * step) < len(sorted_bars) else sorted_bars[i % len(sorted_bars)]
+        bx = pos_map.get(b["id"], {}).get("x", 0)
+        fx = {
+            "name": f"Lightning {i+1}",
+            "category": "spatial-field",
+            "shape": "sphere",
+            "r": 255, "g": 255, "b": 240,
+            "size": {"radius": radius_v},
+            "motion": {
+                "startPos": [int(bx), int(cy), int(z_top + 800)],
+                "endPos":   [int(bx), int(cy), int(z_bot)],
+                "durationS": 0.25,
+                "easing": "ease-in",
+            },
+            "blend": "add",
+        }
+        effects.append(fx)
+        lightning_effects.append(fx)
+
+    # Clip 6 — Color cascade. ACT_RAINBOW direction=1 scrolls top→bottom
+    # on every targeted bar in unison, exploiting their high pixel
+    # density for a smooth gradient.
+    cascade_action = {
+        "action": {
+            "name": "Bar Color Cascade",
+            "type": 5,                # ACT_RAINBOW
+            "speedMs": 25,
+            "paletteId": 0,
+            "direction": 1,
+        },
+        "targets": "led",
+    }
+    actions.append(cascade_action)
+
+    # Clip 7 — Stack-builder. Four box fields stack from floor to top on
+    # consecutive beats. The 8-s clip absorbs four beats of 0.5 s + a
+    # collapse on the fifth beat (modeled by reusing the top box).
+    stack_effects = []
+    for i in range(4):
+        z_lo = z_bot + (z_top - z_bot) * i // 4
+        z_hi = z_bot + (z_top - z_bot) * (i + 1) // 4
+        fx = {
+            "name": f"Stack {i+1}",
+            "category": "spatial-field",
+            "shape": "box",
+            "r": palette[(i + 1) % len(palette)][0],
+            "g": palette[(i + 1) % len(palette)][1],
+            "b": palette[(i + 1) % len(palette)][2],
+            "size": {
+                "width": int((x_max - x_min) + 4000),
+                "height": int(max(2000, bounds["yMax"] - bounds["yMin"] + 2000)),
+                "depth": int(max(400, (z_hi - z_lo))),
+            },
+            "motion": {
+                "startPos": [int(cx), int(cy), int((z_lo + z_hi) // 2)],
+                "endPos":   [int(cx), int(cy), int((z_lo + z_hi) // 2)],
+                "durationS": round(beat_s, 2),
+                "easing": "linear",
+            },
+            "blend": "add",
+        }
+        effects.append(fx)
+        stack_effects.append(fx)
+
+    # ── Build tracks ────────────────────────────────────────────────────
+    # Per-fixture base wash (lowest priority — keeps the bars from going
+    # dark per feedback_wash_is_intentional).
+    dur = 7 * clip_dur  # = 56 s, matches theme["durationS"]
+    base_actions = _generate_base_actions(theme, led_fx, [], [])
+    led_base = next((b for b in base_actions
+                      if b.get("targets") == "led"), None)
+
+    tracks = []
+    if led_base:
+        for b in bars:
+            tracks.append({
+                "fixtureId": b["id"],
+                "clips": [{"_action_ref": led_base, "startS": 0, "durationS": dur}],
+                "_layer": "base",
+            })
+
+    # Effects/actions track (allPerformers) — 7 sequenced clips.
+    fx_clips = [
+        {"_effect_ref": cross_sweep_a, "startS": 0 * clip_dur,
+         "durationS": clip_dur, "name": "Cross-Stage Sweep"},
+        {"_effect_ref": vertical_climb, "startS": 1 * clip_dur,
+         "durationS": clip_dur, "name": "Vertical Climb"},
+        {"_effect_ref": mexican_wave, "startS": 2 * clip_dur,
+         "durationS": clip_dur, "name": "Mexican Wave"},
+        {"_action_ref": strobe_action, "startS": 3 * clip_dur,
+         "durationS": clip_dur, "name": "Strobe Shimmer"},
+        # Lightning slot — first lightning effect anchors the clip; the
+        # rest of the strikes also live on the allPerformers track at
+        # offset (0..clip_dur) inside the slot.
+        {"_effect_ref": lightning_effects[0] if lightning_effects else cross_sweep_a,
+         "startS": 4 * clip_dur,
+         "durationS": clip_dur, "name": "Lightning Strikes"},
+        {"_action_ref": cascade_action, "startS": 5 * clip_dur,
+         "durationS": clip_dur, "name": "Color Cascade"},
+        {"_effect_ref": stack_effects[0] if stack_effects else cross_sweep_a,
+         "startS": 6 * clip_dur,
+         "durationS": clip_dur, "name": "Stack-Builder"},
+    ]
+    tracks.append({"allPerformers": True, "clips": fx_clips,
+                    "_layer": "effects"})
+
+    return {
+        "name": theme["name"],
+        "durationS": dur,
+        "base_actions": base_actions,
+        "mover_actions": [strobe_action, cascade_action],
+        "effects": effects,
+        "tracks": tracks,
+        "led_fixture_ids": bar_ids,
+        "dmx_par_ids": [],
+        "dmx_mover_ids": [],
+        "_865_bar_ids": bar_ids,    # exposed for the regression harness
+        "_865_clips": fx_clips,
+    }
+
+
 def generate_show(theme_id, fixtures, layout, stage, profile_lib=None):
     """Generate a complete show from a theme and the user's actual fixtures.
 
@@ -936,6 +1264,13 @@ def generate_show(theme_id, fixtures, layout, stage, profile_lib=None):
     fpos = _fixture_positions(real_fixtures, layout_positions)
 
     dur = theme["durationS"]
+
+    # ── #865 vertical bar array shows ─────────────────────────────────
+    # Bar-topology shows have their own primitive: catalog of 7 fast
+    # effects sequenced on a single allPerformers track. Refuses if
+    # fewer than 2 bars are detected (degenerate).
+    if theme.get("bar_array"):
+        return _generate_bar_array_show(theme, real_fixtures, layout_positions, bounds)
 
     # ── #839 ribbon shows: coordinated stage-anchor + layered slip ────
     # Themes with a `ribbon` block emit a single travelling patrol

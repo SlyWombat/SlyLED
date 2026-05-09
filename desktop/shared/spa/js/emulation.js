@@ -35,25 +35,28 @@ function emuLoadStage(){
   _emuStartTimer();
 }
 
-// #810 — 5 Hz poll of /api/fixtures/live so the 3D viz cone direction
-// follows Track-action sweeps (which aren't in the bake) and any other
-// live mover-control or /api/mover/<fid>/aim writes.
+// #810 — `/api/fixtures/live` drives the 3D viz cone direction so it
+// follows Track-action sweeps (not in the bake) + any other live
+// mover-control writes.
+// #859 — pre-fix this maintained its own 5 Hz `setInterval` AND
+// scene-3d.js maintained an identical-cadence poll for the layout
+// viewport, doubling the orchestrator's per-poll cost. Now both
+// register with the shared poller in app.js (`_sharedFixLiveAdd`)
+// — one network round trip every 200 ms, both viewports see the
+// same payload.
 function _emuStartLivePoll(){
-  if(_emuLive.pollId)return;
-  var tick=function(){
-    ra('GET','/api/fixtures/live',null,function(d){
-      if(!d||!Array.isArray(d.fixtures)){_emuLive.data={};return;}
-      var next={};
-      d.fixtures.forEach(function(f){if(f&&f.id!==undefined)next[String(f.id)]=f;});
-      _emuLive.data=next;
-    });
-  };
-  tick();
-  _emuLive.pollId=setInterval(tick, 200);   // 5 Hz
+  _emuLive.pollId = "shared";  // sentinel so re-entry checks still work
+  _sharedFixLiveAdd('emu', function(d){
+    if(!d||!Array.isArray(d.fixtures)){_emuLive.data={};return;}
+    var next={};
+    d.fixtures.forEach(function(f){if(f&&f.id!==undefined)next[String(f.id)]=f;});
+    _emuLive.data=next;
+  });
 }
 
 function _emuStopLivePoll(){
-  if(_emuLive.pollId){clearInterval(_emuLive.pollId);_emuLive.pollId=null;}
+  _emuLive.pollId = null;
+  _sharedFixLiveRemove('emu');
   _emuLive.data={};
 }
 

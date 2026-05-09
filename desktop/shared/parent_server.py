@@ -83,13 +83,21 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.97"
+VERSION = "1.7.102"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
 UDP_MAGIC   = 0x534C
 UDP_VERSION = 5   # #819 — added CMD_GYRO_STOP (0x69); orient-flags bit 3 retired
 UDP_PORT    = 4210
+# #862 — Android Auto Brightness has its own UDP port. Pre-fix #861 dispatched
+# AUTOBRI_PUSH on the shared 4210 listener, but Windows hosts intermittently
+# refuse to bind 4210 (kernel-level reservation by HNS / Hyper-V port pool;
+# the bind fails with WinError 10013/10048 even with no visible holder). All
+# the firmware-side wire (PING/PONG, ACTION_EVENT, GYRO_*) is locked to 4210
+# because the firmware hardcodes it; AUTOBRI_PUSH is Android-only, so we can
+# pick a less-contended port. 4211 is adjacent for memorability.
+UDP_AUTOBRI_PORT = 4211
 
 CMD_PING        = 0x01
 CMD_PONG        = 0x02
@@ -117,6 +125,7 @@ CMD_GYRO_STOP          = 0x69  # gyro→parent: discrete press-STOP — release 
 CMD_GYRO_CLAIM_ACK     = 0x6A  # parent→gyro: claim established — {nonce(2), moverId(2)} (#825).
 CMD_GYRO_STOP_ACK      = 0x6B  # parent→gyro: stop confirmed — {nonce(2)} (#825).
 CMD_GYRO_HEARTBEAT_REP = 0x6C  # gyro→parent: heartbeat reply — {uiState(1), claimNonce(2), seq(2)} (#825).
+CMD_AUTOBRI_PUSH       = 0x6D  # phone→parent: Android Auto Brightness master push (#861) — {master(1), flags(1), seq(1)}. 20 Hz fire-and-forget UDP; orchestrator coalesces by overwriting `_settings["globalBrightness"]` per packet. Replaces the prior HTTP /api/brightness fast path.
 
 # #825 — uiState codes carried in CMD_GYRO_HEARTBEAT_REP.
 GYRO_UI_IDLE        = 0
@@ -739,10 +748,42 @@ def _hdr(cmd, epoch=0):
     return struct.pack("<HBBI", UDP_MAGIC, UDP_VERSION, cmd,
                        epoch or (int(time.time()) & 0xFFFFFFFF))
 
+# #859 — shared UDP sender socket. Pre-fix `_send` opened a fresh
+# `socket.SOCK_DGRAM` (3 kernel transitions: socket / sendto / close)
+# per call. With Auto Brightness streaming `/api/brightness` at 20 Hz,
+# `_broadcast_brightness` would fire ~20 N socket-create / close pairs
+# per second to N LED children. On Windows / WSL the per-create cost
+# is non-trivial and contends the orchestrator's GIL with the playback
+# loop and Flask handlers. Single shared sender drops `_send` to one
+# `sendto` syscall per packet.
+_SEND_SOCK = None
+_SEND_SOCK_LOCK = threading.Lock()
+
+
+def _get_send_sock():
+    """Lazy-init the shared sender socket. Caller must NOT close it."""
+    global _SEND_SOCK
+    if _SEND_SOCK is None:
+        with _SEND_SOCK_LOCK:
+            if _SEND_SOCK is None:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                # Allow broadcast — `_broadcast_brightness` and similar
+                # callers may target subnet-wide addresses.
+                try:
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                except OSError:
+                    pass
+                _SEND_SOCK = s
+    return _SEND_SOCK
+
+
 def _send(ip, pkt):
+    """#859 — single-syscall UDP send via the shared sender socket.
+    Pre-fix this opened+closed a fresh socket per call (~3 kernel
+    transitions). Multi-thread safe: `sendto` on a UDP socket is
+    re-entrant; no userspace lock needed."""
     try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.sendto(pkt, (ip, UDP_PORT))
+        _get_send_sock().sendto(pkt, (ip, UDP_PORT))
     except Exception:
         pass
 
@@ -1332,6 +1373,37 @@ def restart_udp_listener():
     time.sleep(0.6)
     return _udp_status.get("ok", False)
 
+def _udp_autobri_listener():
+    """#862 — dedicated UDP listener for `CMD_AUTOBRI_PUSH` on
+    `UDP_AUTOBRI_PORT`. Separate from the firmware-shared 4210
+    listener so that Android Auto Brightness still works even when
+    Windows kernel reservations refuse to free 4210 (rare but real;
+    the gyro puck handshake will be down in that case but Auto
+    Brightness still arrives). Same packet format as the 4210 path
+    — 8-byte header + 3-byte payload (master/flags/seq) — re-using
+    `_handle_autobri_push` so the dispatch is single-source."""
+    s = _try_bind_udp(UDP_AUTOBRI_PORT, max_attempts=3)
+    if s is None:
+        return
+    while True:
+        try:
+            data, addr = s.recvfrom(64)
+        except socket.timeout:
+            continue
+        except Exception:
+            continue
+        if len(data) < 8:
+            continue
+        try:
+            magic, ver, cmd = struct.unpack_from("<HBB", data, 0)
+        except Exception:
+            continue
+        if magic != UDP_MAGIC or ver not in (3, 4, UDP_VERSION):
+            continue
+        if cmd == CMD_AUTOBRI_PUSH and len(data) >= 11:
+            _handle_autobri_push(addr[0], data)
+
+
 def _udp_listener():
     """Background daemon: persistent bind on UDP_PORT, receives ACTION_EVENT packets from children."""
     s = _try_bind_udp(UDP_PORT)
@@ -1761,6 +1833,8 @@ def _udp_listener():
                                 _send_gyro_claim_denied(ip)
             except Exception as e:
                 log.error("GYRO_HB_REP handler failed: %s", e, exc_info=True)
+        elif cmd == CMD_AUTOBRI_PUSH and len(data) >= 11:
+            _handle_autobri_push(ip, data)
         elif cmd == CMD_PONG:
             # Handle PONGs from broadcast/direct pings
             info = _parse_pong(data, ip)
@@ -2088,6 +2162,8 @@ def start_background_tasks():
     _bootstrap_ssh_defaults()
     _udp_listener_thread = threading.Thread(target=_udp_listener, daemon=True)
     _udp_listener_thread.start()
+    # #862 — second UDP listener for AUTOBRI_PUSH on its own port.
+    threading.Thread(target=_udp_autobri_listener, daemon=True).start()
     threading.Thread(target=_heartbeat_loop, daemon=True).start()
     if _children:
         threading.Thread(target=_periodic_ping, daemon=True).start()
@@ -2539,6 +2615,31 @@ def api_stage_save():
 def api_fixtures_get():
     return jsonify(_fixtures)
 
+def _validate_fixture_strings(strings):
+    """#864 — validate optional per-string position fields (x/y/z).
+
+    Strings without x/y/z continue to inherit the fixture's layout
+    position (legacy behaviour). When any of x/y/z is provided, all three
+    must be numeric — partial overrides are rejected so a half-set string
+    can't silently inherit one axis from the fixture and override the
+    other two.
+    """
+    if not isinstance(strings, list):
+        return "strings must be a list"
+    for i, s in enumerate(strings):
+        if not isinstance(s, dict):
+            return f"strings[{i}] must be an object"
+        present = [k for k in ("x", "y", "z") if k in s]
+        if present and len(present) != 3:
+            return (f"strings[{i}] partial position override — provide all "
+                    f"of x/y/z together or none (got {present})")
+        for k in present:
+            v = s[k]
+            if not isinstance(v, (int, float)) or isinstance(v, bool):
+                return f"strings[{i}].{k} must be numeric (mm)"
+    return None
+
+
 @app.post("/api/fixtures")
 def api_fixtures_create():
     global _nxt_fix
@@ -2550,6 +2651,10 @@ def api_fixtures_create():
     fixture_type = body.get("fixtureType", "led")
     if fixture_type not in ("led", "dmx", "camera", "gyro"):
         return jsonify(err="Invalid fixtureType - must be 'led', 'dmx', 'camera', or 'gyro'"), 400
+    if "strings" in body:
+        err = _validate_fixture_strings(body["strings"])
+        if err:
+            return jsonify(err=err), 400
     # DMX-specific validation
     if fixture_type == "dmx":
         dmx_uni = body.get("dmxUniverse")
@@ -2628,6 +2733,11 @@ def api_fixture_update(fid):
     # Validate geometry type if changing
     if "type" in body and body["type"] not in ("linear", "point", "surface", "group"):
         return jsonify(err="Invalid fixture type"), 400
+    # #864 — validate per-string position fields if strings is being written
+    if "strings" in body:
+        err = _validate_fixture_strings(body["strings"])
+        if err:
+            return jsonify(err=err), 400
     # Validate DMX fields
     ft = body.get("fixtureType", f.get("fixtureType", "led"))
     if ft == "dmx":
@@ -12241,7 +12351,10 @@ def api_remotes_live():
             _brightness_obs.pop(ip, None)
         for remote_ip, st in _brightness_obs.items():
             last_age = now - st.get("last_log_ts", 0)
-            cur_value = st.get("last_log_value", -1)
+            # #862 — read `current_value` (updated every hop) rather than
+            # `last_log_value` (only on rate-limited log emissions) so
+            # the dashboard reflects the live audio envelope.
+            cur_value = st.get("current_value", st.get("last_log_value", -1))
             ab_min = st.get("min_v", 0)
             ab_max = st.get("max_v", 0)
             # LOST if no POST seen in the last 3 s (issue thresholds:
@@ -15928,6 +16041,41 @@ def _brightness_packet(value):
     return _hdr(CMD_SET_BRIGHTNESS) + bytes([iv])
 
 
+# #859 — throttled dirty-mark for the master grand-master gate.
+# Pre-fix every `/api/brightness` POST that changed value flipped
+# every active universe's dirty bit, forcing the engine to emit
+# ArtDmx at the full 40 Hz cadence (vs the 1 Hz keep-alive when no
+# show is running). With Auto Brightness streaming varied envelope
+# values at 20 Hz, this 4-5×'d the engine send-thread CPU even when
+# the channel data hadn't changed — only the master multiplier had.
+#
+# Throttle: skip dirty-mark when both
+#   (a) under 50 ms since last dirty-mark, AND
+#   (b) value within 4 of last dirty-mark value.
+# A 4-step delta at gamma 2.2 corresponds to ~0.3 % linear output
+# change — invisible to the operator until accumulated. The
+# ArtNet keep-alive (1 s) catches sub-threshold drifts so eventual
+# consistency is preserved.
+_LAST_BRIGHTNESS_DIRTY_TS = 0.0
+_LAST_BRIGHTNESS_DIRTY_VALUE = 255
+
+
+def _maybe_mark_universes_dirty_for_brightness(iv):
+    """#859 — throttled wrapper for the #853 mark-all-dirty pattern.
+    See module-level comment above for the threshold rationale."""
+    global _LAST_BRIGHTNESS_DIRTY_TS, _LAST_BRIGHTNESS_DIRTY_VALUE
+    now = time.monotonic()
+    if ((now - _LAST_BRIGHTNESS_DIRTY_TS) < 0.05
+            and abs(int(iv) - int(_LAST_BRIGHTNESS_DIRTY_VALUE)) < 4):
+        return
+    _LAST_BRIGHTNESS_DIRTY_TS = now
+    _LAST_BRIGHTNESS_DIRTY_VALUE = int(iv)
+    for engine in (_artnet, _sacn):
+        if engine.running:
+            for uni in engine._universes.values():
+                uni.dirty = True
+
+
 def _broadcast_brightness(value):
     """Send CMD_SET_BRIGHTNESS to every online LED child (#843).
 
@@ -15983,6 +16131,13 @@ def _log_brightness_hop(remote, value, prev):
         st["min_v"] = min(st["min_v"], value)
         st["max_v"] = max(st["max_v"], value)
         st["sum_v"] += value
+        # #862 — `current_value` tracks EVERY hop so the dashboard's
+        # Auto Brightness card animates with the audio. The pre-fix
+        # `last_log_value` only updated when a rate-limited log entry
+        # fired (first-in-window or |delta| ≥ 10), so the dashboard
+        # showed a frozen-looking `cur` value between log emissions
+        # despite packets streaming at 20 Hz.
+        st["current_value"] = value
         emit_first = (now - st["last_log_ts"]) >= 5.0
         emit_delta = (st["last_log_value"] >= 0
                       and abs(value - st["last_log_value"]) >= 10)
@@ -16003,6 +16158,38 @@ def _log_brightness_hop(remote, value, prev):
             st["min_v"] = value
             st["max_v"] = value
             st["sum_v"] = 0
+
+
+def _handle_autobri_push(ip, data):
+    """#861 — Android Auto Brightness UDP push handler.
+
+    Replaces the prior HTTP `POST /api/brightness` fast-path which
+    suffered TCP retransmit / connection-pool churn at 20 Hz audio
+    cadence (live test 2026-05-08: zero POSTs landed in 3.5 min of
+    music). UDP fire-and-forget with a 1-byte master value;
+    orchestrator coalesces by overwriting `_settings["globalBrightness"]`
+    per packet, the next DMX tick reads it. Manual-slider HTTP path
+    (#843) stays unchanged — once-per-second human input is fine on TCP.
+
+    Extracted from `_udp_listener` so the regression test can drive the
+    dispatch path without spinning up a real socket bind.
+    """
+    try:
+        master, flags, seq = struct.unpack_from("<BBB", data, 8)
+        with _lock:
+            prev_bri = _settings.get("globalBrightness", 255)
+            _settings["globalBrightness"] = int(master)
+        if int(master) != prev_bri:
+            _broadcast_brightness(int(master))
+            _maybe_mark_universes_dirty_for_brightness(int(master))
+        # Re-use the HTTP path's rate-limited observability so the
+        # dashboard's Auto Brightness card (#849 Part 2) surfaces this
+        # stream identically. `flags` and `seq` are diagnostic-only for
+        # now; reserved for a future `/api/auto-brightness/status`
+        # endpoint.
+        _log_brightness_hop(ip, int(master), prev_bri)
+    except Exception as e:
+        log.warning("AUTOBRI_PUSH handler failed: %s", e)
 
 
 # #804 — fast-path master brightness for Android auto-brightness (mic-driven).
@@ -16029,16 +16216,7 @@ def api_brightness_fast():
         _settings["globalBrightness"] = iv
     if iv != prev:
         _broadcast_brightness(iv)
-        # #853 — mark every active universe dirty so the master
-        # grand-master change emits a fresh ArtDmx frame on the
-        # next send tick instead of waiting up to 1 s for the
-        # keep-alive cycle. Without this the operator-perceived
-        # latency between sliding the brightness and seeing the
-        # rig respond is up to a full keep-alive period.
-        for engine in (_artnet, _sacn):
-            if engine.running:
-                for uni in engine._universes.values():
-                    uni.dirty = True
+        _maybe_mark_universes_dirty_for_brightness(iv)
     _log_brightness_hop(request.remote_addr or "?", iv, prev)
     return jsonify(ok=True, value=iv)
 
@@ -18624,6 +18802,11 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
+
+
+
 
 
 

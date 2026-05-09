@@ -240,6 +240,31 @@ function editFixture(id){
     h+='<button class="btn" onclick="'+calOnClick+'" style="'+calStyle+'" title="'+calTitle+'">Calibrate'+(f.moverCalibrated?' ✓':'')+'</button>';
     h+='</div>';
   }
+  // #864 — per-string position editor for multi-string LED fixtures.
+  // When the fixture's strings array carries more than one entry, expose
+  // X/Y/Z (mm) inputs per string. Each defaults to the string's own
+  // (x,y,z) if previously set, else the fixture's layout position. A
+  // string with all three blank means "inherit fixture position" — same
+  // as today; partial values are rejected on save.
+  if(ft==='led'&&f.strings&&f.strings.length>1){
+    h+='<div style="margin-top:.8em;border-top:1px solid #1e293b;padding-top:.6em">';
+    h+='<div style="font-weight:bold;font-size:.85em;margin-bottom:.4em">Per-String Positions <span style="color:#64748b;font-size:.75em">(stage mm — leave blank to inherit fixture position)</span></div>';
+    for(var ss=0;ss<f.strings.length;ss++){
+      var sObj=f.strings[ss]||{};
+      var sx=(sObj.x!=null)?sObj.x:'';
+      var sy=(sObj.y!=null)?sObj.y:'';
+      var sz=(sObj.z!=null)?sObj.z:'';
+      var sLeds=sObj.leds||0;
+      h+='<div style="display:flex;align-items:center;gap:.3em;margin-bottom:.3em">';
+      h+='<span style="font-size:.78em;color:#94a3b8;min-width:80px">String '+(ss+1)+' <span style="color:#64748b">('+sLeds+' LEDs)</span></span>';
+      h+='<label style="font-size:.7em;color:#64748b">X</label><input id="fx-str-'+ss+'-x" type="number" value="'+sx+'" placeholder="inherit" style="width:70px">';
+      h+='<label style="font-size:.7em;color:#64748b">Y</label><input id="fx-str-'+ss+'-y" type="number" value="'+sy+'" placeholder="inherit" style="width:70px">';
+      h+='<label style="font-size:.7em;color:#64748b">Z</label><input id="fx-str-'+ss+'-z" type="number" value="'+sz+'" placeholder="inherit" style="width:70px">';
+      h+='</div>';
+    }
+    h+='<p style="color:#64748b;font-size:.72em;margin-top:.2em">Spatial bake (sphere/plane/box fields) and the 3D viewport use the per-string position when all three of X/Y/Z are filled in. Leave a string blank to keep it co-located at the fixture position.</p>';
+    h+='</div>';
+  }
   h+='<div style="margin-top:.8em"><button class="btn btn-on" onclick="saveFixture('+id+',\''+ft+'\')">Save</button></div>';
   document.getElementById('modal-title').textContent='Edit Fixture: '+f.name;
   document.getElementById('modal-body').innerHTML=h;
@@ -578,6 +603,34 @@ function saveFixture(id,ft){
   var nx=parseInt(document.getElementById('fx-px').value)||0;
   var ny=parseInt(document.getElementById('fx-py').value)||0;
   var nz=parseInt(document.getElementById('fx-pz').value)||0;
+  // #864 — fold per-string positions into the strings payload when the
+  // editor rendered them (multi-string LED fixtures only). A row with all
+  // three of X/Y/Z populated overrides the fixture's layout position for
+  // that string. A row left fully blank inherits the fixture position
+  // (server clears any prior x/y/z by accepting only the new array).
+  if(ft==='led'){
+    var origFx=null;_fixtures.forEach(function(fx){if(fx.id===id)origFx=fx;});
+    if(origFx&&origFx.strings&&origFx.strings.length>1
+        &&document.getElementById('fx-str-0-x')){
+      var perStrErr=null;
+      var newStrings=origFx.strings.map(function(s,ss){
+        var copy={};for(var k in s){if(k!=='x'&&k!=='y'&&k!=='z')copy[k]=s[k];}
+        var rx=document.getElementById('fx-str-'+ss+'-x');
+        var ry=document.getElementById('fx-str-'+ss+'-y');
+        var rz=document.getElementById('fx-str-'+ss+'-z');
+        var vx=rx?rx.value.trim():'';
+        var vy=ry?ry.value.trim():'';
+        var vz=rz?rz.value.trim():'';
+        var filled=(vx!=='')+(vy!=='')+(vz!=='');
+        if(filled===0)return copy;
+        if(filled!==3){perStrErr='String '+(ss+1)+': fill all of X / Y / Z, or leave them all blank.';return copy;}
+        copy.x=parseFloat(vx);copy.y=parseFloat(vy);copy.z=parseFloat(vz);
+        return copy;
+      });
+      if(perStrErr){alert(perStrErr);return;}
+      body.strings=newStrings;
+    }
+  }
   ra('PUT','/api/fixtures/'+id,body,function(r){
     if(!r||!r.ok){closeModal();return;}
     // Update layout position

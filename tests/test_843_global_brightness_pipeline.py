@@ -234,6 +234,79 @@ def test_sync_time_uses_brightness_packet_helper():
             "api_bake_sync no longer builds the packet inline")
 
 
+def test_861_autobri_push_updates_globalbrightness():
+    """#861 — UDP CMD_AUTOBRI_PUSH lands directly in `_settings`.
+
+    Drives the extracted `_handle_autobri_push` helper rather than the
+    listener thread so the test is hermetic (no real bind). Covers the
+    audio-rate fast path that replaced the HTTP /api/brightness POST.
+    """
+    # Seed master so we can assert it changes.
+    parent_server._settings["globalBrightness"] = 255
+
+    # Register a fake LED child so _broadcast_brightness has something
+    # to fan out to — empty-list path returns silently.
+    parent_server._children.append({
+        "ip": "10.0.0.50", "name": "fake-led", "type": "esp32"})
+
+    # Capture broadcast packets to confirm CMD_SET_BRIGHTNESS
+    # propagates to LED children when master changes.
+    sent = []
+    orig_send = parent_server._send
+    parent_server._send = lambda ip, pkt: sent.append((ip, pkt))
+    try:
+        # Build the 11-byte packet: 8-byte header + master/flags/seq.
+        hdr = struct.pack("<HBBI",
+                          parent_server.UDP_MAGIC,
+                          parent_server.UDP_VERSION,
+                          parent_server.CMD_AUTOBRI_PUSH,
+                          0)
+        payload = struct.pack("<BBB", 137, 0, 42)
+        parent_server._handle_autobri_push("10.0.0.99", hdr + payload)
+
+        _assert(parent_server._settings["globalBrightness"] == 137,
+                "AUTOBRI_PUSH writes master into _settings.globalBrightness")
+        _assert(len(sent) >= 1,
+                "AUTOBRI_PUSH broadcasts CMD_SET_BRIGHTNESS to LED children on change")
+
+        # Same value again: must NOT re-broadcast (avoid storm).
+        sent.clear()
+        parent_server._handle_autobri_push("10.0.0.99", hdr + payload)
+        _assert(parent_server._settings["globalBrightness"] == 137,
+                "AUTOBRI_PUSH idempotent on repeat value")
+        _assert(len(sent) == 0,
+                "AUTOBRI_PUSH skips broadcast when master is unchanged")
+
+        # Short packet: must not raise.
+        parent_server._handle_autobri_push("10.0.0.99", hdr)  # no payload
+        _assert(True, "AUTOBRI_PUSH tolerates short packet without raising")
+    finally:
+        parent_server._send = orig_send
+        parent_server._settings["globalBrightness"] = 255
+        # Pop the fake child we appended at the start of the test.
+        parent_server._children[:] = [
+            c for c in parent_server._children
+            if c.get("ip") != "10.0.0.50" or c.get("name") != "fake-led"
+        ]
+
+
+def test_861_autobri_push_constant_present():
+    _assert(getattr(parent_server, "CMD_AUTOBRI_PUSH", None) == 0x6D,
+            "CMD_AUTOBRI_PUSH is registered as 0x6D")
+    src = inspect.getsource(parent_server._udp_listener)
+    _assert("CMD_AUTOBRI_PUSH" in src,
+            "_udp_listener dispatches CMD_AUTOBRI_PUSH (legacy 4210 path)")
+    # #862 — dedicated AUTOBRI port for Android (firmware-shared 4210 stays
+    # for backward compat with any already-shipped debug APK).
+    _assert(getattr(parent_server, "UDP_AUTOBRI_PORT", None) == 4211,
+            "UDP_AUTOBRI_PORT is 4211")
+    autobri_src = inspect.getsource(parent_server._udp_autobri_listener)
+    _assert("_handle_autobri_push" in autobri_src,
+            "_udp_autobri_listener dispatches AUTOBRI_PUSH")
+    _assert("UDP_AUTOBRI_PORT" in autobri_src,
+            "_udp_autobri_listener binds the dedicated port")
+
+
 ALL = [
     test_brightness_endpoint_broadcasts_to_led_children,
     test_settings_save_broadcasts_brightness_change,
@@ -246,6 +319,8 @@ ALL = [
     test_artnet_engine_wired_with_master_grand_master_callbacks,
     test_brightness_endpoint_validates_input,
     test_sync_time_uses_brightness_packet_helper,
+    test_861_autobri_push_updates_globalbrightness,
+    test_861_autobri_push_constant_present,
 ]
 
 

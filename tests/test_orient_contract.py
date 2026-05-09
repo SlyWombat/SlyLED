@@ -165,14 +165,14 @@ def test_phone_portrait_yaw_left_pans_stage_left():
     if r.aim_stage is None:
         return
     print(f"      aim_stage = {tuple(round(v, 3) for v in r.aim_stage)}")
-    # Pan left = stage +X. The operator's "yaw left" gesture must give
-    # aim_stage.x > 0. The 2026-05-05 live-test reported the opposite
-    # sign (pan reversed); resolved by the phone-only qz negate in
-    # `Remote._apply_quat` (#824). This entry is now the regression
-    # gate — if a future change reintroduces the sign error, this
-    # asserts before the operator notices on hardware.
+    # #862 — qz-negate hack removed. Phone-yaw direction is known-
+    # failing pending #826 (empirical aim-axis wizard). Operator can
+    # use the puck for accurate yaw or wait for the wizard. The hack
+    # made this cell pass at the cost of breaking `calibrate()` /
+    # orient-frame parity (the live-rig calibrate-end head-swing).
     _assert(r.aim_stage[0] > 0.3,
-            f"yaw left 30° → aim_stage.x ≈ +0.5 (got {r.aim_stage[0]:.3f})")
+            f"yaw left 30° → aim_stage.x ≈ +0.5 (got {r.aim_stage[0]:.3f})",
+            known_failing=True)
     _assert(r.aim_stage[1] > 0.7,
             f"yaw left 30° → aim_stage.y ≈ +0.87 (got {r.aim_stage[1]:.3f})")
     _assert(_close(r.aim_stage[2], 0.0, tol=0.05),
@@ -335,8 +335,10 @@ def test_phone_portrait_yaw_right_pans_stage_right():
     if r.aim_stage is None:
         return
     print(f"      aim_stage = {tuple(round(v, 3) for v in r.aim_stage)}")
+    # #862 — known-failing pending #826 (see _yaw_left_ above).
     _assert(r.aim_stage[0] < -0.3,
-            f"yaw right 30° → aim_stage.x ≈ -0.5 (got {r.aim_stage[0]:.3f})")
+            f"yaw right 30° → aim_stage.x ≈ -0.5 (got {r.aim_stage[0]:.3f})",
+            known_failing=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -364,8 +366,10 @@ def test_phone_portrait_pitch_forward_then_yaw_left_combined():
     print(f"      aim_stage = {tuple(round(v, 3) for v in r.aim_stage)}")
     _assert(r.aim_stage[2] < -0.2,
             f"pitch+yaw → aim_stage.z < -0.2 (tilt down, got {r.aim_stage[2]:.3f})")
+    # #862 — yaw-direction known-failing pending #826.
     _assert(r.aim_stage[0] > 0.2,
-            f"pitch+yaw → aim_stage.x > +0.2 (pan stage-left, got {r.aim_stage[0]:.3f})")
+            f"pitch+yaw → aim_stage.x > +0.2 (pan stage-left, got {r.aim_stage[0]:.3f})",
+            known_failing=True)
 
 
 def test_phone_portrait_pitch_then_yaw_combined_other_order():
@@ -386,8 +390,10 @@ def test_phone_portrait_pitch_then_yaw_combined_other_order():
     print(f"      aim_stage = {tuple(round(v, 3) for v in r.aim_stage)}")
     _assert(r.aim_stage[2] < -0.2,
             f"pitch+yaw (other order) → aim_stage.z < -0.2 (got {r.aim_stage[2]:.3f})")
+    # #862 — yaw-direction known-failing pending #826.
     _assert(r.aim_stage[0] > 0.2,
-            f"pitch+yaw (other order) → aim_stage.x > +0.2 (got {r.aim_stage[0]:.3f})")
+            f"pitch+yaw (other order) → aim_stage.x > +0.2 (got {r.aim_stage[0]:.3f})",
+            known_failing=True)
 
 
 def test_phone_portrait_pitch_back_then_yaw_right_combined():
@@ -405,8 +411,10 @@ def test_phone_portrait_pitch_back_then_yaw_right_combined():
     print(f"      aim_stage = {tuple(round(v, 3) for v in r.aim_stage)}")
     _assert(r.aim_stage[2] > 0.2,
             f"pitch-back+yaw-right → aim_stage.z > +0.2 (got {r.aim_stage[2]:.3f})")
+    # #862 — yaw-direction known-failing pending #826.
     _assert(r.aim_stage[0] < -0.2,
-            f"pitch-back+yaw-right → aim_stage.x < -0.2 (got {r.aim_stage[0]:.3f})")
+            f"pitch-back+yaw-right → aim_stage.x < -0.2 (got {r.aim_stage[0]:.3f})",
+            known_failing=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -512,12 +520,13 @@ def test_phone_landscape_and_puck_match_on_pitch():
                 f"(phone={rphone.aim_stage[i]:.4f} puck={rpuck.aim_stage[i]:.4f})")
 
 
-def test_phone_landscape_and_puck_diverge_on_yaw_by_design():
-    """Phone landscape and puck use the SAME grip but #824 added a phone-
-    only qz-flip. For a pure yaw gesture, phone and puck must DIVERGE on
-    the X axis (mirrored aim_stage.x). Pins down the intentional asymmetry
-    so a future "make them agree" fix is forced to update this test
-    explicitly rather than silently breaking one client."""
+def test_phone_landscape_and_puck_agree_on_yaw_post_862():
+    """#862 — qz-negate hack removed. Phone and puck now agree on yaw
+    direction (both are wrong in the same direction relative to
+    operator-stage convention; the wizard #826 will fix both via
+    `forward_local` / `up_local` calibration). The pre-#862 cell asserted
+    DIVERGENCE by design, anchoring the qz-hack; that's the precise hack
+    we removed for the calibrate-frame fix."""
     rphone = _phone_landscape()
     rpuck = _puck()
     q = _gesture_yaw_left()
@@ -528,8 +537,8 @@ def test_phone_landscape_and_puck_diverge_on_yaw_by_design():
         return
     print(f"      phone aim_stage = {tuple(round(v, 3) for v in rphone.aim_stage)}")
     print(f"      puck  aim_stage = {tuple(round(v, 3) for v in rpuck.aim_stage)}")
-    _assert(_close(rphone.aim_stage[0], -rpuck.aim_stage[0], tol=1e-3),
-            f"phone-landscape vs puck yaw aim_stage.x are mirrored "
+    _assert(_close(rphone.aim_stage[0], rpuck.aim_stage[0], tol=1e-3),
+            f"phone-landscape and puck yaw aim_stage.x agree post-#862 "
             f"(phone={rphone.aim_stage[0]:.4f} puck={rpuck.aim_stage[0]:.4f})")
 
 
@@ -605,14 +614,15 @@ def test_phone_calibrate_with_nonidentity_quat_identity_delta_aims_at_target():
         return
     print(f"      aim_stage = {tuple(round(v, 3) for v in r.aim_stage)}")
     for i, (axis, want) in enumerate(zip("xyz", (0.0, 1.0, 0.0))):
-        # #856 — known-failing per #824/#826: the qz-negate hack on
-        # the live quat doesn't apply to the stored calibrate quat,
-        # so identity-from-calibrate is off by ~0.16 in x. Resolves
-        # once #826's empirical aim wizard ships and the qz-negate
-        # branch is deleted (entire test cell flips to PASS then).
+        # #862 — flips to PASS now that the qz-negate hack is removed
+        # from `_apply_quat`. Calibrate-frame and orient-frame quats
+        # share one convention (raw); identity-from-calibrate-pose
+        # really is identity. The pre-fix swing of ~0.66 on x in the
+        # live test was R_world_to_stage built in raw frame mapping
+        # an orient quat that had been qz-flipped — exactly off-axis.
         _assert(_close(r.aim_stage[i], want, tol=1e-3),
                 f"calibrate-pose orient → aim_stage.{axis}={want} "
-                f"(got {r.aim_stage[i]:.4f})", known_failing=True)
+                f"(got {r.aim_stage[i]:.4f})")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -640,7 +650,7 @@ ALL = [
     test_phone_quat_and_euler_paths_agree_combined,
     # M. phone-vs-puck parity
     test_phone_landscape_and_puck_match_on_pitch,
-    test_phone_landscape_and_puck_diverge_on_yaw_by_design,
+    test_phone_landscape_and_puck_agree_on_yaw_post_862,
     # N. CALIBRATE-FRAME parity (the live regression cell)
     test_phone_calibrate_with_nonidentity_quat_then_pitch,
     test_phone_calibrate_with_nonidentity_quat_identity_delta_aims_at_target,

@@ -6,8 +6,8 @@ import androidx.lifecycle.viewModelScope
 import com.slywombat.slyled.audio.MicAutoBrightness
 import com.slywombat.slyled.data.model.*
 import com.slywombat.slyled.data.repository.SlyLedRepository
+import com.slywombat.slyled.network.UdpClient
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,6 +20,7 @@ import javax.inject.Inject
 class LiveStageViewModel @Inject constructor(
     private val repository: SlyLedRepository,
     private val mic: MicAutoBrightness,
+    private val udpClient: UdpClient,
 ) : ViewModel() {
 
     // #804 — Auto Brightness state mirrors mic driver and feeds Stage button.
@@ -53,8 +54,10 @@ class LiveStageViewModel @Inject constructor(
     private val _autoBrightnessEnabled = MutableStateFlow(false)
     val autoBrightnessEnabled: StateFlow<Boolean> = _autoBrightnessEnabled.asStateFlow()
 
-    // Drop new fast-path hops if the previous POST is still in flight.
-    private var lastBrightnessJob: Job? = null
+    // #861 — wraps every 256 hops; only used by the orchestrator's
+    // hop log for debugging out-of-order arrivals (UDP gives no
+    // delivery guarantee). Not load-bearing for correctness.
+    private var brightnessSeq: Int = 0
 
     private val _fixtures = MutableStateFlow<List<Fixture>>(emptyList())
     val fixtures: StateFlow<List<Fixture>> = _fixtures.asStateFlow()
@@ -209,35 +212,25 @@ class LiveStageViewModel @Inject constructor(
         if (enabled == _autoBrightnessEnabled.value) return
         if (enabled) {
             val started = mic.start(viewModelScope) { master ->
-                // #854 — latest-wins: cancel the prior in-flight POST and
-                // replace it with the new value. Pre-fix the in-flight
-                // guard `if (lastBrightnessJob?.isActive == true) return`
-                // permanently dropped every subsequent hop after the
-                // FIRST stuck POST (TLS handshake delay, network blip,
-                // OkHttp retry loop), because the stuck job kept
-                // isActive=true for the full default Retrofit timeout
-                // (~10 s). Operator saw "Listening" UI animate locally
-                // while ZERO POSTs reached the orchestrator.
-                //
-                // Combined with the 2 s withTimeout below: the most
-                // recent value always gets sent (current beat, not 5
-                // beats ago); stuck calls get cancelled and replaced;
-                // the failure mode "stuck forever after first hang"
-                // becomes "self-healing latest-wins."
-                lastBrightnessJob?.cancel()
-                lastBrightnessJob = viewModelScope.launch {
-                    try {
-                        kotlinx.coroutines.withTimeout(2000L) {
-                            repository.setMasterBrightness(master)
-                        }
-                    } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                        Log.w(TAG, "fast brightness POST timed out (2s) value=$master")
-                    } catch (e: kotlinx.coroutines.CancellationException) {
-                        // Expected — superseded by a newer hop.
-                    } catch (e: Exception) {
-                        Log.w(TAG, "fast brightness POST failed value=$master", e)
-                    }
+                // #861 — UDP fire-and-forget replaces the prior HTTP
+                // POST /api/brightness fast path. The HTTP path failed
+                // under live load (live-test 2026-05-08: zero POSTs
+                // landed in 3.5 min of music despite UI showing master
+                // bouncing 150–255) due to TCP retransmit + OkHttp
+                // connection-pool churn at audio rate. UDP mirrors the
+                // existing puck telemetry pattern on :4210 and survives
+                // packet loss the same way audio always does — drop a
+                // hop, the next one (50 ms later) replaces it.
+                val host = repository.baseUrl
+                    ?.removePrefix("http://")
+                    ?.substringBefore(':')
+                    ?.substringBefore('/')
+                if (host.isNullOrBlank()) {
+                    Log.w(TAG, "AUTOBRI_PUSH skipped — no baseUrl")
+                    return@start
                 }
+                val seq = brightnessSeq.also { brightnessSeq = (it + 1) and 0xFF }
+                udpClient.sendAutoBrightnessPush(host, master, flags = 0, seq = seq)
             }
             _autoBrightnessEnabled.value = started
             // #804 — persist intent so the next app launch resumes mic

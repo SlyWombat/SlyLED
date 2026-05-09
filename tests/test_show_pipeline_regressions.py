@@ -218,6 +218,129 @@ def test_840_loop_wrap_no_zero_frame():
             if ch.get("id") != fid]
 
 
+def test_860_slymovehead_geometry_orient_to_pan_smooth():
+    """#860 — live test 2026-05-08 reported claim.pan_smooth frozen at
+    the calibrate-end value across many orient updates on a slymovehead
+    fixture (homePan 52015, homeTilt 0, panRange 540, tiltRange 180,
+    inverted tilt sign). Pre-fix v1.7.80's `_aim_to_pan_tilt`
+    `except Exception` swallowed AimSphere errors at DEBUG with no
+    operator-visible signal. v1.7.86+'s named early-return guards
+    (#855) + WARNING-level exception logging (#851) + claim.aim_error
+    surface (#855) make this failure mode diagnosable.
+
+    This test pins the steady-state contract: with valid Home +
+    Secondary on a slymovehead-shape fixture, the seven orient samples
+    from #860's live log (calibrate-end + 6 puck-moves) MUST produce
+    distinct pan_smooth values. If a future regression brings back the
+    silent-swallow pattern, this test surfaces it before reaching the
+    rig.
+    """
+    print("\n-- test_860_slymovehead_geometry_orient_to_pan_smooth --")
+    from remote_orientation import KIND_PUCK as _KP_860
+    with parent_server.app.test_client() as c:
+        c.post("/api/reset", headers={"X-SlyLED-Confirm": "true"})
+        c.post("/api/dmx/start", json={"protocol": "artnet"})
+        _drain_existing_playback()
+
+        # Use movinghead-150w-12ch (panRange 540, tiltRange 270 vs
+        # slymovehead's 180 — close enough that the IK exercises the
+        # slope-from-home math identically). The fixture's home values
+        # below match the live fid=19's extreme anchors.
+        r = c.post("/api/fixtures", json={
+            "name": "#860 slymovehead-shape", "type": "point",
+            "fixtureType": "dmx",
+            "dmxUniverse": 1, "dmxStartAddr": 1,
+            "dmxChannelCount": 12,
+            "dmxProfileId": "movinghead-150w-12ch",
+            "rotation": [0, 0, 0],
+        })
+        fid = r.get_json()["id"]
+        # Extreme home (homeTilt = 0) + inverted tilt sign — same
+        # cell the issue's harness gap section flags as different
+        # from prior test fixtures.
+        c.post(f"/api/fixtures/{fid}/home", json={
+            "panDmx16": 52015, "tiltDmx16": 0,
+            "secondary": {
+                "panOffsetDmx16": 16384, "tiltOffsetDmx16": 16384,
+                "panMovedDirection": "right",
+                "tiltMovedDirection": "down",
+            },
+        })
+        parent_server._layout.setdefault("children", []).append(
+            {"id": fid, "x": 0, "y": 0, "z": 2000})
+
+        did = "#860-slymovehead-puck"
+        remote = parent_server._remotes.add(
+            name="LiveTestPuck", kind=_KP_860, device_id=did)
+        remote.R_world_to_stage = (1.0, 0.0, 0.0, 0.0)
+        remote.calibrated = True
+        remote.calibrated_at = time.time()
+        remote.calibrated_against = {"kind": "mover", "objectId": fid}
+        remote.stale_reason = None
+
+        ok_c, _ = parent_server._mover_engine.claim(
+            fid, did, "LiveTestPuck", "gyro",
+            smoothing=0.15, convention="flat_pitch_yaw")
+        _ok(ok_c, "#860 claim acquires (puck pre-cal'd via #847 path)")
+        parent_server._mover_engine.start_stream(fid, did)
+
+        cl = parent_server._mover_engine._claims.get(fid)
+        # Mimic calibrate-end's "force jump on next valid IK" reset.
+        cl.calibrated_here = True
+        cl.have_pan_tilt = False
+
+        # Operator's 7 orient samples from #860's live log.
+        orient_aim_seq = [
+            (0.348, 0.312, 0.884),    # calibrate-end
+            (-0.146, 0.915, 0.375),   # puck moves 1
+            (0.065, 0.985, 0.157),    # 2
+            (0.082, 0.989, 0.119),    # 3
+            (0.115, 0.984, 0.133),    # 4
+            (0.187, 0.974, 0.126),    # 5
+            (0.086, 0.994, 0.066),    # 6
+        ]
+        pan_history = []
+        for aim in orient_aim_seq:
+            # Bypass the quat layer — set aim_stage directly so the
+            # test isolates the tick-loop IK math from the quat
+            # convention plumbing.
+            remote.aim_stage = aim
+            remote.last_data = time.time()
+            parent_server._mover_engine._tick()
+            pan_history.append(cl.pan_smooth)
+
+        # Contract: at least 5 distinct pan_smooth values across the 7
+        # samples (some clustering is fine; freeze is the failure mode
+        # we're guarding against).
+        unique_count = len(set(round(p, 4) for p in pan_history))
+        _ok(unique_count >= 5,
+            "#860 orient sweep produces ≥5 distinct pan_smooth values "
+            "(no freeze)",
+            f"unique={unique_count} history={[round(p,4) for p in pan_history]}")
+        # Also assert the spread covers the IK-responsive region (not
+        # all clustered at one value within rounding).
+        spread = max(pan_history) - min(pan_history)
+        _ok(spread > 0.05,
+            "#860 pan_smooth spans > 5% across the orient sweep",
+            f"spread={spread:.4f}")
+        # Assert no aim_error transition occurred (the per-tick guards
+        # all pass for valid Home + Secondary).
+        _ok(getattr(cl, "aim_error", None) is None,
+            "#860 no aim_error transition during orient sweep",
+            f"aim_error={getattr(cl, 'aim_error', None)}")
+
+        # Cleanup
+        try:
+            parent_server._mover_engine.release(fid, did)
+        except Exception:
+            pass
+        c.delete(f"/api/fixtures/{fid}")
+        parent_server._remotes.remove(remote.id)
+        parent_server._layout["children"] = [
+            ch for ch in parent_server._layout.get("children", [])
+            if ch.get("id") != fid]
+
+
 def test_853_master_grand_master_scales_universe_no_show():
     """#853 — global brightness must apply at universe-buffer-send
     time as a final gate, regardless of whether a show is running.
@@ -462,6 +585,294 @@ def test_845_playback_writes_first_frame_under_300ms():
 # should inject this dict shape, not invoke the bake engine.
 
 
+def test_862_symptom1_press_start_seeds_default_dimmer():
+    """#862 symptom #1 — Android claim → press-Start (start_stream) must
+    seed `claim.dimmer` to a visible default so the lamp lights up. Pre-
+    fix MoverClaim.__init__ left dimmer=None (the #814 tristate "inherit
+    whatever was on the wire") AND start_stream did not seed it either,
+    so a fresh claim of a parked fixture wrote a blank dimmer channel
+    and the operator saw nothing happen."""
+    print("\n-- test_862_symptom1_press_start_seeds_default_dimmer --")
+    with parent_server.app.test_client() as c:
+        c.post("/api/reset", headers={"X-SlyLED-Confirm": "true"})
+        c.post("/api/dmx/start", json={"protocol": "artnet"})
+        _drain_existing_playback()
+
+        fid = _setup_mover_fixture(c, "#862 sym1 mover", addr=20)
+
+        ok, _ = parent_server._mover_engine.claim(
+            fid, "phone-862", "Pixel", device_type="phone",
+            smoothing=0.15, convention="flat_pitch_yaw")
+        _ok(ok, "#862 sym1 claim accepted")
+
+        # Pre-start the dimmer is None (inherit-mode).
+        cl = parent_server._mover_engine._claims.get(fid)
+        _ok(cl is not None and cl.dimmer is None,
+            "#862 sym1 pre-start dimmer is None (#814 inherit semantic)",
+            f"got dimmer={cl.dimmer if cl else 'no-claim'}")
+
+        # press-Start equivalent — start_stream is the path Android calls
+        # via POST /api/mover-control/start.
+        parent_server._mover_engine.start_stream(fid, "phone-862")
+        cl = parent_server._mover_engine._claims.get(fid)
+        _ok(cl is not None and cl.dimmer == 255,
+            "#862 sym1 start_stream seeds default dimmer=255",
+            f"got dimmer={cl.dimmer if cl else 'no-claim'}")
+
+        c.delete(f"/api/fixtures/{fid}")
+
+
+def test_862_symptom2_calibrate_end_does_not_swing_head():
+    """#862 symptom #2 — phone aimed at head's pose → press Calibrate →
+    release must NOT swing the head. Pre-fix `Remote._apply_quat` ran a
+    qz-negate hack on the live-orient quat that did NOT mirror into
+    `Remote.calibrate()`, so calibrate-frame and orient-frame R_world_to
+    _stage diverged and identity-from-calibrate was off-axis. Cell N of
+    `test_orient_contract.py` is the unit-level pin; this cell is the
+    integration-level pin that the head physically holds steady when
+    the operator calibrates against a non-trivial phone pose."""
+    print("\n-- test_862_symptom2_calibrate_end_does_not_swing_head --")
+    from remote_orientation import Remote, KIND_PHONE, OrientConvention
+    from remote_math import quat_from_euler_zyx_deg
+
+    r = Remote(id=862, kind=KIND_PHONE,
+               forward_local=(0.0, 1.0, 0.0),
+               up_local=(0.0, 0.0, 1.0))
+    r.convention = OrientConvention.FLAT_PITCH_YAW
+
+    # Realistic non-identity portrait quat (operator holds phone slightly
+    # tipped/twisted — what `getQuaternionFromVector` produces live).
+    cal_quat = quat_from_euler_zyx_deg(roll=3.0, pitch=10.0, yaw=5.0)
+    r.calibrate(target_aim_stage=(0.0, 1.0, 0.0), quat=cal_quat)
+
+    # Operator is holding phone steady — orient sends back the same quat.
+    r.update_from_quat(cal_quat)
+
+    _ok(r.aim_stage is not None,
+        "#862 sym2 calibrate-pose orient produces aim_stage")
+    if r.aim_stage is not None:
+        # Identity-from-calibrate-pose must aim at the calibrate target
+        # (0, 1, 0). Pre-fix x was off by ~0.66 (the live-test swing
+        # vector); post-fix x ≈ 0, y ≈ 1, z ≈ 0.
+        _ok(abs(r.aim_stage[0]) < 1e-3,
+            "#862 sym2 aim_stage.x ≈ 0 (no calibrate-end swing)",
+            f"got x={r.aim_stage[0]:.4f}")
+        _ok(r.aim_stage[1] > 0.99,
+            "#862 sym2 aim_stage.y ≈ 1 (calibrate target on +Y)",
+            f"got y={r.aim_stage[1]:.4f}")
+
+
+def test_862_symptom3_8bit_profile_tilt_tracks_claim():
+    """#862 symptom #3 — for an 8-bit moving-head profile (live fid=17
+    shape), wire tilt MUST track `claim.tilt_smooth` across the full
+    0..1 range. The operator-reported failure was wire.tilt frozen at
+    128 (channel default) while pan tracked correctly. This cell pins
+    the dmx_universe contract — `compute_pan_tilt_writes` is the
+    canonical writer and must emit a tilt write for every tilt value."""
+    print("\n-- test_862_symptom3_8bit_profile_tilt_tracks_claim --")
+    from dmx_universe import compute_pan_tilt_writes
+
+    profile_8bit = {
+        "channel_map": {"pan": 0, "tilt": 1, "dimmer": 2,
+                        "red": 3, "green": 4, "blue": 5},
+        "channels": [
+            {"type": "pan",    "offset": 0, "bits": 8, "default": 128},
+            {"type": "tilt",   "offset": 1, "bits": 8, "default": 128},
+            {"type": "dimmer", "offset": 2, "bits": 8, "default": 0},
+        ],
+    }
+    # Boundary + interior values. Pre-#862 the issue suspected tilt was
+    # being skipped; we assert it lands at every value including 0 / 1.
+    cases = [
+        (0.0,  0),
+        (0.25, 63),
+        (0.5,  127),
+        (0.75, 191),
+        (1.0,  255),
+    ]
+    for tilt, expected_byte in cases:
+        writes = compute_pan_tilt_writes(0.4202, tilt, profile_8bit)
+        offsets = {off: val for off, val in writes}
+        _ok(1 in offsets,
+            f"#862 sym3 8-bit profile emits tilt write at offset 1 "
+            f"for tilt_smooth={tilt:.2f}",
+            f"writes={writes}")
+        if 1 in offsets:
+            _ok(offsets[1] == expected_byte,
+                f"#862 sym3 tilt_smooth={tilt:.2f} → wire={expected_byte}",
+                f"got {offsets[1]}")
+
+
+def _setup_vertical_bar(c, name, x_mm, leds=100, length_mm=2000):
+    """#865 — register a single-string LED bar at stage X=x_mm with the
+    string oriented along stage +Z (rotation [+90, 0, 0] tilts an sdir=1
+    +Y strip up to +Z). Returns the new fixture id."""
+    r = c.post("/api/fixtures", json={
+        "name": name, "type": "linear", "fixtureType": "led",
+        "strings": [{"leds": leds, "mm": length_mm, "sdir": 1}],
+        "rotation": [90, 0, 0],
+    })
+    fid = r.get_json()["id"]
+    parent_server._layout.setdefault("children", []).append(
+        {"id": fid, "x": x_mm, "y": 3000, "z": 0})
+    return fid
+
+
+def _gen_bar_array_show(c, bar_xs):
+    """Build a layout with one bar per supplied X, then ask the
+    show-generator directly (skips the bake/playback cost). Returns the
+    raw generator output dict — None if generate_show refused."""
+    fids = []
+    for i, x in enumerate(bar_xs):
+        fids.append(_setup_vertical_bar(c, f"bar{i}", x))
+    from show_generator import generate_show
+    show = generate_show("vertical-bar-array",
+                          parent_server._fixtures,
+                          parent_server._layout,
+                          parent_server._stage,
+                          parent_server._profile_lib)
+    return show, fids
+
+
+def test_865_bar_array_4_bars_emits_seven_clips():
+    """#865 — four-bar layout produces exactly 7 named clips on the
+    effects track. The detector must accept all four bars (they meet the
+    leds≥75 + Z-dominant heuristic)."""
+    print("\n-- test_865_bar_array_4_bars_emits_seven_clips --")
+    with parent_server.app.test_client() as c:
+        c.post("/api/reset", headers={"X-SlyLED-Confirm": "true"})
+        show, fids = _gen_bar_array_show(c, [1000, 2500, 4000, 5500])
+
+        _ok(isinstance(show, dict) and "tracks" in show,
+            "#865 generator returns a show dict for 4-bar layout",
+            f"got {type(show).__name__}: {show!r}"[:200])
+        _ok(show.get("_865_bar_ids") == fids,
+            "#865 detector picked up all 4 bars",
+            f"detected={show.get('_865_bar_ids')!r}")
+        # Effects-layer track is the one with allPerformers + 7 clips.
+        eff_track = next((t for t in show.get("tracks", [])
+                          if t.get("allPerformers")
+                          and t.get("_layer") == "effects"), None)
+        _ok(eff_track is not None and len(eff_track.get("clips", [])) == 7,
+            "#865 timeline emits 7 sequenced effects-track clips",
+            f"clips={(eff_track or {}).get('clips')}")
+        names = [c.get("name") for c in (eff_track or {}).get("clips", [])]
+        expected = ["Cross-Stage Sweep", "Vertical Climb", "Mexican Wave",
+                    "Strobe Shimmer", "Lightning Strikes", "Color Cascade",
+                    "Stack-Builder"]
+        _ok(names == expected,
+            "#865 catalog names match the spec",
+            f"got {names!r}")
+
+
+def test_865_bar_array_2_bars_lower_bound():
+    """#865 — two-bar layout still produces the full 7-clip catalog
+    (the lower bound the spec pins). Cross-sweep clip's effect motion
+    starts on stage-left side, ends on stage-right side; per-bar
+    sphere-field intensity peaks correlate with stage-X."""
+    print("\n-- test_865_bar_array_2_bars_lower_bound --")
+    with parent_server.app.test_client() as c:
+        c.post("/api/reset", headers={"X-SlyLED-Confirm": "true"})
+        show, fids = _gen_bar_array_show(c, [1000, 5000])
+
+        _ok(isinstance(show, dict) and len(show.get("_865_bar_ids", [])) == 2,
+            "#865 2-bar layout still detected",
+            f"detected={(show or {}).get('_865_bar_ids')!r}")
+        eff = next((t for t in show.get("tracks", [])
+                     if t.get("_layer") == "effects"), None)
+        _ok(eff and len(eff.get("clips", [])) == 7,
+            "#865 2-bar lower bound: still 7 clips",
+            f"clips={(eff or {}).get('clips')}")
+
+        # Cross-sweep timing assertion. Bar A is at x=1000, bar B at
+        # x=5000. The cross-sweep effect's sphere centre travels from
+        # the start X to the end X linearly across the clip duration.
+        # Sample the sphere field against each bar's pixels at evenly
+        # spaced t and identify the bar whose mean intensity peaks
+        # earliest. That bar must be the one at lower stage-X.
+        from spatial_engine import (resolve_fixture as _rf,
+                                    sphere_field_evaluate as _sphere)
+        cross = next((c2 for c2 in eff["clips"]
+                       if c2.get("name") == "Cross-Stage Sweep"), None)
+        _ok(cross is not None, "#865 Cross-Stage Sweep clip present")
+        if cross:
+            fx_id = id(cross["_effect_ref"])
+            fx = next((f for f in show["effects"] if id(f) == fx_id), None)
+            _ok(fx is not None, "#865 cross-sweep effect resolvable")
+            if fx:
+                start = fx["motion"]["startPos"]
+                end = fx["motion"]["endPos"]
+                rad = fx["size"]["radius"]
+                color = [fx["r"], fx["g"], fx["b"]]
+                pos_map = {p["id"]: p for p in
+                           parent_server._layout.get("children", [])}
+                bar_pixels = []
+                for fid in fids:
+                    fixture = next(f for f in parent_server._fixtures
+                                    if f["id"] == fid)
+                    p = pos_map[fid]
+                    px = _rf({
+                        "type": "linear",
+                        "childPos": [p["x"], p["y"], p["z"]],
+                        "strings": fixture["strings"],
+                        "rotation": fixture["rotation"],
+                    })["pixelPositions"]
+                    bar_pixels.append((p["x"], px))
+                bar_pixels.sort(key=lambda r: r[0])  # left-to-right
+
+                samples = 41
+                peak_t = []
+                for _bx, px in bar_pixels:
+                    best_v = -1
+                    best_t = 0.0
+                    for s in range(samples):
+                        t = s / (samples - 1)
+                        cx = start[0] + (end[0] - start[0]) * t
+                        out = _sphere([cx, start[1], start[2]],
+                                       rad, px, color, falloff=True)
+                        mean = sum(p[0] for p in out) / max(1, len(out))
+                        if mean > best_v:
+                            best_v = mean
+                            best_t = t
+                    peak_t.append(best_t)
+                # Left bar peaks earlier than right bar.
+                _ok(peak_t[0] < peak_t[1] - 0.02,
+                    "#865 cross-sweep per-bar peak time correlates with X",
+                    f"peak_t={peak_t}")
+
+
+def test_865_bar_array_rejects_when_under_two_bars():
+    """#865 — generator returns the structured 'needs_bars' error for
+    rigs with 0 or 1 bar so the SPA can show a clear message instead of
+    materialising a degenerate timeline."""
+    print("\n-- test_865_bar_array_rejects_when_under_two_bars --")
+    with parent_server.app.test_client() as c:
+        c.post("/api/reset", headers={"X-SlyLED-Confirm": "true"})
+        # 0 bars
+        from show_generator import generate_show
+        show = generate_show("vertical-bar-array",
+                              parent_server._fixtures,
+                              parent_server._layout,
+                              parent_server._stage,
+                              parent_server._profile_lib)
+        _ok(show is None
+              or (isinstance(show, dict) and not show.get("error")),
+            "#865 0-fixture rig falls back to base wash (no error)",
+            f"got {show!r}"[:200])
+
+        c.post("/api/reset", headers={"X-SlyLED-Confirm": "true"})
+        _setup_vertical_bar(c, "lonely", 2000)
+        show1 = generate_show("vertical-bar-array",
+                               parent_server._fixtures,
+                               parent_server._layout,
+                               parent_server._stage,
+                               parent_server._profile_lib)
+        _ok(isinstance(show1, dict)
+              and show1.get("error") == "needs_bars",
+            "#865 1-bar rig refused with needs_bars error",
+            f"got {show1!r}"[:200])
+
+
 def main():
     print("=== Show pipeline regressions (#858) ===")
     test_835_orphan_track_action_does_not_blackout_dimmer()
@@ -469,7 +880,14 @@ def main():
     test_848_invariant_1_default_rgb_on_press_start()
     test_853_master_grand_master_scales_universe_no_show()
     test_853_master_does_not_scale_pan_tilt()
+    test_860_slymovehead_geometry_orient_to_pan_smooth()
     test_845_playback_writes_first_frame_under_300ms()
+    test_862_symptom1_press_start_seeds_default_dimmer()
+    test_862_symptom2_calibrate_end_does_not_swing_head()
+    test_862_symptom3_8bit_profile_tilt_tracks_claim()
+    test_865_bar_array_4_bars_emits_seven_clips()
+    test_865_bar_array_2_bars_lower_bound()
+    test_865_bar_array_rejects_when_under_two_bars()
     print(f"\n{_passed} assertions passed, {_failed} failed")
     return 0 if _failed == 0 else 1
 

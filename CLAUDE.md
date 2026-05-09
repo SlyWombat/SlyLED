@@ -113,6 +113,7 @@ Moving-head aim uses **stage-frame fixture-internal angles**, not mechanical yok
 | 0x6A | CLAIM_ACK    | parent→gyro    | 4 bytes — nonce + moverId (#825) |
 | 0x6B | STOP_ACK     | parent→gyro    | 2 bytes — nonce (#825) |
 | 0x6C | HB_REP       | gyro→parent    | 5 bytes — uiState + claimNonce + seq (#825) |
+| 0x6D | AUTOBRI_PUSH | phone→parent   | 3 bytes — master + flags + seq (#861); UDP **4211** (#862) — own port to dodge Windows-host 4210 kernel reservations |
 
 **v3→v4:** `ledStart[]` / `ledEnd[]` upgraded uint8 → uint16 (8 entries each, +16 bytes per ACTION/LOAD_STEP). Parent accepts both v3 and v4 PONGs.
 

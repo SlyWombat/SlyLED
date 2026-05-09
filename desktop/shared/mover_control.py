@@ -414,8 +414,16 @@ class MoverControlEngine:
                 try:
                     self._park_fn(mover_id)
                 except Exception as e:
-                    log.debug("Mover %d release park failed: %s",
-                              mover_id, e)
+                    # #860 — was log.debug; bumped to WARNING so
+                    # press-Stop park failures (operator-visible
+                    # "head doesn't move home") surface in the
+                    # orchestrator log without operator capturing
+                    # DEBUG-level. Bug class: `_park_fixture_at_home`
+                    # raises and the silent-blackout fallback masks
+                    # the cause; visibility is the diagnostic.
+                    log.warning("Mover %d release park failed: %s — "
+                                 "falling back to blackout",
+                                 mover_id, e)
                     self._blackout_mover(mover_id)
             else:
                 self._blackout_mover(mover_id)
@@ -429,6 +437,21 @@ class MoverControlEngine:
                 return False
             claim.state = "streaming"
             claim.last_write_ts = time.time()
+            # #862 — symptom #1: lamp must light on press-Start.
+            # MoverClaim's `__init__` leaves dimmer=None (the #814
+            # tristate "inherit whatever was on the wire"). That's
+            # correct for *mid-show* claims of a fixture already lit
+            # by a Track action, but wrong for a fresh Android claim
+            # of a parked fixture — the wire dimmer is 0 from the
+            # park, the operator sees nothing, and the comment on
+            # `_park_pan_tilt_fn` (line 449) already promises "the
+            # engine pump's next `_write_dmx` will write
+            # `claim.dimmer` (255 by default)". This seeds that
+            # promise. Mid-show claims of a track-lit fixture still
+            # get the right behaviour: the operator's `set_color`
+            # call later overwrites this 255 with the chosen value.
+            if claim.dimmer is None:
+                claim.dimmer = 255
         # #800 — park the head at home before any orient packets can
         # land. `calibrate-end` snapshots the head's stage-frame aim
         # as the reference the phone's pose is locked to; if the head
@@ -448,8 +471,12 @@ class MoverControlEngine:
             try:
                 park(mover_id)
             except Exception as e:
-                log.debug("Mover %d start_stream park failed: %s",
-                          mover_id, e)
+                # #860 — was log.debug; bumped to WARNING so
+                # press-Start park failures surface (the head
+                # would land at a stale pose and the operator's
+                # calibrate-end would lock to it).
+                log.warning("Mover %d start_stream park failed: %s",
+                             mover_id, e)
         log.info("Mover %d: streaming started by %s", mover_id, device_id)
         return True
 

@@ -439,6 +439,58 @@ function api(method,path,body){
     });
   });
 }
+
+// #859 — shared `/api/fixtures/live` poller. Pre-fix two independent
+// 5 Hz pollers (`_emuStartLivePoll` in emulation.js + `s3dPollFixturesLive`
+// in scene-3d.js) hit the same endpoint, doubling the orchestrator's
+// per-fixture × per-channel × per-universe-lock work to 10 Hz total.
+// Both viewports want the same payload; one shared poll feeds both via
+// listener registration. Reduces SPA-poll load on the orchestrator
+// proportionally and removes the duplicated GIL captures that were
+// stealing time from the playback loop.
+var _sharedFixLive = {pollId: null, listeners: [], lastData: null};
+
+function _sharedFixLiveAdd(name, cb){
+  _sharedFixLive.listeners = _sharedFixLive.listeners.filter(function(l){
+    return l.name !== name;
+  });
+  _sharedFixLive.listeners.push({name: name, cb: cb});
+  // Late subscribers get the most recent payload immediately so the
+  // viewport doesn't render an empty frame for up to 200 ms.
+  if(_sharedFixLive.lastData){
+    try{ cb(_sharedFixLive.lastData); }catch(e){
+      console.warn('fixLive listener', name, e);
+    }
+  }
+  if(!_sharedFixLive.pollId)_sharedFixLiveStart();
+}
+
+function _sharedFixLiveRemove(name){
+  _sharedFixLive.listeners = _sharedFixLive.listeners.filter(function(l){
+    return l.name !== name;
+  });
+  if(_sharedFixLive.listeners.length===0 && _sharedFixLive.pollId){
+    clearInterval(_sharedFixLive.pollId);
+    _sharedFixLive.pollId = null;
+    _sharedFixLive.lastData = null;
+  }
+}
+
+function _sharedFixLiveStart(){
+  var tick = function(){
+    ra('GET','/api/fixtures/live',null,function(d){
+      if(!d)return;
+      _sharedFixLive.lastData = d;
+      _sharedFixLive.listeners.forEach(function(l){
+        try{ l.cb(d); }catch(e){
+          console.warn('fixLive listener', l.name, e);
+        }
+      });
+    });
+  };
+  tick();
+  _sharedFixLive.pollId = setInterval(tick, 200);
+}
 function pollResults(url){
   return new Promise(function(resolve){
     var p=setInterval(function(){

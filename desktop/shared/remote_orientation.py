@@ -392,20 +392,21 @@ class Remote:
         self._apply_quat(tuple(float(x) for x in quat))
 
     def _apply_quat(self, q):
-        # #824 — phone-only yaw-direction flip. Live test 2026-05-05:
-        # operator yaws phone +90° (pointer now at stage-left), head pans
-        # to stage-right — the rotation around the up-axis comes out
-        # mirrored. Other axes (pitch, roll) are correct, so a global
-        # quat conjugate would over-correct. Negating only the
-        # z-component of the unit quaternion mirrors rotations around
-        # the world-up axis without touching pitch or roll: q is
-        # (w, x, y, z) where z carries the around-Z rotation.
-        # Confirmed against the #824 contract matrix
-        # (tests/test_orient_contract.py): with this flip the phone-
-        # portrait-yaw entry passes; phone-portrait-pitch/-roll stay
-        # passing. Puck (kind=gyro-puck) is unaffected by this branch.
-        if self.kind == KIND_PHONE and q is not None:
-            q = (q[0], q[1], q[2], -q[3])
+        # #862 — the prior phone-only `q.z = -q.z` hack lived here only:
+        # `calibrate()` stores its quat directly into `last_quat_world`
+        # without going through `_apply_quat`, so the calibrate frame
+        # was raw while every orient frame was qz-flipped. Result on
+        # the live rig (2026-05-08): phone aimed at the head's current
+        # pose → press Calibrate → release → head swings back-stage
+        # because R_world_to_stage was built in one frame and the
+        # follow-up orient quats arrived in another. Mirroring the
+        # hack into `calibrate()` only chases the symptom — the proper
+        # fix for phone yaw direction is the empirical aim-axis
+        # wizard tracked as #826, which measures `forward_local` /
+        # `up_local` from three known phone poses. Until #826 ships,
+        # phone yaw direction is known-failing in the contract
+        # (`test_orient_contract.py` cells `phone_portrait_yaw_*`)
+        # — operator can use the puck or wait for the wizard.
         self.last_quat_world = q
         self.last_data = time.time()
         # #812 — auto-recover from a transient comms drop. The "connection

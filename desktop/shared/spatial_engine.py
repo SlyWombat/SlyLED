@@ -178,12 +178,24 @@ def resolve_fixture(fixture):
         # Group: no direct pixels (resolved via member fixtures)
         return {"pixelPositions": []}
 
-    # Linear: resolve each string, applying fixture rotation override
+    # Linear: resolve each string, applying fixture rotation override.
+    # #864 — a string may carry its own (x, y, z) base when an LED fixture's
+    # strips are physically separated (one ESP32 child driving multiple
+    # placed strips). Per-string base, when set, overrides the fixture's
+    # layout position for that string only. Strings without per-string
+    # fields fall through to the fixture base, preserving legacy behaviour.
     rotation = fixture.get("rotation", [0, 0, 0])
     all_pixels = []
     for s in fixture.get("strings", []):
         points = s.get("points")  # custom control points
-        pixels = resolve_linear_fixture(child_pos, s, points, rotation)
+        sx = s.get("x")
+        sy = s.get("y")
+        sz = s.get("z")
+        if isinstance(sx, (int, float)) and isinstance(sy, (int, float)) and isinstance(sz, (int, float)):
+            base = [sx, sy, sz]
+        else:
+            base = child_pos
+        pixels = resolve_linear_fixture(base, s, points, rotation)
         all_pixels.extend(pixels)
 
     return {"pixelPositions": all_pixels}

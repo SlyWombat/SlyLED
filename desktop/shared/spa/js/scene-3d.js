@@ -639,8 +639,17 @@ function s3dLoadChildren(){
           var lenMm=s.mm||0;if(lenMm<500)lenMm=Math.max(s.leds*16,500);
           var lenM=lenMm/1000;
           var dir=_s3dDir(s.sdir||0);
-          var endLocal=new THREE.Vector3(dir.x*lenM,dir.y*lenM,dir.z*lenM);
-          var pts=[new THREE.Vector3(0,0,0),endLocal];
+          // #864 — per-string position offset. When the string carries
+          // its own (x,y,z) the line origin shifts from the group center
+          // (fixture position) to the string's stage location. Stage→
+          // Three.js: X→X, Y(depth)→Z, Z(height)→Y. A string without
+          // x/y/z continues to start at the group origin (legacy).
+          var startLocal=new THREE.Vector3(0,0,0);
+          if(typeof s.x==='number'&&typeof s.y==='number'&&typeof s.z==='number'){
+            startLocal.set((s.x-(c.x||0))/1000,(s.z-(c.z||0))/1000,(s.y-(c.y||0))/1000);
+          }
+          var endLocal=startLocal.clone().add(new THREE.Vector3(dir.x*lenM,dir.y*lenM,dir.z*lenM));
+          var pts=[startLocal,endLocal];
           var lineGeo=new THREE.BufferGeometry().setFromPoints(pts);
           var lineMat=new THREE.LineBasicMaterial({color:strCol,linewidth:2});
           var strLine=new THREE.Line(lineGeo,lineMat);
@@ -651,7 +660,7 @@ function s3dLoadChildren(){
           var dotCount=Math.min(s.leds,50);
           for(var di=0;di<dotCount;di++){
             var t=(di+0.5)/dotCount;
-            var dp=new THREE.Vector3().lerpVectors(pts[0],endLocal,t);
+            var dp=new THREE.Vector3().lerpVectors(startLocal,endLocal,t);
             var dotGeo=new THREE.SphereGeometry(0.03,4,4);
             var dotMat=new THREE.MeshBasicMaterial({color:strCol});
             var dot=new THREE.Mesh(dotGeo,dotMat);
@@ -1604,23 +1613,21 @@ function s3dRenderFixturesLive(list){
   });
 }
 
+// #859 — was a dedicated 5 Hz poll; now piggybacks on the shared
+// `_sharedFixLiveAdd` poller in app.js so emulation.js + scene-3d.js
+// share one network round trip every 200 ms instead of two. Listener
+// callback dispatches to the existing render path unchanged.
 function s3dPollFixturesLive(){
-  if(_s3dFixLive.pollId)return;
-  var fetchOne=function(){
+  _s3dFixLive.pollId = "shared";  // sentinel preserved for re-entry checks
+  _sharedFixLiveAdd('s3d', function(d){
     if(!_s3d.inited)return;
-    ra('GET','/api/fixtures/live',null,function(d){
-      if(d&&d.fixtures)s3dRenderFixturesLive(d.fixtures);
-    });
-  };
-  fetchOne();
-  // #810 — 5 Hz so figure-8 / patrol Track sweeps animate smoothly.
-  // Pre-#810 cadence was 2 Hz; live-test confirmed the cone visibly
-  // stutters at that rate when the patrol cycle is sub-second.
-  _s3dFixLive.pollId=setInterval(fetchOne,200);  // 5 Hz
+    if(d&&d.fixtures)s3dRenderFixturesLive(d.fixtures);
+  });
 }
 
 function s3dStopPollFixturesLive(){
-  if(_s3dFixLive.pollId){clearInterval(_s3dFixLive.pollId);_s3dFixLive.pollId=null;}
+  _s3dFixLive.pollId = null;
+  _sharedFixLiveRemove('s3d');
 }
 
 // ── Residual error vectors (#512) ────────────────────────────────────────

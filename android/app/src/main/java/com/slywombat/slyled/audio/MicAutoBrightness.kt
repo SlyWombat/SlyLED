@@ -296,7 +296,24 @@ class MicAutoBrightness(
         onMaster: ((Int) -> Unit)?,
         preview: Boolean,
     ): Boolean {
-        if (captureJob?.isActive == true) return true
+        // #862 — pre-fix: a single early-return `if (captureJob?.isActive == true)
+        // return true` masked a real footgun. When the Settings panel was open
+        // it called `startPreview()` which spun up a capture in preview mode
+        // (`onMaster=null`); a subsequent tap on the Stage Auto Brightness
+        // toggle then called `start(scope, onMaster)` which hit this branch and
+        // returned success WITHOUT swapping in the new onMaster — UI showed
+        // "Listening" but zero UDP packets were sent. Now: keep the early
+        // return only when the job is alive AND the (preview, callback) pair
+        // matches; otherwise tear down and restart so live mode actually fires.
+        val activeJob = captureJob
+        if (activeJob != null && activeJob.isActive) {
+            val sameMode = (inPreview == preview) && (lastOnMaster === onMaster)
+            if (sameMode) return true
+            // Mode change requested (preview→live or live→preview). Stop the
+            // current capture cleanly, then fall through to start a fresh one
+            // with the new onMaster wiring.
+            stop()
+        }
         if (!hasPermission()) {
             _state.value = Mode.PermissionDenied
             return false
