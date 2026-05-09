@@ -949,6 +949,68 @@ def test_865_bar_array_multi_string_fixture_detected_per_string():
             f"status={r.status_code} body={body}")
 
 
+def test_865_bar_array_bake_every_clip_drives_every_bar():
+    """#865 — confirm LEDs PARTICIPATE in all 7 catalog clips after the
+    install-and-bake pipeline runs. Pre-fix the Lightning Strikes and
+    Stack-Builder slots only referenced sub-effect[0], so 3 of 4
+    lightning sub-effects and 3 of 4 stack sub-effects never reached
+    the bake — the slots ran one strike + one ground-floor box and
+    silently dropped the rest. This test bakes the installed timeline
+    and asserts every LED bar fixture has ≥1 segment overlapping every
+    catalog slot's time window."""
+    print("\n-- test_865_bar_array_bake_every_clip_drives_every_bar --")
+    with parent_server.app.test_client() as c:
+        c.post("/api/reset", headers={"X-SlyLED-Confirm": "true"})
+        fids = []
+        for i, x in enumerate([1000, 3000, 5000, 7000]):
+            fids.append(_setup_vertical_bar(c, f"bar{i}", x))
+
+        r = c.post("/api/show/preset", json={"id": "vertical-bar-array"})
+        body = r.get_json()
+        _ok(r.status_code == 200 and body.get("ok"),
+            "#865 install path returns ok",
+            f"status={r.status_code} body={body}")
+        tid = body["timelineId"]
+
+        # Drive the bake straight through bake_timeline so we assert
+        # against compiled segments rather than the cached LSQ blob.
+        from bake_engine import bake_timeline
+        tl = next(t for t in parent_server._timelines if t["id"] == tid)
+        baked = bake_timeline(
+            tl,
+            parent_server._fixtures,
+            parent_server._spatial_fx,
+            parent_server._layout,
+            actions=parent_server._actions,
+            profile_lib=parent_server._profile_lib,
+        )
+
+        # Catalog slots — must mirror the generator's clip layout.
+        slots = [
+            (0,  8,  "Cross-Stage Sweep"),
+            (8,  16, "Vertical Climb"),
+            (16, 24, "Mexican Wave"),
+            (24, 32, "Strobe Shimmer"),
+            (32, 40, "Lightning Strikes"),
+            (40, 48, "Color Cascade"),
+            (48, 56, "Stack-Builder"),
+        ]
+
+        for fid in fids:
+            fx_data = baked["fixtures"].get(fid) or {}
+            segs = fx_data.get("segments") or []
+            for slot_start, slot_end, slot_name in slots:
+                hit = any(
+                    s.get("startS", 0) < slot_end
+                    and s.get("startS", 0) + s.get("durationS", 0) > slot_start
+                    for s in segs
+                )
+                _ok(hit,
+                    f"#865 fixture {fid} has a segment in '{slot_name}' "
+                    f"slot [{slot_start},{slot_end})",
+                    f"segs={[(round(s.get('startS',0),1), round(s.get('durationS',0),1)) for s in segs]}")
+
+
 def test_865_bar_array_rejects_when_under_two_bars():
     """#865 — generator returns the structured 'needs_bars' error for
     rigs with 0 or 1 bar so the SPA can show a clear message instead of
@@ -998,6 +1060,7 @@ def main():
     test_865_bar_array_install_post_returns_timeline()
     test_865_bar_array_install_under_two_bars_returns_400()
     test_865_bar_array_multi_string_fixture_detected_per_string()
+    test_865_bar_array_bake_every_clip_drives_every_bar()
     test_865_bar_array_rejects_when_under_two_bars()
     print(f"\n{_passed} assertions passed, {_failed} failed")
     return 0 if _failed == 0 else 1

@@ -1119,18 +1119,21 @@ def _generate_bar_array_show(theme, fixtures, layout_positions, bounds):
     }
     effects.append(cross_sweep_a)
 
-    # Clip 2 — Vertical climb. Sphere travels +Z; one beat per climb,
-    # 4 beats to fill the 8 s clip when bpm=120. Narrow X radius so each
-    # bar receives the climb in unison (per spec — phase-offset variant
-    # is reserved for when more than one bar is detected; we still treat
-    # this as the unison clip for the acceptance test exemption).
+    # Clip 2 — Vertical climb. Plane field with +Z normal so the slab
+    # passes through every bar at the same height regardless of stage-X
+    # — the unison-climb behaviour the spec calls out. Pre-fix this was
+    # a sphere centred at cx with radius (z_top-z_bot)/5; bars at the
+    # X edges (e.g. x=1000 with cx=4000) sat outside the sphere and
+    # never lit during the slot, so the leftmost bar was dark during
+    # Vertical Climb.
     radius_v = max(400, (z_top - z_bot) // 5)
+    climb_thickness = max(400, (z_top - z_bot) // 6)
     vertical_climb = {
         "name": "Vertical Climb ↑",
         "category": "spatial-field",
-        "shape": "sphere",
+        "shape": "plane",
         "r": palette[1][0], "g": palette[1][1], "b": palette[1][2],
-        "size": {"radius": radius_v},
+        "size": {"normal": [0, 0, 1], "thickness": int(climb_thickness)},
         "motion": {
             "startPos": [int(cx), int(cy), int(z_bot)],
             "endPos":   [int(cx), int(cy), int(z_top)],
@@ -1290,6 +1293,56 @@ def _generate_bar_array_show(theme, fixtures, layout_positions, bounds):
     ]
     tracks.append({"allPerformers": True, "clips": fx_clips,
                     "_layer": "effects"})
+
+    # ── Stagger tracks ─────────────────────────────────────────────────
+    # The Lightning Strikes and Stack-Builder slots reference effect[0]
+    # only on the main effects track. effect[1..N-1] would be created as
+    # spatial_fx records but never bake without an additional clip
+    # somewhere in the timeline. These stagger tracks fire the rest of
+    # the sub-effects across the slot's 8-second window so the operator
+    # sees N strikes / N stacked boxes, not just one.
+
+    # Lightning stagger — strikes spaced through the slot. Reuse the 4
+    # source effect records cyclically up to 8 strikes (≈1 strike/sec)
+    # so the slot reads "random thunder" rather than a single zap.
+    if lightning_effects:
+        lightning_slot_start = 4 * clip_dur
+        n_total_strikes = max(8, len(lightning_effects))
+        strike_step = clip_dur / n_total_strikes  # ≈1 s
+        # Each strike clip lasts a fraction of the gap so the spatial
+        # field gets a full enter→exit window before the next strike.
+        strike_clip_dur = round(strike_step * 0.55, 2)
+        stagger_clips = []
+        for i in range(n_total_strikes):
+            e = lightning_effects[i % len(lightning_effects)]
+            stagger_clips.append({
+                "_effect_ref": e,
+                "startS": round(lightning_slot_start + i * strike_step, 2),
+                "durationS": strike_clip_dur,
+                "name": f"Lightning Stagger {i+1}",
+            })
+        tracks.append({"allPerformers": True, "clips": stagger_clips,
+                        "_layer": "lightning-stagger"})
+
+    # Stack-builder stagger — each box appears in sequence and stays
+    # lit until the slot ends, so by the last beat all four bands are
+    # stacked. Each box rides its own track because they overlap in
+    # time (one track may not have overlapping clips).
+    if stack_effects:
+        stack_slot_start = 6 * clip_dur
+        rise_step = clip_dur / (len(stack_effects) + 1)
+        for i, sfx in enumerate(stack_effects):
+            appear = stack_slot_start + (i + 1) * rise_step
+            tracks.append({
+                "allPerformers": True,
+                "clips": [{
+                    "_effect_ref": sfx,
+                    "startS": round(appear, 2),
+                    "durationS": round(stack_slot_start + clip_dur - appear, 2),
+                    "name": f"Stack Stagger {i+1}",
+                }],
+                "_layer": "stack-stagger",
+            })
 
     return {
         "name": theme["name"],
