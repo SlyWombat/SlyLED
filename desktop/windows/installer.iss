@@ -209,11 +209,10 @@ Type: dirifempty; Name: "{app}"
 var
   PortPage: TInputQueryWizardPage;
 
-procedure InitializeWizard;
 var
-  PrevPortFile: String;
-  PrevPort: AnsiString;
-  PrevPortInt: Integer;
+  PortPrevLoaded: Boolean;
+
+procedure InitializeWizard;
 begin
   PortPage := CreateInputQueryPage(
     wpSelectComponents,
@@ -225,20 +224,38 @@ begin
     + 'Windows hosts do via Hyper-V), pick another free port like 5600 '
     + 'or 9000.');
   PortPage.Add('Port (1024-65535):', False);
-  // Default to 8080 unless a prior install dropped port.txt in {app}
-  // — on upgrade, Inno Setup resolves {app} from the AppId registry
-  // entry before any page renders, so reading the file here surfaces
-  // the operator's previously-chosen port as the prompt's default and
-  // the operator only has to confirm. Fresh install (no prior port
-  // .txt) keeps 8080.
+  // Initial default. The "remember last port" lookup happens in
+  // CurPageChanged when the page is about to be displayed — `{app}`
+  // is not initialized at InitializeWizard time and reading
+  // ExpandConstant('{app}\\port.txt') here raises a runtime error
+  // (1:996 "an attempt was made to expand the 'app' constant before
+  // it was initialized"). The directory page populates {app} before
+  // the wizard reaches our port page, so the read is safe there.
   PortPage.Values[0] := '8080';
-  PrevPortFile := ExpandConstant('{app}\port.txt');
-  if FileExists(PrevPortFile) then begin
-    if LoadStringFromFile(PrevPortFile, PrevPort) then begin
-      PrevPort := Trim(PrevPort);
-      PrevPortInt := StrToIntDef(PrevPort, -1);
-      if (PrevPortInt >= 1024) and (PrevPortInt <= 65535) then
-        PortPage.Values[0] := IntToStr(PrevPortInt);
+  PortPrevLoaded := False;
+end;
+
+// Lazy-load the previous port choice when the operator reaches the
+// port page. By this point Inno Setup has resolved {app} (either from
+// the AppId-registry lookup on upgrade, or from the directory page on
+// fresh install). PortPrevLoaded gates re-execution if the operator
+// navigates back-and-forth so we don't clobber an in-progress edit.
+procedure CurPageChanged(CurPageID: Integer);
+var
+  PrevPortFile: String;
+  PrevPort: AnsiString;
+  PrevPortInt: Integer;
+begin
+  if (PortPage <> nil) and (CurPageID = PortPage.ID) and (not PortPrevLoaded) then begin
+    PortPrevLoaded := True;
+    PrevPortFile := ExpandConstant('{app}\port.txt');
+    if FileExists(PrevPortFile) then begin
+      if LoadStringFromFile(PrevPortFile, PrevPort) then begin
+        PrevPort := Trim(PrevPort);
+        PrevPortInt := StrToIntDef(PrevPort, -1);
+        if (PrevPortInt >= 1024) and (PrevPortInt <= 65535) then
+          PortPage.Values[0] := IntToStr(PrevPortInt);
+      end;
     end;
   end;
 end;
