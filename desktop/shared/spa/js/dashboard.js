@@ -71,6 +71,24 @@ function _remoteDashColor(r){
   return{dot:'#64748b',border:'#334155',lbl:'IDLE'};
 }
 
+// Map a gyro remote's deviceId (e.g. "gyro-192.168.10.211") to the
+// operator-assigned name on the matching gyro fixture, by way of the
+// child IP. Returns null when no mapping is found, in which case the
+// caller falls back to the remote registry's own name field.
+function _gyroFixtureNameForDeviceId(did){
+  if(!did||did.indexOf('gyro-')!==0)return null;
+  var ip=did.substring(5);
+  var children=window._children||[];
+  var child=null;for(var i=0;i<children.length;i++){if(children[i].ip===ip){child=children[i];break;}}
+  if(!child)return null;
+  var fixtures=window._fixtures||[];
+  for(var j=0;j<fixtures.length;j++){
+    var f=fixtures[j];
+    if(f.fixtureType==='gyro'&&f.gyroChildId===child.id&&f.name)return f.name;
+  }
+  return null;
+}
+
 function _refreshRemotesDash(){
   var list=document.getElementById('remotes-dash-list');
   if(!list)return;
@@ -108,9 +126,16 @@ function _refreshRemotesDash(){
       // so the secondary line shows current envelope value + min/max
       // instead of calibration status.
       var isAutoBri=r.kind==='auto-brightness';
-      var kindLbl=isAutoBri?'Auto Brightness':(r.kind==='phone'?'Phone':'Gyro puck');
+      var isGyro=(r.kind!=='phone'&&!isAutoBri);
+      var kindLbl=isAutoBri?'Auto Brightness':(r.kind==='phone'?'Phone':'Gyro');
       var age=r.lastDataAge!=null?(r.lastDataAge.toFixed(1)+'s'):'-';
-      var rawName=r.name||('Remote '+r.id);
+      // Prefer the operator-assigned gyro fixture name (set in the
+      // Fixtures editor) over the remote registry's bookkeeping name.
+      // Falls through to the registry name if no fixture is mapped to
+      // this deviceId yet (e.g. first orient packet beat the fixture
+      // record).
+      var fixName=isGyro?_gyroFixtureNameForDeviceId(r.deviceId):null;
+      var rawName=fixName||r.name||('Remote '+r.id);
       var displayName=GUID_RX.test(rawName)?'Phone (unknown host)':rawName;
       var subline;
       if(isAutoBri){

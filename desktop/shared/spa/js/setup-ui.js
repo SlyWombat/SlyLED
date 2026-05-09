@@ -2693,9 +2693,14 @@ function _gyroConfigModalRender(childId, c){
   h+='<div><label style="font-size:.78em;color:#94a3b8">Firmware</label><div style="font-size:.9em;color:#e2e8f0">'+(c.fwVersion||'\u2014')+'</div></div>';
   h+='</div>';
 
-  // Name (editable)
+  // Name (editable). Prefer the fixture-record name when one exists —
+  // dashboard / remote-controllers card / 3D viewport all read
+  // fixture.name, so showing it here keeps the modal in sync with
+  // what those surfaces display. Falls back to child.altName /
+  // hostname only when no fixture is bound to this child yet.
+  var nameInit=(gf&&gf.name)||c.altName||c.name||c.hostname||'';
   h+='<label>Device Name</label>';
-  h+='<input id="gcfg-name" value="'+escapeHtml(c.altName||c.name||c.hostname||'')+'" style="width:100%;margin-bottom:.6em" placeholder="e.g. Stage Left Gyro">';
+  h+='<input id="gcfg-name" value="'+escapeHtml(nameInit)+'" style="width:100%;margin-bottom:.6em" placeholder="e.g. Stage Left Gyro">';
 
   // Mover assignment
   var moverOpts='<option value="">No mover assigned</option>';
@@ -2889,6 +2894,14 @@ function _gyroConfigSave(childId){
     var body={gyroEnabled:active};
     if(moverId!==undefined)body.assignedMoverId=moverId;
     if(smoothing!=null)body.smoothing=smoothing;
+    // Persist the operator's typed name onto the FIXTURE record (not
+    // just child.altName). Dashboard / Remote Controllers card / 3D
+    // viewport all read fixture.name; without this PUT branch the
+    // operator's rename only landed on the child's altName and the
+    // fixture stayed at its previous name. Skip when the field is
+    // blank so a never-edited modal doesn't blank out the existing
+    // name on every Save.
+    if(name)body.name=name;
     ra('PUT','/api/fixtures/'+gf.id,body,function(r){
       if(r&&r.ok){
         document.getElementById('hs').textContent=active
