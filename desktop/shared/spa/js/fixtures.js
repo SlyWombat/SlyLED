@@ -171,19 +171,26 @@ function editFixture(id){
   // Roll→fx-rz (=Pan), so operator-entered values landed on the wrong
   // axis. Labels now match camera_math.rotation_from_layout (the single
   // source of truth for index → axis semantics).
-  h+='<label>Rotation (degrees) <span style="color:#64748b;font-size:.75em">Tilt, Roll, Pan</span></label>';
-  var rot=f.rotation||[0,0,0];
-  // #788 follow-up — display Tilt as -rotation[0]. Internal rx>0 aims
-  // down (#586/#600); operator-facing convention is tilt+ = above
-  // horizon (#783). saveFixture negates on read to round-trip cleanly.
-  h+='<div style="display:flex;gap:.3em"><label style="font-size:.75em;color:#64748b">Tilt</label><input id="fx-rx" type="number" value="'+(-rot[0])+'" style="width:70px"> <label style="font-size:.75em;color:#64748b">Roll</label><input id="fx-ry" type="number" value="'+rot[1]+'" style="width:70px"> <label style="font-size:.75em;color:#64748b">Pan</label><input id="fx-rz" type="number" value="'+rot[2]+'" style="width:70px"></div>';
-  // #788 follow-up — tilt convention reads with the operator-facing
-  // angular-aim convention (CLAUDE.md ## Angular-aim convention #783):
-  // tilt+ = above horizon. The internal `rotation[0]` (rx) follows the
-  // CLAUDE.md ## Rotation convention (#586, #600) where rx>0 = aims
-  // down; the form negates on display + save (see fx-rx handling in
-  // saveFixture) so the operator-typed value matches the prompt.
-  h+='<p style="color:#64748b;font-size:.75em;margin-top:.3em">Pan=0 faces forward (+Y). Pan=90 faces stage-left (+X).<br>Tilt=0 is horizontal. <b>Positive Tilt aims above horizon</b> (Tilt=+90 is straight up); negative Tilt aims below horizon (Tilt=-90 is straight down).</p>';
+  // #866 — LED fixtures hide the fixture-level rotation editor entirely.
+  // A multi-string LED rig has per-string positions and rotations; an
+  // overall fixture rotation has no useful meaning (and conflicts with
+  // the per-string rotation that's authoritative downstream — see
+  // spatial_engine.resolve_linear_fixture).
+  if(ft!=='led'){
+    h+='<label>Rotation (degrees) <span style="color:#64748b;font-size:.75em">Tilt, Roll, Pan</span></label>';
+    var rot=f.rotation||[0,0,0];
+    // #788 follow-up — display Tilt as -rotation[0]. Internal rx>0 aims
+    // down (#586/#600); operator-facing convention is tilt+ = above
+    // horizon (#783). saveFixture negates on read to round-trip cleanly.
+    h+='<div style="display:flex;gap:.3em"><label style="font-size:.75em;color:#64748b">Tilt</label><input id="fx-rx" type="number" value="'+(-rot[0])+'" style="width:70px"> <label style="font-size:.75em;color:#64748b">Roll</label><input id="fx-ry" type="number" value="'+rot[1]+'" style="width:70px"> <label style="font-size:.75em;color:#64748b">Pan</label><input id="fx-rz" type="number" value="'+rot[2]+'" style="width:70px"></div>';
+    // #788 follow-up — tilt convention reads with the operator-facing
+    // angular-aim convention (CLAUDE.md ## Angular-aim convention #783):
+    // tilt+ = above horizon. The internal `rotation[0]` (rx) follows the
+    // CLAUDE.md ## Rotation convention (#586, #600) where rx>0 = aims
+    // down; the form negates on display + save (see fx-rx handling in
+    // saveFixture) so the operator-typed value matches the prompt.
+    h+='<p style="color:#64748b;font-size:.75em;margin-top:.3em">Pan=0 faces forward (+Y). Pan=90 faces stage-left (+X).<br>Tilt=0 is horizontal. <b>Positive Tilt aims above horizon</b> (Tilt=+90 is straight up); negative Tilt aims below horizon (Tilt=-90 is straight down).</p>';
+  }
   if(ft==='dmx'){
     h+='<label style="display:flex;align-items:center;gap:.4em;margin-top:.5em;cursor:pointer"><input id="fx-inverted" type="checkbox"'+(f.mountedInverted?' checked':'')+' style="width:auto"> <span style="font-size:.82em">Mounted upside-down (inverted)</span></label>';
     h+='<p style="color:#64748b;font-size:.72em;margin-top:.2em">Reverses pan and tilt motor direction for truss-mounted fixtures.</p>';
@@ -266,9 +273,14 @@ function editFixture(id){
       var sy=(sObj.y!=null)?sObj.y:'';
       var sz=(sObj.z!=null)?sObj.z:'';
       var srot=Array.isArray(sObj.rotation)?sObj.rotation:[];
-      var rx=(typeof srot[0]==='number')?srot[0]:'';
-      var ry=(typeof srot[1]==='number')?srot[1]:'';
-      var rz=(typeof srot[2]==='number')?srot[2]:'';
+      // #866 — Tilt is shown / typed in the operator-facing convention
+      // (Tilt+ = above horizon, #783) to match the fixture-level
+      // rotation editor. Internal storage keeps rx>0 = pitch DOWN
+      // (#586/#600), so we negate on display and on save. Stored value
+      // in `srot[0]` is internal-frame; UI shows `-srot[0]`.
+      var tiltDisplay=(typeof srot[0]==='number')?(-srot[0]):'';
+      var ryVal=(typeof srot[1]==='number')?srot[1]:'';
+      var rzVal=(typeof srot[2]==='number')?srot[2]:'';
       var sLeds=sObj.leds||0;
       var sMm=sObj.mm||0;
       h+='<div style="margin-bottom:.55em;padding:.4em .5em;background:#0f172a;border-radius:4px">';
@@ -281,20 +293,22 @@ function editFixture(id){
       h+='</div>';
       h+='<div style="display:flex;align-items:center;gap:.3em;flex-wrap:wrap">';
       h+='<span style="font-size:.7em;color:#64748b;min-width:60px">Rotation</span>';
-      h+='<label style="font-size:.7em;color:#64748b" title="pitch (about X, +down)">rx</label><input id="fx-str-'+ss+'-rx" type="number" step="any" value="'+rx+'" placeholder="0" style="width:70px">';
-      h+='<label style="font-size:.7em;color:#64748b" title="roll (about Y, stage-forward)">ry</label><input id="fx-str-'+ss+'-ry" type="number" step="any" value="'+ry+'" placeholder="0" style="width:70px">';
-      h+='<label style="font-size:.7em;color:#64748b" title="yaw / pan (about Z, stage-up)">rz</label><input id="fx-str-'+ss+'-rz" type="number" step="any" value="'+rz+'" placeholder="0" style="width:70px">';
+      h+='<label style="font-size:.7em;color:#64748b" title="Tilt: + above horizon, - below">Tilt</label><input id="fx-str-'+ss+'-rx" type="number" step="any" value="'+tiltDisplay+'" placeholder="0" style="width:70px">';
+      h+='<label style="font-size:.7em;color:#64748b" title="Roll about strip axis">Roll</label><input id="fx-str-'+ss+'-ry" type="number" step="any" value="'+ryVal+'" placeholder="0" style="width:70px">';
+      h+='<label style="font-size:.7em;color:#64748b" title="Pan: + toward stage-left">Pan</label><input id="fx-str-'+ss+'-rz" type="number" step="any" value="'+rzVal+'" placeholder="0" style="width:70px">';
       h+=' <span style="font-size:.65em;color:#64748b;margin-left:.4em">presets:</span>';
-      h+=' <button class="btn" type="button" style="font-size:.65em;padding:.1em .4em" onclick="_fxSetStrRot('+ss+',-90,0,0)" title="Vertical up: tilt -90">↑ up</button>';
-      h+=' <button class="btn" type="button" style="font-size:.65em;padding:.1em .4em" onclick="_fxSetStrRot('+ss+',90,0,0)" title="Vertical down: tilt +90">↓ down</button>';
-      h+=' <button class="btn" type="button" style="font-size:.65em;padding:.1em .4em" onclick="_fxSetStrRot('+ss+',0,0,90)" title="Stage-left: pan +90">+X</button>';
-      h+=' <button class="btn" type="button" style="font-size:.65em;padding:.1em .4em" onclick="_fxSetStrRot('+ss+',0,0,-90)" title="Stage-right: pan -90">-X</button>';
+      // Preset values are in the operator-facing convention (Tilt+ =
+      // up). _fxSetStrRot negates rx on save same as the manual input.
+      h+=' <button class="btn" type="button" style="font-size:.65em;padding:.1em .4em" onclick="_fxSetStrRot('+ss+',90,0,0)" title="Vertical up: Tilt +90">↑ up</button>';
+      h+=' <button class="btn" type="button" style="font-size:.65em;padding:.1em .4em" onclick="_fxSetStrRot('+ss+',-90,0,0)" title="Vertical down: Tilt -90">↓ down</button>';
+      h+=' <button class="btn" type="button" style="font-size:.65em;padding:.1em .4em" onclick="_fxSetStrRot('+ss+',0,0,90)" title="Stage-left: Pan +90">+X</button>';
+      h+=' <button class="btn" type="button" style="font-size:.65em;padding:.1em .4em" onclick="_fxSetStrRot('+ss+',0,0,-90)" title="Stage-right: Pan -90">-X</button>';
       h+=' <button class="btn" type="button" style="font-size:.65em;padding:.1em .4em" onclick="_fxSetStrRot('+ss+',0,0,0)" title="Default forward (+Y)">+Y</button>';
       h+=' <button class="btn" type="button" style="font-size:.65em;padding:.1em .4em" onclick="_fxSetStrRot('+ss+',0,0,180)" title="Toward audience (-Y)">-Y</button>';
       h+='</div>';
       h+='</div>';
     }
-    h+='<p style="color:#64748b;font-size:.72em;margin-top:.2em">Start = stage-mm anchor of the first LED (leave blank to inherit fixture position). Rotation = [rx, ry, rz] degrees, same convention as cameras and DMX fixtures: default forward is stage +Y, rx&gt;0 pitches toward -Z, ry rolls about the strip axis, rz pans about stage-up. Strip length is firmware-reported mm.</p>';
+    h+='<p style="color:#64748b;font-size:.72em;margin-top:.2em">Start = stage-mm anchor of the first LED (leave blank to inherit fixture position). Rotation in degrees: <b>Tilt+ aims above horizon</b> (Tilt=+90 is straight up), Roll about strip axis, Pan+ aims stage-left. Same convention as cameras and DMX fixtures. Strip length is firmware-reported mm.</p>';
     h+='</div>';
   }
   h+='<div style="margin-top:.8em"><button class="btn btn-on" onclick="saveFixture('+id+',\''+ft+'\')">Save</button></div>';
@@ -606,9 +620,16 @@ function saveFixture(id,ft){
   // horizon (#783); store as rx>0 = aims down (#586/#600) by negating.
   var body={
     name:document.getElementById('fx-name').value,
-    type:document.getElementById('fx-type').value,
-    rotation:[-(parseFloat(document.getElementById('fx-rx').value)||0),parseFloat(document.getElementById('fx-ry').value)||0,parseFloat(document.getElementById('fx-rz').value)||0]
+    type:document.getElementById('fx-type').value
   };
+  // #866 — LED fixtures have no fixture-level rotation editor (per-
+  // string rotation is authoritative). Only send `rotation` to the
+  // server when the editor was actually rendered (non-LED). Omitting
+  // the field leaves the server's existing value untouched.
+  var fxRxEl=document.getElementById('fx-rx');
+  if(fxRxEl){
+    body.rotation=[-(parseFloat(fxRxEl.value)||0),parseFloat(document.getElementById('fx-ry').value)||0,parseFloat(document.getElementById('fx-rz').value)||0];
+  }
   if(ft==='dmx'){
     body.dmxUniverse=parseInt(document.getElementById('fx-uni').value)||1;
     body.dmxStartAddr=parseInt(document.getElementById('fx-addr').value)||1;
@@ -661,7 +682,11 @@ function saveFixture(id,ft){
         var vrx=erx?erx.value.trim():'',vry=ery?ery.value.trim():'',vrz=erz?erz.value.trim():'';
         var rFilled=(vrx!=='')+(vry!=='')+(vrz!=='');
         if(rFilled===3){
-          copy.rotation=[parseFloat(vrx),parseFloat(vry),parseFloat(vrz)];
+          // #866 — operator typed Tilt in the +up convention; negate
+          // back to internal rx>0=down so spatial_engine /
+          // build_camera_to_stage see the canonical convention. Same
+          // negation the fixture-level Rotation editor performs.
+          copy.rotation=[-parseFloat(vrx),parseFloat(vry),parseFloat(vrz)];
         }else if(rFilled!==0){
           perStrErr='String '+(ss+1)+' Rotation: fill all of rx / ry / rz, or leave them all blank.';return copy;
         }
@@ -690,7 +715,10 @@ function saveFixture(id,ft){
   });
 }
 
-// #866 — preset helper: stamp a [rx, ry, rz] degree triple into a string row.
+// #866 — preset helper: stamp a [Tilt, Roll, Pan] degree triple into a
+// string row in operator-facing convention (Tilt+ = up). saveFixture
+// negates Tilt back to internal rx>0=down on persist, same as the
+// fixture-level rotation editor at line 179.
 function _fxSetStrRot(ss,rx,ry,rz){
   var erx=document.getElementById('fx-str-'+ss+'-rx');
   var ery=document.getElementById('fx-str-'+ss+'-ry');

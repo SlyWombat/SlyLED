@@ -745,16 +745,35 @@ void sendChildConfigPage(WiFiClient& c) {
   c.print(F("function testPin(s){"
             "var x=new XMLHttpRequest();"
             "x.open('GET','/test/pin?s='+s,true);x.send();}"));
+  // #866 — update-check now reads the curated registry on `main`
+  // (firmware/registry.json) keyed by this board's firmware id, not
+  // `/releases/latest` which returns the orchestrator app release
+  // (v1.7.x) on a different version stream. Pre-fix the comparison
+  // concatenated digits across version streams (cur 7.5.2 → 70502
+  // vs orchestrator 1.7.112 → 10812) and reported "up to date" on
+  // every flashed board, regardless of whether a newer per-board
+  // release was actually available.
+  const char* fwId = "child-led-esp32";
+#ifdef BOARD_D1MINI
+  fwId = "child-led-d1mini";
+#elif defined(BOARD_DMX_BRIDGE)
+  fwId = "dmx-bridge-esp32";
+#endif
   c.print(F("function checkUpdate(){"
             "var btn=document.getElementById('upd-btn');"
             "var st=document.getElementById('upd-status');"
             "btn.disabled=true;btn.textContent='Checking...';"
             "st.textContent='';"
             "var x=new XMLHttpRequest();"
-            "x.open('GET','https://api.github.com/repos/SlyWombat/SlyLED/releases/latest',true);"
+            "x.open('GET','https://raw.githubusercontent.com/SlyWombat/SlyLED/main/firmware/registry.json',true);"
             "x.onload=function(){"
-            "try{var d=JSON.parse(x.responseText);"
-            "var tag=d.tag_name||'';var ver=tag.replace('v','');"
+            "try{var raw=x.responseText.charCodeAt(0)===0xFEFF?x.responseText.slice(1):x.responseText;"
+            "var reg=JSON.parse(raw);"));
+  sendBuf(c, "var fwId='%s';", fwId);
+  c.flush();
+  c.print(F("var entry=null;for(var i=0;i<(reg.firmware||[]).length;i++){if(reg.firmware[i].id===fwId){entry=reg.firmware[i];break;}}"
+            "if(!entry){st.textContent='No registry entry for '+fwId;btn.textContent='Check for Updates';btn.disabled=false;return;}"
+            "var ver=entry.version||'0.0.0';"
             "var parts=ver.split('.');var rmaj=parseInt(parts[0])||0;var rmin=parseInt(parts[1])||0;var rpat=parseInt(parts[2])||0;"));
   sendBuf(c,
             "var cmaj=%u;var cmin=%u;var cpat=%u;"
@@ -765,17 +784,19 @@ void sendChildConfigPage(WiFiClient& c) {
             "st.innerHTML='<b style=\"color:#f60\">v'+ver+' available!</b>';"
             "btn.textContent='Install Update';"
             "btn.disabled=false;"
-            "btn.onclick=function(){doOta(d);};"
+            "btn.onclick=function(){doOta(entry);};"
             "}else{"));
   c.flush();
   c.print(F("st.textContent='Up to date (v'+cmaj+'.'+cmin+'.'+cpat+')';"
             "btn.textContent='Check for Updates';btn.disabled=false;}"
-            "}catch(e){st.textContent='Check failed';btn.textContent='Check for Updates';btn.disabled=false;}};"));
+            "}catch(e){st.textContent='Check failed: '+e.message;btn.textContent='Check for Updates';btn.disabled=false;}};"));
   c.flush();
   c.print(F("x.onerror=function(){st.textContent='Cannot reach cloud';btn.textContent='Check for Updates';btn.disabled=false;};"
             "x.send();}"));
   c.flush();
-  c.print(F("function doOta(rel){"
+  // doOta now takes a registry ENTRY (not a release object). The asset
+  // URL is derived from the entry's releaseTag + releaseAsset.
+  c.print(F("function doOta(entry){"
             "var btn=document.getElementById('upd-btn');"
             "var st=document.getElementById('upd-status');"
             "var prog=document.getElementById('upd-progress');"
@@ -783,22 +804,13 @@ void sendChildConfigPage(WiFiClient& c) {
             "var msg=document.getElementById('upd-msg');"
             "btn.disabled=true;btn.textContent='Updating...';"
             "prog.style.display='block';bar.style.width='10%';msg.textContent='Finding binary...';"
-            // Find the right asset for this board
-            "var assets=rel.assets||[];var url=null;"
-            "for(var i=0;i<assets.length;i++){"));
-#ifdef BOARD_ESP32
-  c.print(F(  "if(assets[i].name==='esp32-firmware-merged.bin'){url=assets[i].browser_download_url;break;}}"));
-#elif defined(BOARD_D1MINI)
-  c.print(F(  "if(assets[i].name==='d1mini-firmware.bin'){url=assets[i].browser_download_url;break;}}"));
-#else
-  c.print(F(  "}"));
-#endif
+            "var tag=entry.releaseTag||'';var asset=entry.releaseAsset||'';"
+            "if(!tag||!asset){msg.textContent='Registry entry missing releaseTag/releaseAsset';btn.disabled=false;return;}"
+            "var url='https://github.com/SlyWombat/SlyLED/releases/download/'+tag+'/'+asset;"
+            "var ver=entry.version||'0.0.0';var parts=ver.split('.');"
+            "var maj=parseInt(parts[0])||0;var mn=parseInt(parts[1])||0;var pt=parseInt(parts[2])||0;"));
   c.flush();
-  c.print(F("if(!url){msg.textContent='No firmware binary found in release';btn.disabled=false;return;}"
-            "bar.style.width='20%';msg.textContent='Sending update command...';"
-            "var tag=rel.tag_name||'';var ver=tag.replace('v','');"));
-  c.flush();
-  c.print(F("var parts=ver.split('.');var maj=parseInt(parts[0])||0;var mn=parseInt(parts[1])||0;var pt=parseInt(parts[2])||0;"
+  c.print(F("bar.style.width='20%';msg.textContent='Sending update command...';"
             "var x=new XMLHttpRequest();"
             "x.open('POST','/ota',true);"
             "x.setRequestHeader('Content-Type','application/json');"
@@ -808,7 +820,7 @@ void sendChildConfigPage(WiFiClient& c) {
             "setTimeout(function(){bar.style.width='100%';msg.textContent='Update complete — refreshing...';location.reload();},20000);};"
             "x.onerror=function(){msg.textContent='Update failed — device may be rebooting';bar.style.width='100%';"
             "setTimeout(function(){location.reload();},15000);};"
-            "x.send(JSON.stringify({url:url,sha256:'',major:maj,minor:mn,patch:pt}));}"));
+            "x.send(JSON.stringify({url:url,sha256:entry.sha256||'',major:maj,minor:mn,patch:pt}));}"));
 #ifdef BOARD_DMX_BRIDGE
   c.print(F(
     "var _dmxNames=[];"

@@ -18055,43 +18055,66 @@ def api_fw_download():
 
 @app.get("/api/firmware/binary/<board>")
 def api_fw_binary(board):
-    """Serve a firmware binary for OTA   " child downloads from parent over plain HTTP.
-    ESP32 OTA needs app-only binary (main.ino.bin), NOT the merged binary."""
+    """Serve a firmware binary for OTA — child downloads from parent
+    over plain HTTP because the ESP32 client can't do HTTPS to GitHub.
+
+    Resolution order:
+      1. Local file in `_FW_DIR/<board>/main.ino.bin` (dev / freshly
+         built firmware — `build_release.ps1` drops it here).
+      2. Cached file in APPDATA cache dir (downloads land here on
+         first OTA after a fresh install).
+      3. Per-board release-tag download from GitHub. This goes through
+         the **registry**, not the orchestrator-app's `/releases/latest`
+         — pre-fix `_fetch_github_release()` returned the orchestrator
+         app release (v1.7.x) whose assets don't include any firmware
+         binary, so the proxy 404'd and OTA silently failed. The
+         registry pins each board's `releaseTag` (e.g.
+         `esp32-v7.5.11`) and `releaseAsset` name (`esp32-firmware-
+         merged.bin`).
+    """
+    from firmware_manager import _registry_fetch_assets
     file_map = {"esp32": "esp32/main.ino.bin", "d1mini": "d1mini/main.ino.bin",
                  "esp32s3": "esp32s3/main.ino.bin"}
     rel_path = file_map.get(board)
     if not rel_path:
         return jsonify(ok=False, err=f"unknown board: {board}"), 404
     bin_path = _FW_DIR / rel_path
+    if not bin_path.exists() and (_FW_CACHE_DIR / rel_path).exists():
+        bin_path = _FW_CACHE_DIR / rel_path
     if not bin_path.exists():
-        # Try downloading from GitHub first
-        rel = _fetch_github_release()
-        if rel:
-            # OTA needs app-only binary; try esp32-firmware-app.bin first, fallback to merged
-            asset_names = {"esp32": ["esp32-firmware-app.bin", "esp32-firmware-merged.bin"],
-                           "d1mini": ["d1mini-firmware.bin"],
-                           "esp32s3": ["esp32s3-firmware-app.bin", "esp32s3-firmware-merged.bin"]}
-            asset_name = None
-            for name in asset_names.get(board, []):
-                if any(a["name"] == name for a in rel.get("assets", [])):
-                    asset_name = name
-                    break
-            for a in rel.get("assets", []):
-                if a["name"] == asset_name:
-                    try:
-                        import urllib.request as _ur
-                        log.info("Downloading %s from GitHub for proxy serve", asset_name)
-                        req = _ur.Request(a["url"], headers={"User-Agent": "SlyLED-Parent"})
-                        resp = _ur.urlopen(req, timeout=60)
-                        data = resp.read()
-                        bin_path.parent.mkdir(parents=True, exist_ok=True)
-                        bin_path.write_bytes(data)
-                    except Exception as e:
-                        log.error("Download failed: %s", e)
-                        return jsonify(ok=False, err="download from GitHub failed"), 502
-                    break
+        # Look up the registry entry for this board so we know which
+        # release tag + asset to fetch.
+        reg = _resolve_registry()
+        board_to_fwid = {"esp32": "child-led-esp32",
+                          "d1mini": "child-led-d1mini",
+                          "esp32s3": "gyro-esp32s3"}
+        fwid = board_to_fwid.get(board)
+        entry = next((e for e in reg.get("firmware", []) if e.get("id") == fwid), None) if fwid else None
+        if entry and entry.get("releaseTag") and entry.get("releaseAsset"):
+            try:
+                import urllib.request as _ur
+                assets = _registry_fetch_assets(release_tag=entry["releaseTag"]) or {}
+                asset_url = assets.get(entry["releaseAsset"])
+                if asset_url:
+                    log.info("Proxy fetch: board=%s tag=%s asset=%s",
+                             board, entry["releaseTag"], entry["releaseAsset"])
+                    req = _ur.Request(asset_url, headers={"User-Agent": "SlyLED-Parent"})
+                    resp = _ur.urlopen(req, timeout=60)
+                    data = resp.read()
+                    cache_path = _FW_CACHE_DIR / rel_path
+                    cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    cache_path.write_bytes(data)
+                    bin_path = cache_path
+                else:
+                    log.warning("Proxy fetch: asset %s not found in release %s",
+                                entry["releaseAsset"], entry["releaseTag"])
+            except Exception as e:
+                log.error("Proxy fetch failed: %s", e)
     if not bin_path.exists():
-        return jsonify(ok=False, err="firmware binary not available"), 404
+        return jsonify(ok=False,
+                        err=f"firmware binary not available for {board} "
+                            "(registry entry missing releaseTag/releaseAsset, "
+                            "or GitHub fetch failed)"), 404
     return send_file(str(bin_path), mimetype="application/octet-stream",
                      download_name=f"slyled-{board}.bin")
 
@@ -18697,14 +18720,30 @@ def api_firmware_check():
 
 @app.post("/api/firmware/ota/<int:cid>")
 def api_firmware_ota(cid):
-    """Trigger OTA update on a specific child."""
+    """Trigger OTA update on a specific child.
+
+    Accepts ``?force=1`` (or body ``{"force": true}``) to bypass the
+    `status==1` (online) precondition. The "online" flag derives from
+    UDP PING/PONG round-trips; an older firmware whose PONG/STATUS_RESP
+    format the orchestrator no longer parses will look offline forever
+    even though the board is on the network and its HTTP `/ota`
+    endpoint is healthy. Force mode is the recovery path for that:
+    the orchestrator's HTTP push goes through if the board's TCP
+    socket opens, regardless of UDP listener health. The board still
+    has to be reachable on its IP for the OTA to actually start.
+    """
     child = next((c for c in _children if c["id"] == cid), None)
     if not child:
         return jsonify(ok=False, err="child not found"), 404
     if child.get("type") == "wled":
         return jsonify(ok=False, err="WLED devices update through their own UI"), 400
-    if child.get("status") != 1:
-        return jsonify(ok=False, err="child is offline"), 400
+    body_in = request.get_json(silent=True) or {}
+    force = (request.args.get("force", "").lower() in ("1", "true", "yes")
+             or bool(body_in.get("force")))
+    if not force and child.get("status") != 1:
+        return jsonify(ok=False,
+                        err="child is offline (use force=1 to override "
+                            "when board is HTTP-reachable but UDP-stale)"), 400
 
     # Require WiFi credentials to be configured before OTA
     if not _wifi.get("ssid"):
@@ -18723,36 +18762,32 @@ def api_firmware_ota(cid):
     except Exception as e:
         log.warning("OTA: failed to push WiFi to %s: %s (continuing anyway)", ip, e)
 
-    rel = _fetch_github_release()
-    if not rel:
-        return jsonify(ok=False, err="Could not fetch release info"), 502
-    latest = rel.get("version", "0.0")
-
     # Determine board type from stored boardType
     bt = child.get("boardType", "")
     board = "esp32" if bt in ("ESP32", "esp32") else "d1mini" if bt in ("D1 Mini", "d1mini") else "esp32"
-    # OTA needs app-only binary for ESP32; try app first, fallback to merged
-    asset_prefs = {"esp32": ["esp32-firmware-app.bin", "esp32-firmware-merged.bin"],
-                   "d1mini": ["d1mini-firmware.bin"]}
-    download_url = ""
-    for name in asset_prefs.get(board, []):
-        for a in rel.get("assets", []):
-            if a["name"] == name:
-                download_url = a["url"]
-                break
-        if download_url:
-            break
-    if not download_url:
-        return jsonify(ok=False, err=f"no firmware binary for {board}"), 404
 
-    # Parse version
+    # Look up the registry entry for THIS board. Pre-fix this used
+    # `_fetch_github_release()` which returns the orchestrator app's
+    # latest release (v1.7.x) — its assets don't include any firmware
+    # bin, so the proxy fetch silently failed. The registry pins each
+    # firmware id's release tag and version independently from the
+    # app track; reading the registry entry guarantees we OTA to the
+    # version actually listed for this board.
+    reg = _resolve_registry()
+    board_to_fwid = {"esp32": "child-led-esp32",
+                      "d1mini": "child-led-d1mini"}
+    fwid = board_to_fwid.get(board)
+    entry = next((e for e in reg.get("firmware", []) if e.get("id") == fwid), None) if fwid else None
+    if not entry:
+        return jsonify(ok=False, err=f"no registry entry for board {board}"), 404
+    latest = entry.get("version", "0.0")
     try:
         parts = latest.split(".")
         new_major = int(parts[0])
         new_minor = int(parts[1]) if len(parts) > 1 else 0
         new_patch = int(parts[2]) if len(parts) > 2 else 0
     except (ValueError, IndexError):
-        return jsonify(ok=False, err="invalid version format"), 500
+        return jsonify(ok=False, err=f"registry entry {fwid} has invalid version"), 500
 
     # Send OTA command   " use parent as proxy (child can't do HTTPS to GitHub)
     ip = child["ip"]

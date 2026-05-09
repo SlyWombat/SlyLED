@@ -467,7 +467,13 @@ function tlBake(){
             // Auto-sync to fixtures after bake
             ra('POST','/api/timelines/'+_curTl.id+'/baked/sync',null,function(sr){
               if(sr&&sr.ok){
-                if(stat)stat.textContent='Synced to '+sr.synced+' fixture(s). Ready to start.';
+                // Server's success-path response is `{ok, performers}`;
+                // the empty-rig fallback returns `{ok, synced:0, warn}`
+                // — accept either so the toast renders a number, not
+                // "undefined fixture(s)".
+                var n=(typeof sr.performers==='number')?sr.performers
+                     :(typeof sr.synced==='number')?sr.synced:0;
+                if(stat)stat.textContent='Synced to '+n+' fixture(s). Ready to start.';
               } else {
                 if(stat)stat.textContent='Bake done but sync failed: '+(sr&&sr.err||sr&&sr.warn||'?');
               }

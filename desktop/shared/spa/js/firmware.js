@@ -80,8 +80,17 @@ function _renderOtaTable(d){
       st='<span style="color:#888">WLED — update via device UI</span>';
       act='';
     }else if(!isOnline){
+      // Offline = no fresh UDP PONG. Board may still be HTTP-
+      // reachable (older firmware whose PONG/STATUS_RESP shape is
+      // stale, but whose HTTP /ota handler works fine). Surface a
+      // Force Update button when an IP is on file so the operator
+      // can recover the board without USB-flashing it.
       st='<span class="badge boff">Offline</span>';
-      act='<span style="color:#666">—</span>';
+      if(c.ip){
+        act='<button class="btn" onclick="otaSingleUpdate('+c.id+',true)" style="background:#7c2d12;color:#fdba74" title="Force OTA via HTTP — bypasses the UDP-derived online check. Board must be HTTP-reachable on its IP.">Force Update</button>';
+      }else{
+        act='<span style="color:#666">—</span>';
+      }
     }else if(c.needsUpdate){
       // #866 — per-row latest comes from c.latestVersion (board-track
       // aware) not d.latest (fleet-max across all tracks).
@@ -99,21 +108,27 @@ function _renderOtaTable(d){
   });
   el.innerHTML=h+'</table>';
 }
-function otaSingleUpdate(cid){
-  if(!confirm('Update this fixture to the latest firmware? It will reboot.'))return;
-  _startOtaForChild(cid);
+function otaSingleUpdate(cid,force){
+  var msg=force
+    ?'FORCE OTA: bypass the offline check and push firmware via HTTP.\n\n'
+     +'This works only if the board is HTTP-reachable on its IP. The '
+     +'board will reboot. Continue?'
+    :'Update this fixture to the latest firmware? It will reboot.';
+  if(!confirm(msg))return;
+  _startOtaForChild(cid,!!force);
 }
-function _startOtaForChild(cid){
+function _startOtaForChild(cid,force){
   var stEl=document.getElementById('ota-st-'+cid);
   var actEl=document.getElementById('ota-act-'+cid);
-  if(stEl)stEl.innerHTML='<span class="badge" style="background:#2563eb;color:#fff">Sending update...</span>';
+  if(stEl)stEl.innerHTML='<span class="badge" style="background:#2563eb;color:#fff">'+(force?'Forcing update':'Sending update')+'...</span>';
   if(actEl)actEl.innerHTML='<div class="prog-bar" style="height:6px;width:100px;display:inline-block"><div class="prog-fill" id="ota-prog-'+cid+'" style="width:0%"></div></div>';
-  api('POST','/api/firmware/ota/'+cid).then(function(r){
+  var url='/api/firmware/ota/'+cid+(force?'?force=1':'');
+  api('POST',url).then(function(r){
     if(stEl)stEl.innerHTML='<span class="badge" style="background:#7c3aed;color:#fff">Downloading...</span>';
     _pollOtaProgress(cid,0);
   }).catch(function(e){
     if(stEl)stEl.innerHTML='<span class="badge boff">Failed</span>';
-    if(actEl)actEl.innerHTML='<button class="btn btn-on" onclick="otaSingleUpdate('+cid+')">Retry</button>';
+    if(actEl)actEl.innerHTML='<button class="btn btn-on" onclick="otaSingleUpdate('+cid+','+(force?'true':'false')+')">Retry</button>';
   });
 }
 function _pollOtaProgress(cid,attempt){
