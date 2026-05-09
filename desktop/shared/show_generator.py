@@ -905,54 +905,99 @@ def _apply_fade_brackets(theme, tracks, dur):
 
 # ── #865 vertical-bar-array primitive ────────────────────────────────────────
 
-def _is_vertical_bar(fixture, pos_map):
-    """#865 — bar topology heuristic.
+_BAR_MIN_LEDS = 75
+_BAR_Z_DOMINANCE = 3.0
 
-    Match: LED fixture with exactly one string of ≥75 LEDs whose
-    resolved pixel extent is dominantly aligned with stage +Z (Z-extent
-    >3× the larger of X-extent / Y-extent). The resolve-and-measure path
-    handles strips that reach vertical via either rotation or sdir, so
-    the heuristic doesn't have to special-case rotation conventions.
+
+def _bar_string_qualifies(fixture, string_cfg, base_pos):
+    """#865 — heuristic per string. Returns the resolved pixel list when
+    the string's pixel extent is dominantly aligned with stage +Z (≥3×
+    the larger of X / Y extent) and the LED count is ≥75. Returns None
+    if the string is too short, can't be resolved, or isn't vertical.
     """
-    if fixture.get("fixtureType") != "led":
-        return False
-    if fixture.get("type") != "linear":
-        return False
-    strings = fixture.get("strings") or []
-    if len(strings) != 1:
-        return False
-    s = strings[0]
-    if (s.get("leds") or 0) < 75:
-        return False
-    pos = pos_map.get(fixture.get("id"))
-    if not pos:
-        return False
-    child_pos = [pos.get("x", 0), pos.get("y", 0), pos.get("z", 0)]
+    if (string_cfg.get("leds") or 0) < _BAR_MIN_LEDS:
+        return None
     try:
-        from spatial_engine import resolve_fixture as _resolve
-        pixels = _resolve({
-            "type": "linear",
-            "childPos": child_pos,
-            "strings": strings,
-            "rotation": fixture.get("rotation", [0, 0, 0]),
-        }).get("pixelPositions", [])
+        from spatial_engine import resolve_linear_fixture as _resolve_str
+        pixels = _resolve_str(
+            base_pos, string_cfg,
+            string_cfg.get("points"),
+            fixture.get("rotation", [0, 0, 0]),
+        )
     except Exception:
-        return False
+        return None
     if len(pixels) < 2:
-        return False
+        return None
     xs = [p[0] for p in pixels]
     ys = [p[1] for p in pixels]
     zs = [p[2] for p in pixels]
     z_ext = max(zs) - min(zs)
     h_ext = max(max(xs) - min(xs), max(ys) - min(ys), 1)
-    return z_ext > 3 * h_ext
+    if z_ext <= _BAR_Z_DOMINANCE * h_ext:
+        return None
+    return pixels
 
 
-def _bar_anchor_position(fixture, pos_map):
-    """Return the bar's stage-X mid for cross-sweep timing tests. Falls
-    back to the layout entry's x when no per-string positions are set."""
-    pos = pos_map.get(fixture.get("id"), {})
-    return [pos.get("x", 0), pos.get("y", 0), pos.get("z", 0)]
+def _enumerate_vertical_bars(fixtures, pos_map):
+    """#865 — enumerate per-bar entries across the rig.
+
+    Each entry is one bar — which may be either:
+      * an entire single-string LED fixture (legacy / common case), or
+      * an individual string of a multi-string LED fixture, when
+        per-string positions (#864) place it as a discrete vertical
+        strip on the rig.
+
+    Returns a list of dicts, each carrying:
+      `fixture_id`     — parent fixture id (used for base-wash track)
+      `string_index`   — 0-based string index inside that fixture
+      `anchor`         — [x, y, z] stage-mm anchor (per-string base if
+                         the string has its own (x,y,z) per #864, else
+                         the fixture's layout position)
+      `pixels`         — resolved pixel positions (used by tests for
+                         per-bar peak-time correlation)
+      `leds`           — LED count
+    """
+    bars = []
+    for f in fixtures:
+        if f.get("fixtureType") != "led":
+            continue
+        if f.get("type") != "linear":
+            continue
+        strings = f.get("strings") or []
+        if not strings:
+            continue
+        pos = pos_map.get(f.get("id"))
+        if not pos:
+            continue
+        fixture_pos = [pos.get("x", 0), pos.get("y", 0), pos.get("z", 0)]
+        for si, s in enumerate(strings):
+            sx = s.get("x"); sy = s.get("y"); sz = s.get("z")
+            if (isinstance(sx, (int, float))
+                    and isinstance(sy, (int, float))
+                    and isinstance(sz, (int, float))):
+                base = [sx, sy, sz]
+            else:
+                base = fixture_pos
+            pixels = _bar_string_qualifies(f, s, base)
+            if pixels is None:
+                continue
+            bars.append({
+                "fixture_id": f["id"],
+                "string_index": si,
+                "anchor": base,
+                "pixels": pixels,
+                "leds": s.get("leds") or 0,
+            })
+    return bars
+
+
+def _is_vertical_bar(fixture, pos_map):
+    """#865 — back-compat shim used by the test harness. Reports True
+    when the fixture contributes at least one bar to
+    `_enumerate_vertical_bars`. Multi-string fixtures may contribute
+    several entries; one is enough for the per-fixture predicate."""
+    return any(b["fixture_id"] == fixture.get("id")
+               for b in _enumerate_vertical_bars([fixture], pos_map))
 
 
 def _generate_bar_array_show(theme, fixtures, layout_positions, bounds):
@@ -969,20 +1014,72 @@ def _generate_bar_array_show(theme, fixtures, layout_positions, bounds):
 
     Returns either {"error", "msg"} (rejected — < 2 bars) or the
     standard show dict consumed by `_install_preset_show`.
+
+    Bars are enumerated per *string*, so a single multi-string LED
+    fixture (#864) can supply several bars when its per-string
+    positions place each string on a different point of the rig.
     """
     pos_map = {p["id"]: p for p in layout_positions}
-    bars = [f for f in fixtures if _is_vertical_bar(f, pos_map)]
-    if len(bars) < 2:
+    bar_entries = _enumerate_vertical_bars(fixtures, pos_map)
+    if len(bar_entries) < 2:
+        # Surface a diagnostic that explains what was rejected so
+        # operators don't have to read the source. The message lists
+        # each LED fixture and what disqualified it (no layout pos,
+        # too few LEDs, not vertical) so they can fix the most common
+        # misconfigurations without guessing.
+        diag_lines = []
+        led_fixtures = [f for f in fixtures
+                          if f.get("fixtureType") == "led"
+                          and f.get("type") == "linear"]
+        if not led_fixtures:
+            diag_lines.append("No LED fixtures on the rig.")
+        for f in led_fixtures:
+            fid = f.get("id")
+            name = f.get("name") or f"#{fid}"
+            pos = pos_map.get(fid)
+            if not pos:
+                diag_lines.append(f"  • {name}: not placed in layout (no x/y/z).")
+                continue
+            strings = f.get("strings") or []
+            if not strings:
+                diag_lines.append(f"  • {name}: no strings configured.")
+                continue
+            for si, s in enumerate(strings):
+                leds = s.get("leds") or 0
+                if leds < _BAR_MIN_LEDS:
+                    diag_lines.append(
+                        f"  • {name} string {si+1}: {leds} LEDs "
+                        f"(need ≥{_BAR_MIN_LEDS}).")
+                    continue
+                # Probe vertical-extent rejection.
+                sx, sy, sz = s.get("x"), s.get("y"), s.get("z")
+                if all(isinstance(v, (int, float)) for v in (sx, sy, sz)):
+                    base = [sx, sy, sz]
+                else:
+                    base = [pos.get("x", 0), pos.get("y", 0), pos.get("z", 0)]
+                if _bar_string_qualifies(f, s, base) is None:
+                    diag_lines.append(
+                        f"  • {name} string {si+1}: not vertical "
+                        f"(strip extent must be along stage +Z; rotate "
+                        f"the fixture or set sdir so the strip runs up).")
+        diag = "\n".join(diag_lines) if diag_lines else "(no LED fixtures)"
         return {
             "error": "needs_bars",
             "msg": (f"Theme '{theme['name']}' needs at least 2 vertical "
-                    f"LED bars (single-string fixtures with ≥75 LEDs "
-                    f"oriented along stage +Z). Detected: {len(bars)}. "
-                    f"Add more bars or pick a different preset."),
+                    f"LED bars (≥{_BAR_MIN_LEDS} LEDs, oriented along "
+                    f"stage +Z). Detected: {len(bar_entries)}.\n\n"
+                    f"What I saw:\n{diag}"),
         }
 
-    bar_ids = [b["id"] for b in bars]
-    led_fx = bars  # for base wash + sparkle plumbing
+    bar_ids = list({b["fixture_id"] for b in bar_entries})
+    # `led_fx` (per-fixture base wash) — dedupe by parent fixture.
+    led_fx = []
+    seen = set()
+    for b in bar_entries:
+        if b["fixture_id"] not in seen:
+            led_fx.append(next(f for f in fixtures
+                                 if f.get("id") == b["fixture_id"]))
+            seen.add(b["fixture_id"])
     bpm = float(theme.get("bpm", 128) or 128)
     beat_s = max(0.05, 60.0 / bpm)
 
@@ -1084,13 +1181,12 @@ def _generate_bar_array_show(theme, fixtures, layout_positions, bounds):
     # individual bar X positions; if there are more bars than slots the
     # template picks evenly-spaced bars across the array.
     lightning_effects = []
-    sorted_bars = sorted(bars,
-                          key=lambda b: pos_map.get(b["id"], {}).get("x", 0))
+    sorted_bars = sorted(bar_entries, key=lambda b: b["anchor"][0])
     n_strikes = min(4, len(sorted_bars))
     step = max(1, len(sorted_bars) // n_strikes) if n_strikes else 1
     for i in range(n_strikes):
         b = sorted_bars[i * step] if (i * step) < len(sorted_bars) else sorted_bars[i % len(sorted_bars)]
-        bx = pos_map.get(b["id"], {}).get("x", 0)
+        bx = b["anchor"][0]
         fx = {
             "name": f"Lightning {i+1}",
             "category": "spatial-field",
@@ -1163,9 +1259,9 @@ def _generate_bar_array_show(theme, fixtures, layout_positions, bounds):
 
     tracks = []
     if led_base:
-        for b in bars:
+        for fx in led_fx:
             tracks.append({
-                "fixtureId": b["id"],
+                "fixtureId": fx["id"],
                 "clips": [{"_action_ref": led_base, "startS": 0, "durationS": dur}],
                 "_layer": "base",
             })
@@ -1205,7 +1301,8 @@ def _generate_bar_array_show(theme, fixtures, layout_positions, bounds):
         "led_fixture_ids": bar_ids,
         "dmx_par_ids": [],
         "dmx_mover_ids": [],
-        "_865_bar_ids": bar_ids,    # exposed for the regression harness
+        "_865_bar_ids": bar_ids,    # parent fixture ids — exposed for tests
+        "_865_bar_entries": bar_entries,  # per-string bars, anchors, pixels
         "_865_clips": fx_clips,
     }
 

@@ -380,7 +380,15 @@ function loadPreset(id){
       document.getElementById('hs').textContent=msg;
       showTab('runtime');
     }else{
-      document.getElementById('hs').textContent='Load failed: '+(r&&r.err||'?');
+      // #865 follow-up — surface the failure visibly. The header
+      // status bar is easy to miss when the operator is mid-action;
+      // a preset that "just returns" silently looks identical to
+      // success but with no Runtime change. Templates like
+      // vertical-bar-array also emit a multi-line diagnostic
+      // (per-fixture rejection reasons) that alert() shows cleanly.
+      var err=(r&&r.err)||'unknown error';
+      document.getElementById('hs').textContent='Preset load failed: '+err;
+      try{ alert("Couldn't load preset:\n\n"+err); }catch(e){}
     }
   });
 }

@@ -841,6 +841,114 @@ def test_865_bar_array_2_bars_lower_bound():
                     f"peak_t={peak_t}")
 
 
+def test_865_bar_array_install_post_returns_timeline():
+    """#865 — POST /api/show/preset must materialise the timeline,
+    not just return success silently. Asserts: 200 status, ok=True,
+    timelineId returned, ≥1 actions and ≥1 effects (the operator's
+    Runtime tab needs records to play). The operator-reported symptom
+    was "select preset → nothing happens" — a 200 response with zero
+    records produced exactly that symptom; the assertion below pins it."""
+    print("\n-- test_865_bar_array_install_post_returns_timeline --")
+    with parent_server.app.test_client() as c:
+        c.post("/api/reset", headers={"X-SlyLED-Confirm": "true"})
+        for i, x in enumerate([1000, 3000, 5000, 7000]):
+            _setup_vertical_bar(c, f"bar{i}", x)
+        r = c.post("/api/show/preset", json={"id": "vertical-bar-array"})
+        body = r.get_json()
+        _ok(r.status_code == 200,
+            "#865 install POST returns 200",
+            f"status={r.status_code} body={body}")
+        _ok(bool(body and body.get("ok")) and body.get("timelineId") is not None,
+            "#865 install creates a timeline (timelineId returned)",
+            f"body={body}")
+        _ok((body or {}).get("actions", 0) >= 1,
+            "#865 install creates ≥1 action records",
+            f"actions={(body or {}).get('actions')}")
+        _ok((body or {}).get("effects", 0) >= 1,
+            "#865 install creates ≥1 spatial-effect records",
+            f"effects={(body or {}).get('effects')}")
+
+
+def test_865_bar_array_install_under_two_bars_returns_400():
+    """#865 — operator-visible failure path. The SPA's loadPreset
+    only shows an error when the response says ok:false. A silent 200
+    with an empty timeline would look like "nothing happened." This
+    test pins the 400 + ok:false + needs_bars contract end-to-end so
+    the SPA's error path is reachable."""
+    print("\n-- test_865_bar_array_install_under_two_bars_returns_400 --")
+    with parent_server.app.test_client() as c:
+        c.post("/api/reset", headers={"X-SlyLED-Confirm": "true"})
+        _setup_vertical_bar(c, "lonely", 2000)   # 1 bar only
+        r = c.post("/api/show/preset", json={"id": "vertical-bar-array"})
+        body = r.get_json()
+        _ok(r.status_code == 400,
+            "#865 1-bar install returns HTTP 400",
+            f"status={r.status_code} body={body}")
+        _ok(body and body.get("ok") is False
+              and body.get("code") == "needs_bars",
+            "#865 1-bar install body has ok:false + code:needs_bars",
+            f"body={body}")
+        _ok(body and "vertical LED bars" in (body.get("err") or ""),
+            "#865 needs_bars message names the requirement",
+            f"err={(body or {}).get('err')!r}")
+
+
+def test_865_bar_array_multi_string_fixture_detected_per_string():
+    """#865 — operator-reported failure mode. A single LED fixture
+    driving multiple physical bars (one ESP32, several strips) must
+    surface each string as a separate bar so the catalog generates.
+    This cell pins the #864 ↔ #865 integration: each string's per-string
+    (x, y, z) anchor is the bar position; the cross-sweep effect's
+    per-anchor peak time correlates with the per-string X exactly the
+    same way the multi-fixture cell asserts."""
+    print("\n-- test_865_bar_array_multi_string_fixture_detected_per_string --")
+    with parent_server.app.test_client() as c:
+        c.post("/api/reset", headers={"X-SlyLED-Confirm": "true"})
+        # ONE fixture, FOUR strings, each at a distinct stage-X.
+        r = c.post("/api/fixtures", json={
+            "name": "QuadBar", "type": "linear", "fixtureType": "led",
+            "strings": [
+                {"leds": 100, "mm": 2000, "sdir": 1,
+                 "x": 1000, "y": 3000, "z": 0},
+                {"leds": 100, "mm": 2000, "sdir": 1,
+                 "x": 3000, "y": 3000, "z": 0},
+                {"leds": 100, "mm": 2000, "sdir": 1,
+                 "x": 5000, "y": 3000, "z": 0},
+                {"leds": 100, "mm": 2000, "sdir": 1,
+                 "x": 7000, "y": 3000, "z": 0},
+            ],
+            "rotation": [90, 0, 0],
+        })
+        fid = r.get_json()["id"]
+        parent_server._layout.setdefault("children", []).append(
+            {"id": fid, "x": 0, "y": 3000, "z": 0})
+
+        from show_generator import generate_show
+        show = generate_show("vertical-bar-array",
+                              parent_server._fixtures,
+                              parent_server._layout,
+                              parent_server._stage,
+                              parent_server._profile_lib)
+        _ok(isinstance(show, dict) and not show.get("error"),
+            "#865 4-string single-fixture detected (no error)",
+            f"got {show!r}"[:300])
+        entries = (show or {}).get("_865_bar_entries", [])
+        _ok(len(entries) == 4,
+            "#865 detector enumerates 4 per-string bar entries",
+            f"got {len(entries)} entries")
+        anchors = sorted(e["anchor"][0] for e in entries)
+        _ok(anchors == [1000, 3000, 5000, 7000],
+            "#865 per-string anchors carry the per-string X positions",
+            f"got {anchors}")
+
+        # Install path runs end-to-end too.
+        r = c.post("/api/show/preset", json={"id": "vertical-bar-array"})
+        body = r.get_json()
+        _ok(r.status_code == 200 and body.get("ok"),
+            "#865 single-fixture-multi-string install path returns ok",
+            f"status={r.status_code} body={body}")
+
+
 def test_865_bar_array_rejects_when_under_two_bars():
     """#865 — generator returns the structured 'needs_bars' error for
     rigs with 0 or 1 bar so the SPA can show a clear message instead of
@@ -887,6 +995,9 @@ def main():
     test_862_symptom3_8bit_profile_tilt_tracks_claim()
     test_865_bar_array_4_bars_emits_seven_clips()
     test_865_bar_array_2_bars_lower_bound()
+    test_865_bar_array_install_post_returns_timeline()
+    test_865_bar_array_install_under_two_bars_returns_400()
+    test_865_bar_array_multi_string_fixture_detected_per_string()
     test_865_bar_array_rejects_when_under_two_bars()
     print(f"\n{_passed} assertions passed, {_failed} failed")
     return 0 if _failed == 0 else 1
