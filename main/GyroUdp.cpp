@@ -492,6 +492,34 @@ void gyroUdpSendOff() {
     if (Serial) Serial.printf("[GyroUDP] OFF nonce=%u\n", s_pendingStopNonce);
 }
 
+void gyroUdpSendAimWizard(const float eulerNeutral[3],
+                          const float eulerPitchForward[3],
+                          const float eulerYawLeft[3]) {
+    // #869 — empirical aim-axis wizard for the puck. Three captured
+    // Euler triples (roll, pitch, yaw in degrees) packed into one
+    // UDP packet. Server converts each to a body-to-world quat via
+    // quat_from_euler_zyx_deg and runs the same `_aim_wizard
+    // _compute` math the Android wizard (#826) uses. No retry / no
+    // ACK in v1: puck UI confirms send-complete and trusts the
+    // orchestrator to persist; HB_REP echoes the new state. Add a
+    // dedicated ACK in a follow-up if field loss-rate proves a
+    // problem.
+    UdpHeader hdr;
+    hdr.magic   = UDP_MAGIC;
+    hdr.version = UDP_VERSION;
+    hdr.cmd     = CMD_GYRO_AIM_WIZARD;
+    hdr.epoch   = (uint32_t)currentEpoch();
+    uint8_t buf[sizeof(hdr) + 36];
+    memcpy(buf, &hdr, sizeof(hdr));
+    memcpy(buf + sizeof(hdr) + 0,  eulerNeutral,      12);
+    memcpy(buf + sizeof(hdr) + 12, eulerPitchForward, 12);
+    memcpy(buf + sizeof(hdr) + 24, eulerYawLeft,      12);
+    cmdUDP.beginPacket(s_parentIP, UDP_PORT);
+    cmdUDP.write(buf, sizeof(buf));
+    cmdUDP.endPacket();
+    if (Serial) Serial.println("[GyroUDP] AIM_WIZARD sent");
+}
+
 uint16_t gyroUdpSendStartWithNonce(uint16_t nonce) {
     // #825 — UI hands in a fresh nonce; we stamp the pending-start slot
     // and ship the first frame. Subsequent retries fire from

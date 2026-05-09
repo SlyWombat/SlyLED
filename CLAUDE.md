@@ -115,6 +115,7 @@ Moving-head aim uses **stage-frame fixture-internal angles**, not mechanical yok
 | 0x6C | HB_REP       | gyro→parent    | 5 bytes — uiState + claimNonce + seq (#825) |
 | 0x6D | AUTOBRI_PUSH | phone→parent   | 3 bytes — master + flags + seq (#861); UDP **4211** (#862) — own port to dodge Windows-host 4210 kernel reservations |
 | 0x6E | GYRO_OFF     | gyro→parent    | 2 bytes — nonce (#867); same shape as GYRO_STOP but server releases claim with `blackout=True` (head goes dark). ACK reuses CMD_GYRO_STOP_ACK |
+| 0x6F | GYRO_AIM_WIZARD | gyro→parent | 36 bytes — three Euler triples in degrees (roll, pitch, yaw) for {neutral, pitch_forward, yaw_left} (#869). Server converts each to a body-to-world unit quat via `quat_from_euler_zyx_deg` and runs the same `_aim_wizard_compute` math the Android wizard (#826) uses; persists derived `forward_local` / `up_local` on the puck's `gyro-<ip>` Remote. Fire-and-forget; no ACK |
 
 **v3→v4:** `ledStart[]` / `ledEnd[]` upgraded uint8 → uint16 (8 entries each, +16 bytes per ACTION/LOAD_STEP). Parent accepts both v3 and v4 PONGs.
 

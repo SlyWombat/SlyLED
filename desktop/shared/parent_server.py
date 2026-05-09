@@ -127,6 +127,7 @@ CMD_GYRO_STOP_ACK      = 0x6B  # parent→gyro: stop confirmed — {nonce(2)} (#
 CMD_GYRO_HEARTBEAT_REP = 0x6C  # gyro→parent: heartbeat reply — {uiState(1), claimNonce(2), seq(2)} (#825).
 CMD_AUTOBRI_PUSH       = 0x6D  # phone→parent: Android Auto Brightness master push (#861) — {master(1), flags(1), seq(1)}. 20 Hz fire-and-forget UDP; orchestrator coalesces by overwriting `_settings["globalBrightness"]` per packet. Replaces the prior HTTP /api/brightness fast path.
 CMD_GYRO_OFF           = 0x6E  # gyro→parent: explicit press-OFF (#867) — same nonce shape as CMD_GYRO_STOP but server releases the claim with blackout=True so the head goes dark. STOP leaves head at last frame; OFF blackouts the head AND releases. ACK reuses CMD_GYRO_STOP_ACK.
+CMD_GYRO_AIM_WIZARD    = 0x6F  # gyro→parent: empirical aim-axis wizard (#869) — 36-byte payload: 3 Euler triples in degrees (roll, pitch, yaw) for {neutral, pitch_forward, yaw_left}, each 3×float32 LE. Server converts to quats via quat_from_euler_zyx_deg, then runs the same _aim_wizard_compute (#826) the Android wizard uses; persists derived forward_local/up_local on the puck's `gyro-<ip>` Remote.
 
 # #825 — uiState codes carried in CMD_GYRO_HEARTBEAT_REP.
 GYRO_UI_IDLE        = 0
@@ -1616,6 +1617,47 @@ def _udp_listener():
                     _send_gyro_stop_ack(ip, off_nonce)
             except Exception as e:
                 log.error("GYRO_OFF handler failed: %s", e, exc_info=True)
+        elif cmd == CMD_GYRO_AIM_WIZARD:
+            # #869 — puck-side empirical aim-axis wizard. Same math
+            # as the Android wizard (#826): three captured poses →
+            # forward_local / up_local. Wire path differs from the
+            # phone (which POSTs to /api/remotes/aim-wizard) because
+            # the puck has no HTTPS stack — captures ride one UDP
+            # packet. Payload is 3 Euler triples in degrees:
+            #   bytes 8..20  = neutral       (roll, pitch, yaw)
+            #   bytes 20..32 = pitch_forward (roll, pitch, yaw)
+            #   bytes 32..44 = yaw_left      (roll, pitch, yaw)
+            # Server converts each triple to a body-to-world unit
+            # quat via quat_from_euler_zyx_deg (the same convention
+            # the puck's orient stream uses) before dispatching to
+            # _apply_aim_wizard_to_remote.
+            if len(data) < 44:
+                log.warning("GYRO_AIM_WIZARD from %s: payload too short "
+                            "(%d bytes, expected 44)", ip, len(data))
+                continue
+            try:
+                from remote_math import quat_from_euler_zyx_deg as _qfe
+                eu = struct.unpack_from("<9f", data, 8)
+                poses = {
+                    "neutral":       _qfe(eu[0], eu[1], eu[2]),
+                    "pitch_forward": _qfe(eu[3], eu[4], eu[5]),
+                    "yaw_left":      _qfe(eu[6], eu[7], eu[8]),
+                }
+                did_wiz = f"gyro-{ip}"
+                _gyro_touch_remote(did_wiz)
+                r = _remotes.by_device(did_wiz)
+                if r is None:
+                    r = _auto_register_remote(did_wiz, kind=KIND_PUCK)
+                ok_, resp, status = _apply_aim_wizard_to_remote(r, poses)
+                if ok_:
+                    _remotes.save()
+                    log.info("GYRO_AIM_WIZARD from %s — derived forward=%s up=%s",
+                             ip, resp.get("forwardLocal"), resp.get("upLocal"))
+                else:
+                    log.warning("GYRO_AIM_WIZARD from %s rejected: %s",
+                                 ip, resp)
+            except Exception as e:
+                log.error("GYRO_AIM_WIZARD handler failed: %s", e, exc_info=True)
         elif cmd == CMD_GYRO_START:
             # #813 §4 — explicit press-START. Server-side handshake:
             # resolve fixture+mover, claim, start stream, lights on

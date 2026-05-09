@@ -59,6 +59,16 @@ void gyroUdpSendStop();
 // with blackout=True so the head goes dark.
 void gyroUdpSendOff();
 
+// #869 — empirical aim-axis wizard. Send three captured Euler triples
+// in degrees (roll, pitch, yaw) for {neutral, pitch-forward, yaw-left}.
+// Server converts to body-to-world unit quats and runs the same
+// _aim_wizard_compute math the Android wizard (#826) uses; persists
+// derived forward_local/up_local on the puck's Remote. One-shot fire-
+// and-forget; no retry.
+void gyroUdpSendAimWizard(const float eulerNeutral[3],
+                          const float eulerPitchForward[3],
+                          const float eulerYawLeft[3]);
+
 // Send CMD_GYRO_COLOR (0x63) to parent — colour preset or flash pulse.
 // flags bit0 = flash (brief full-brightness pulse)
 void gyroUdpSendColor(uint8_t r, uint8_t g, uint8_t b, uint8_t flags);

@@ -96,7 +96,7 @@ static void hueToRGB(int16_t hue, uint8_t* r, uint8_t* g, uint8_t* b) {
 // reverts to IDLE with a brief "BUSY" indication; an overall timeout
 // (~1500 ms — comfortably longer than the 750 ms retry budget) reverts
 // with a "NO RESPONSE" indication.
-enum class UIState : uint8_t { LOGO, IDLE, WAITING_ACK, ACTIVE };
+enum class UIState : uint8_t { LOGO, IDLE, WAITING_ACK, ACTIVE, WIZARD };
 
 static constexpr uint16_t START_ACK_TIMEOUT_MS = 1500;
 
@@ -156,6 +156,17 @@ static float s_calibLastYaw   = 0.0f;
 // paints the Settings page so operators can reach battery info and
 // Sleep before starting. Swipe back to clear.
 static bool s_idleSettings = false;
+
+// #869 — empirical aim-axis wizard state. Reached from the IDLE-
+// Settings page; captures three Euler triples (neutral / pitch_fwd /
+// yaw_left) and ships them in one CMD_GYRO_AIM_WIZARD packet so the
+// orchestrator derives forward_local / up_local the same way the
+// Android wizard (#826) does. Strictly additive — no other state
+// machine touches s_wizStep, and entry/exit only happens in the
+// WIZARD-state branches. Android claim path is untouched.
+static uint8_t s_wizStep = 0;        // 0=neutral, 1=pitch, 2=yaw, 3=sent
+static float   s_wizEulers[3][3] = {0};  // [step][roll, pitch, yaw]
+static unsigned long s_wizSentMs = 0;
 
 // #825 — press-Start handshake bookkeeping. s_startNonce is the nonce we
 // advertised on the wire; the matching CLAIM_ACK from the server carries
@@ -609,6 +620,11 @@ static void drawBatteryInfo() {
 static void drawSettingsPage() {
     gyroClearScreen(GC_BLACK);
     gyroDrawText(CX - 27, 32, "SETTINGS", 1, GC_CYAN);
+    // #869 — wizard entry pill, only on the IDLE-Settings overlay.
+    // The ACTIVE-page-4 path also draws Settings but the operator
+    // shouldn't enter the wizard mid-claim — gating on s_idleSettings
+    // keeps the affordance scoped to the pre-claim setup phase.
+    if (s_state == UIState::IDLE && s_idleSettings) drawWizPill();
 
     drawBatteryInfo();
 
@@ -645,6 +661,89 @@ static void drawSettingsPage() {
     }
 
     drawPageDots();
+}
+
+// ── #869 wizard-page geometry + helpers ─────────────────────────────────────
+// Operator-visible affordance: small "WIZ" pill at the top of the
+// IDLE-Settings page so the wizard isn't reachable mid-claim. The
+// hit-rect is sized to be touch-comfortable on the 1.28" round LCD
+// without overlapping the existing battery / WiFi / SLEEP zones.
+static constexpr int16_t WIZ_PILL_X = CX - 24;
+static constexpr int16_t WIZ_PILL_Y = 14;
+static constexpr int16_t WIZ_PILL_W = 48;
+static constexpr int16_t WIZ_PILL_H = 16;
+
+static bool hitWizPill(int16_t tx, int16_t ty) {
+    return (tx >= WIZ_PILL_X && tx <= WIZ_PILL_X + WIZ_PILL_W
+            && ty >= WIZ_PILL_Y && ty <= WIZ_PILL_Y + WIZ_PILL_H);
+}
+
+static void drawWizPill() {
+    gyroFillRect(WIZ_PILL_X, WIZ_PILL_Y, WIZ_PILL_W, WIZ_PILL_H,
+                 (uint16_t)0x2104u);  // dark navy
+    gyroDrawText(WIZ_PILL_X + 12, WIZ_PILL_Y + 5, "WIZ", 1, GC_CYAN);
+}
+
+static void drawWizardPage() {
+    gyroClearScreen(GC_BLACK);
+    gyroDrawText(CX - 33, 28, "AIM WIZARD", 1, GC_CYAN);
+
+    // Step prompt — short enough to fit on the round LCD without
+    // overflowing past the circular bezel.
+    const char* prompt1 = "";
+    const char* prompt2 = "";
+    switch (s_wizStep) {
+        case 0:
+            prompt1 = "Hold puck aimed";
+            prompt2 = "at head, then tap";
+            break;
+        case 1:
+            prompt1 = "Tip puck FORWARD";
+            prompt2 = "(toward floor), tap";
+            break;
+        case 2:
+            prompt1 = "Yaw to STAGE-LEFT";
+            prompt2 = "(audience right), tap";
+            break;
+        default:
+            prompt1 = "Wizard saved.";
+            prompt2 = "";
+            break;
+    }
+    gyroDrawText(CX - (int16_t)(strlen(prompt1) * 3), 56, prompt1, 1, GC_WHITE);
+    gyroDrawText(CX - (int16_t)(strlen(prompt2) * 3), 70, prompt2, 1, GC_GREY);
+
+    // Capture button (or "DONE" indicator on step 3).
+    if (s_wizStep < 3) {
+        gyroFillCircle(CX, CY + 20, BTN_MAIN_R - 18, (uint16_t)0x0410u);  // teal
+        gyroDrawCircle(CX, CY + 20, BTN_MAIN_R - 18, GC_CYAN);
+        char lbl[12];
+        snprintf(lbl, sizeof(lbl), "TAP %u/3", (unsigned)(s_wizStep + 1));
+        int16_t tw = (int16_t)(strlen(lbl) * 6);
+        gyroDrawText(CX - tw / 2, CY + 14, lbl, 1, GC_WHITE);
+    } else {
+        gyroFillCircle(CX, CY + 20, BTN_MAIN_R - 18, (uint16_t)0x0480u);  // green
+        gyroDrawText(CX - 18, CY + 14, "SAVED", 1, GC_WHITE);
+    }
+
+    gyroDrawText(28, 220, "swipe to cancel", 1, GC_DKGREY);
+}
+
+// Capture the puck's current orientation into the s_wizEulers slot
+// for the active step. After step 2, ship the triple as one
+// CMD_GYRO_AIM_WIZARD packet and bounce back to IDLE.
+static void wizardCaptureCurrentStep() {
+    if (s_wizStep > 2) return;
+    float r = 0, p = 0, y = 0;
+    gyroIMURead(&r, &p, &y);
+    s_wizEulers[s_wizStep][0] = r;
+    s_wizEulers[s_wizStep][1] = p;
+    s_wizEulers[s_wizStep][2] = y;
+    s_wizStep++;
+    if (s_wizStep == 3) {
+        gyroUdpSendAimWizard(s_wizEulers[0], s_wizEulers[1], s_wizEulers[2]);
+        s_wizSentMs = millis();
+    }
 }
 
 // ── Page dispatch ────────────────────────────────────────────────────────────
@@ -933,6 +1032,46 @@ void gyroUIUpdate() {
         if (!s_sleepHeld) {
             s_sleepHeld = true;
             drawSettingsPage();
+        }
+    }
+
+    // #869 — wizard pill on the IDLE-Settings overlay. Quick tap (not
+    // a hold) enters the wizard. Strictly additive: state machine
+    // transitions only into UIState::WIZARD which has its own
+    // handling block below.
+    if (s_state == UIState::IDLE && s_idleSettings && touching
+        && gesture == TOUCH_GEST_NONE && !s_wasTouching && hitWizPill(tx, ty)) {
+        s_state = UIState::WIZARD;
+        s_wizStep = 0;
+        s_idleSettings = false;
+        drawWizardPage();
+    }
+
+    // #869 — WIZARD state. Tap (not hold) on the centre button captures
+    // the current Euler triple for the active step and advances. Step 3
+    // means all captures are sent; auto-return to IDLE after a brief
+    // confirmation. Any swipe gesture cancels and bounces back.
+    if (s_state == UIState::WIZARD) {
+        bool isCancelSwipe = (gesture == TOUCH_GEST_SWIPE_LEFT
+                               || gesture == TOUCH_GEST_SWIPE_RIGHT
+                               || gesture == TOUCH_GEST_SWIPE_UP
+                               || gesture == TOUCH_GEST_SWIPE_DOWN);
+        if (isCancelSwipe) {
+            s_state = UIState::IDLE;
+            s_wizStep = 0;
+            s_idleSettings = true;
+            drawSettingsPage();
+        } else if (touching && !s_wasTouching && s_wizStep < 3
+                    && hitCircle(tx, ty, CX, CY + 20, BTN_MAIN_R - 18)) {
+            wizardCaptureCurrentStep();
+            drawWizardPage();
+        } else if (s_wizStep == 3 && (millis() - s_wizSentMs) > 1500) {
+            // Brief "Wizard saved" confirmation has been on screen
+            // long enough — return to IDLE. Operator can now claim
+            // a head and the new axes are in effect.
+            s_state = UIState::IDLE;
+            s_wizStep = 0;
+            drawIdle();
         }
     }
 
