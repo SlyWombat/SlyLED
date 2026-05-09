@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.105"
+VERSION = "1.7.106"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -13427,15 +13427,26 @@ def api_dmx_fixture_channels(fid):
                       "capabilities": [{"range": [0, 255], "type": "Intensity", "label": f"Ch {i+1} 0-100%"}]}
                     for i in range(count)]
     # Read current values from universe buffer; fall back to profile default
+    # ONLY when no engine is driving the universe.
+    #
+    # #863 — pre-fix this substituted the profile default for any channel
+    # whose buffer value was 0, even with the engine running. That made
+    # every legitimate "wire is currently 0" report a lie (e.g. dimmer-out
+    # claim ticks reading back as the profile's default 128). QA pollers
+    # built on this endpoint silently masked freezes / wire-stuck-at-0
+    # bugs (this is the read-side artifact behind one of the symptoms in
+    # #862). Now: real engine, real value — including 0.
     for ch in channels:
         dmx_addr = addr + ch["offset"]
         val = 0
+        engine_running = False
         if _artnet.running:
             val = _artnet.get_universe(uni).get_channel(dmx_addr)
+            engine_running = True
         elif _sacn.running:
             val = _sacn.get_universe(uni).get_channel(dmx_addr)
-        # If engine isn't running or channel is 0, use profile default
-        if val == 0 and ch.get("default", 0) > 0:
+            engine_running = True
+        if not engine_running and ch.get("default", 0) > 0:
             val = ch["default"]
         ch["value"] = val
     pan_range = profile.get("panRange", 0) if profile else 0
@@ -18809,6 +18820,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
