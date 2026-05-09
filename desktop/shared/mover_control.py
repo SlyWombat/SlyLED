@@ -667,14 +667,18 @@ class MoverControlEngine:
                     # for this tick. Non-pan/tilt state (dimmer, colour)
                     # still flows below.
                     if pan_norm is not None and tilt_norm is not None:
-                        if not claim.have_pan_tilt:
-                            claim.pan_smooth  = pan_norm
-                            claim.tilt_smooth = tilt_norm
-                            claim.have_pan_tilt = True
-                        else:
-                            alpha = max(0.0, min(1.0, 1.0 - claim.smoothing))
-                            claim.pan_smooth  += alpha * (pan_norm  - claim.pan_smooth)
-                            claim.tilt_smooth += alpha * (tilt_norm - claim.tilt_smooth)
+                        # #868 — no software smoothing. The pan/tilt-
+                        # speed DMX channel (when the profile defines
+                        # one) is the only smoothing mechanism: written
+                        # by `_write_dmx` from `claim.smoothing`.
+                        # Profiles without that channel send unsmoothed
+                        # moves at full IK rate. The legacy EMA caused
+                        # a hard freeze when `claim.smoothing == 1.0`
+                        # because `alpha = 1 - smoothing = 0` and
+                        # `pan_smooth += 0 * delta` is a no-op.
+                        claim.pan_smooth  = pan_norm
+                        claim.tilt_smooth = tilt_norm
+                        claim.have_pan_tilt = True
                         have_aim = True
                         # #806 — this orient tick has a clean stage-frame
                         # aim vector in hand. Push it to the canonical
@@ -846,6 +850,18 @@ class MoverControlEngine:
         if include_pan_tilt:
             uni_buf.set_fixture_pan_tilt(addr, claim.pan_smooth,
                                          claim.tilt_smooth, profile)
+            # #868 — pan/tilt motor-speed smoothing is the fixture's
+            # job, not ours. When the profile defines a `pan-tilt-speed`
+            # channel, drive it from `claim.smoothing` (operator-facing
+            # 0=fast..1=slow). Profiles without the channel skip this
+            # block and inherit the engine's unsmoothed IK rate, which
+            # is correct: the operator can't ask for what the fixture
+            # can't accept.
+            ch_map = prof_info.get("channel_map", {})
+            if "pan-tilt-speed" in ch_map:
+                pts_offset = ch_map["pan-tilt-speed"]
+                speed_dmx = max(0, min(255, int(round(claim.smoothing * 255))))
+                uni_buf.set_channel(addr + pts_offset, speed_dmx)
         # #853 — render-time scaling removed; the ArtNet engine's
         # send-time master grand-master gate (`get_data_scaled` with
         # gamma-corrected scaling on intensity-class channels) handles
@@ -868,7 +884,9 @@ class MoverControlEngine:
         # Channel defaults + strobe override.
         for ch in prof_info.get("channels", []):
             ch_type = ch.get("type", "")
-            if ch_type in ("pan", "tilt", "dimmer", "red", "green", "blue",
+            if ch_type in ("pan", "tilt", "pan-fine", "tilt-fine",
+                           "pan-tilt-speed",
+                           "dimmer", "red", "green", "blue",
                            "color-wheel"):
                 continue
             default = ch.get("default")
