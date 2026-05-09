@@ -617,6 +617,10 @@ static void drawBatteryInfo() {
     if (barW > 0) gyroFillRect(52, 102, barW, 6, col);
 }
 
+// #869 — forward-decl so drawSettingsPage can paint the wizard pill
+// before the full wizard helper block is defined further down.
+static void drawWizPill();
+
 static void drawSettingsPage() {
     gyroClearScreen(GC_BLACK);
     gyroDrawText(CX - 27, 32, "SETTINGS", 1, GC_CYAN);
