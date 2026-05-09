@@ -1539,13 +1539,44 @@ def generate_show(theme_id, fixtures, layout, stage, profile_lib=None):
                         "non-tracking preset."),
             }
         else:
-            tracks = [{"allPerformers": True, "clips": [
+            # Pre-fix this branch emitted ONLY the Track action and
+            # left LEDs / DMX pars completely silent — the runtime DMX
+            # loop evaluates type-18 segments for movers (pan/tilt
+            # only), so LED fixtures with only a type-18 segment in
+            # their bake stayed dark for the entire show. Add a base
+            # wash so non-mover fixtures still light from the theme's
+            # palette while the movers track. Track action stays on a
+            # higher-priority allPerformers track so its dimmer/r/g/b
+            # still wins on movers.
+            base_actions = _generate_base_actions(theme, led_fx, dmx_pars, [])
+            tracks = []
+            led_base = next((b for b in base_actions
+                              if b.get("targets") == "led"), None)
+            par_base = next((b for b in base_actions
+                              if b.get("targets") == "dmx_par"), None)
+            if led_base:
+                for lf in led_fx:
+                    tracks.append({
+                        "fixtureId": lf["id"],
+                        "clips": [{"_action_ref": led_base, "startS": 0,
+                                    "durationS": dur}],
+                        "_layer": "base",
+                    })
+            if par_base:
+                for pf in dmx_pars:
+                    tracks.append({
+                        "fixtureId": pf["id"],
+                        "clips": [{"_action_ref": par_base, "startS": 0,
+                                    "durationS": dur}],
+                        "_layer": "base",
+                    })
+            tracks.append({"allPerformers": True, "clips": [
                 {"_action_ref": track_action[0], "startS": 0, "durationS": dur}
-            ], "_layer": "track"}]
+            ], "_layer": "track"})
             return {
                 "name": theme["name"],
                 "durationS": dur,
-                "base_actions": [],
+                "base_actions": base_actions,
                 "mover_actions": track_action,
                 "effects": [],
                 "tracks": tracks,

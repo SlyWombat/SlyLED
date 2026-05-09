@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.104"
+VERSION = "1.7.105"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -16629,7 +16629,14 @@ def _install_preset_show(preset_id):
             track = {}
             if gen_track.get("allPerformers"):
                 track["allPerformers"] = True
-            elif gen_track.get("fixtureId"):
+            elif "fixtureId" in gen_track:
+                # Compare presence, not truthiness — fixture id 0 is a
+                # legal id and was being silently dropped here. Symptom:
+                # the very first fixture created on a fresh project (id
+                # auto-starts at 0) had no per-fixture base-wash track in
+                # any preset's timeline, so it sat dark or only saw
+                # allPerformers segments. Caught by the template-sweep
+                # participation test.
                 track["fixtureId"] = gen_track["fixtureId"]
             else:
                 continue
@@ -18802,6 +18809,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 

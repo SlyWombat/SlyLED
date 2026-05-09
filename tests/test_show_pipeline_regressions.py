@@ -1011,6 +1011,98 @@ def test_865_bar_array_bake_every_clip_drives_every_bar():
                     f"segs={[(round(s.get('startS',0),1), round(s.get('durationS',0),1)) for s in segs]}")
 
 
+def test_template_sweep_every_theme_drives_leds():
+    """Sweep every preset in show_generator.THEMES on a mixed rig
+    (movers + LED bars + LED par strip) and assert each LED fixture
+    produces ≥1 baked segment. Catches themes whose generator branch
+    forgets the LED layer — operator-visible symptom is "preset loads
+    but the LED strips stay dark." Fails loud per-theme so a regression
+    in any branch (live_track / ribbon / bar_array / normal) is named.
+    """
+    print("\n-- test_template_sweep_every_theme_drives_leds --")
+    from show_generator import THEMES, generate_show
+    from bake_engine import bake_timeline
+
+    skip = set()  # populated below if we discover themes that need
+                  # other-than-mixed rigs and document them explicitly.
+
+    for theme_id in list(THEMES.keys()):
+        if theme_id in skip:
+            continue
+        with parent_server.app.test_client() as c:
+            c.post("/api/reset", headers={"X-SlyLED-Confirm": "true"})
+            # Mixed rig: 2 vertical LED bars (covers bar_array's bar
+            # heuristic), 1 LED par strip (covers normal LED path), 2
+            # DMX movers (lets ribbon / live_track branches activate).
+            led_bar_a = _setup_vertical_bar(c, "swp-bar-A", x_mm=1500)
+            led_bar_b = _setup_vertical_bar(c, "swp-bar-B", x_mm=4500)
+            r = c.post("/api/fixtures", json={
+                "name": "swp-par-strip", "type": "linear",
+                "fixtureType": "led",
+                "strings": [{"leds": 32, "mm": 800, "sdir": 0}],
+                "rotation": [0, 0, 0],
+            })
+            led_par = r.get_json()["id"]
+            parent_server._layout.setdefault("children", []).append(
+                {"id": led_par, "x": 3000, "y": 1500, "z": 0})
+
+            mover_a = _setup_mover_fixture(c, "swp-mover-A", addr=1)
+            mover_b = _setup_mover_fixture(c, "swp-mover-B", addr=20)
+
+            led_ids = [led_bar_a, led_bar_b, led_par]
+
+            # Install path — surfaces install errors directly.
+            r = c.post("/api/show/preset", json={"id": theme_id})
+            body = r.get_json()
+            ok_install = (r.status_code == 200
+                          and body and body.get("ok"))
+            _ok(ok_install,
+                f"theme '{theme_id}' install path returns ok",
+                f"status={r.status_code} body={body}")
+            if not ok_install:
+                continue
+
+            # Bake the freshly-installed timeline and inspect per-LED
+            # segments. The bake's own "fixtures" map keys by fixture id.
+            tid = body["timelineId"]
+            tl = next(t for t in parent_server._timelines if t["id"] == tid)
+            try:
+                baked = bake_timeline(
+                    tl,
+                    parent_server._fixtures,
+                    parent_server._spatial_fx,
+                    parent_server._layout,
+                    actions=parent_server._actions,
+                    profile_lib=parent_server._profile_lib,
+                )
+            except Exception as e:
+                _ok(False,
+                    f"theme '{theme_id}' bake raised {type(e).__name__}: {e}",
+                    "")
+                continue
+
+            for fid in led_ids:
+                segs = (baked["fixtures"].get(fid) or {}).get("segments") or []
+                _ok(bool(segs),
+                    f"theme '{theme_id}' produces ≥1 segment for LED {fid}",
+                    f"fixture {fid} got 0 segments — LEDs would be dark "
+                    f"under this preset")
+                # Tighter check: at least one segment must be a non-track
+                # (type 18) action. Type 18 is the live-tracking primitive
+                # the runtime DMX loop evaluates for movers only — on an
+                # LED fixture it carries no r/g/b drive, so an LED that
+                # has ONLY a type-18 segment would still sit dark even
+                # though `len(segs) > 0`. The original live_track branch
+                # in show_generator emitted exactly this: a single
+                # allPerformers Track action and nothing else.
+                non_track = [s for s in segs if s.get("type") != 18]
+                _ok(bool(non_track),
+                    f"theme '{theme_id}' LED {fid} has a non-Track-action "
+                    f"segment (something that actually drives r/g/b)",
+                    f"all {len(segs)} segments are type 18 (ACT_TRACK) — "
+                    f"LEDs would not light under this preset")
+
+
 def test_865_bar_array_rejects_when_under_two_bars():
     """#865 — generator returns the structured 'needs_bars' error for
     rigs with 0 or 1 bar so the SPA can show a clear message instead of
