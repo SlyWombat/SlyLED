@@ -214,6 +214,128 @@ def test_d1mini_uses_releaseasset_when_no_ota_asset():
                 f"D1 single-binary serves cleanly (got {r.status_code})")
 
 
+# ── #873 — otaSha256 verification on serve ───────────────────────────────────
+
+import hashlib
+
+
+def _sha256_hex(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def test_873_sha_mismatch_refuses_serve_with_502():
+    """Registry pins SHA `X`; cache contains a binary with SHA `Y` ≠ `X`.
+    Pre-#873 the orchestrator would have served the corrupted bytes
+    unchallenged (the 2 MB size guard from #870 only catches gross
+    poisoning, not sub-2-MB drift). Post-#873 the proxy refuses with
+    502 and an operator-facing error pointing at the cache path."""
+    with _Sandbox() as sb:
+        # Cache binary is 1 MB of zeros → has its own deterministic SHA.
+        cache_data = b"\x00" * 1_000_000
+        actual_sha = _sha256_hex(cache_data)
+        # Pin a DIFFERENT SHA in the registry so verification fails.
+        pinned_sha = _sha256_hex(b"different bytes")
+        sb.patch_registry([{
+            "id": "child-led-esp32",
+            "releaseTag": "esp32-v7.5.15",
+            "releaseAsset": "esp32-firmware-merged.bin",
+            "otaAsset": "esp32-firmware-app.bin",
+            "otaSha256": pinned_sha,
+        }])
+        cache = parent_server._FW_CACHE_DIR / "esp32" / "main.ino.app.bin"
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_bytes(cache_data)
+        with parent_server.app.test_client() as c:
+            r = c.get("/api/firmware/binary/esp32")
+        _assert(r.status_code == 502,
+                f"SHA mismatch → 502 (got {r.status_code})")
+        body = r.get_json() or {}
+        err = (body.get("err") or "").lower()
+        _assert("otasha256" in err or "mismatch" in err,
+                f"error names otaSha256 / mismatch (got {body.get('err')!r})")
+        _ = actual_sha  # actual_sha differs from pinned; documented inline
+
+
+def test_873_sha_match_serves_200():
+    """Registry pins SHA `X`; cache contains binary with SHA `X` →
+    serves 200 with the bytes."""
+    with _Sandbox() as sb:
+        cache_data = b"\x42" * 800_000
+        sha = _sha256_hex(cache_data)
+        sb.patch_registry([{
+            "id": "child-led-esp32",
+            "releaseTag": "esp32-v7.5.15",
+            "releaseAsset": "esp32-firmware-merged.bin",
+            "otaAsset": "esp32-firmware-app.bin",
+            "otaSha256": sha,
+        }])
+        cache = parent_server._FW_CACHE_DIR / "esp32" / "main.ino.app.bin"
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_bytes(cache_data)
+        with parent_server.app.test_client() as c:
+            r = c.get("/api/firmware/binary/esp32")
+        _assert(r.status_code == 200,
+                f"SHA match → 200 (got {r.status_code})")
+        _assert(len(r.data) == len(cache_data),
+                f"served bytes match cache ({len(r.data)})")
+
+
+def test_873_no_sha_pin_falls_through_for_back_compat():
+    """Registry without `otaSha256` (pre-#873 entries) → unverified
+    serve. Critical for back-compat: an old registry pulled from
+    GitHub / APPDATA shouldn't 502 just because the SHA pin is
+    missing — it falls through to the size-guard-only path that
+    #870 established."""
+    with _Sandbox() as sb:
+        cache_data = b"\xab" * 600_000
+        sb.patch_registry([{
+            "id": "child-led-esp32",
+            "releaseTag": "esp32-v7.5.15",
+            "releaseAsset": "esp32-firmware-merged.bin",
+            "otaAsset": "esp32-firmware-app.bin",
+            # No otaSha256 — pre-#873 registry shape.
+        }])
+        cache = parent_server._FW_CACHE_DIR / "esp32" / "main.ino.app.bin"
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_bytes(cache_data)
+        with parent_server.app.test_client() as c:
+            r = c.get("/api/firmware/binary/esp32")
+        _assert(r.status_code == 200,
+                f"no SHA pin → unverified serve (got {r.status_code})")
+        _assert(len(r.data) == len(cache_data),
+                f"served bytes ({len(r.data)})")
+
+
+def test_873_d1mini_uses_legacy_sha256_pin():
+    """D1 Mini has no merged-vs-app distinction — the single binary
+    is the OTA asset and the integrity pin lives on `sha256` (no
+    `otaSha256` because there's no second flavour to disambiguate).
+    The route must still verify it."""
+    with _Sandbox() as sb:
+        cache_data = b"\x99" * 350_000
+        sha = _sha256_hex(cache_data)
+        sb.patch_registry([{
+            "id": "child-led-d1mini",
+            "releaseTag": "d1mini-v7.5.14",
+            "releaseAsset": "d1mini-firmware.bin",
+            "sha256": sha,
+        }])
+        local = parent_server._FW_DIR / "d1mini" / "main.ino.bin"
+        local.parent.mkdir(parents=True, exist_ok=True)
+        local.write_bytes(cache_data)
+        with parent_server.app.test_client() as c:
+            r = c.get("/api/firmware/binary/d1mini")
+        _assert(r.status_code == 200,
+                f"D1 SHA match → 200 (got {r.status_code})")
+
+        # Now corrupt the binary and confirm refusal.
+        local.write_bytes(b"\x00" * 350_000)
+        with parent_server.app.test_client() as c:
+            r = c.get("/api/firmware/binary/d1mini")
+        _assert(r.status_code == 502,
+                f"D1 SHA mismatch → 502 (got {r.status_code})")
+
+
 # ── Test registry ────────────────────────────────────────────────────────────
 
 ALL = [
@@ -223,6 +345,10 @@ ALL = [
     test_local_fw_dir_takes_priority_over_cache,
     test_registry_without_ota_asset_refuses_with_502,
     test_d1mini_uses_releaseasset_when_no_ota_asset,
+    test_873_sha_mismatch_refuses_serve_with_502,
+    test_873_sha_match_serves_200,
+    test_873_no_sha_pin_falls_through_for_back_compat,
+    test_873_d1mini_uses_legacy_sha256_pin,
 ]
 
 

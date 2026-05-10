@@ -129,15 +129,11 @@ def test_send_stop_ack_payload_shape():
 # 3. Source-level: START handler parses nonce + sends ACK + arms arm-check.
 
 def _start_handler_body():
+    """#874 — the inline `elif cmd == CMD_GYRO_START:` branch was
+    extracted to `_handle_gyro_start_packet(ip, data)` so the
+    contract is directly testable. Inspect that function's source."""
     import inspect
-    src = inspect.getsource(parent_server)
-    marker = "elif cmd == CMD_GYRO_START:"
-    i = src.find(marker)
-    if i < 0:
-        return ""
-    rest = src[i:]
-    j = rest[len(marker):].find("\n        elif cmd ==")
-    return rest if j < 0 else rest[:len(marker) + j]
+    return inspect.getsource(parent_server._handle_gyro_start_packet)
 
 
 def test_start_handler_parses_nonce():
@@ -231,21 +227,27 @@ def test_touch_remote_helper_present():
             "_gyro_touch_remote helper defined")
     # Spot-check every gyro CMD branch invokes it (or is ORIENT, which
     # implicitly touches via _apply_quat → last_data = time.time()).
-    for branch_marker in (
-        "elif cmd == CMD_GYRO_STOP:",
-        "elif cmd == CMD_GYRO_START:",
-        "elif cmd == CMD_GYRO_BATT and len(data) >= 12:",
-        "elif cmd == CMD_GYRO_COLOR and len(data) >= 12:",
-        "elif cmd == CMD_GYRO_CALIBRATE and len(data) >= 15:",
-        "elif cmd == CMD_GYRO_HEARTBEAT_REP and len(data) >= 13:",
-    ):
-        i = src.find(branch_marker)
-        if i < 0:
-            _assert(False, f"{branch_marker} present")
-            continue
-        rest = src[i:]
-        j = rest[len(branch_marker):].find("\n        elif cmd ==")
-        body = rest if j < 0 else rest[:len(branch_marker) + j]
+    branches = (
+        ("elif cmd == CMD_GYRO_STOP:", None),
+        # #874 — START dispatch was extracted to
+        # `_handle_gyro_start_packet`; inspect that function directly.
+        ("elif cmd == CMD_GYRO_START:", parent_server._handle_gyro_start_packet),
+        ("elif cmd == CMD_GYRO_BATT and len(data) >= 12:", None),
+        ("elif cmd == CMD_GYRO_COLOR and len(data) >= 12:", None),
+        ("elif cmd == CMD_GYRO_CALIBRATE and len(data) >= 15:", None),
+        ("elif cmd == CMD_GYRO_HEARTBEAT_REP and len(data) >= 13:", None),
+    )
+    for branch_marker, extracted in branches:
+        if extracted is not None:
+            body = inspect.getsource(extracted)
+        else:
+            i = src.find(branch_marker)
+            if i < 0:
+                _assert(False, f"{branch_marker} present")
+                continue
+            rest = src[i:]
+            j = rest[len(branch_marker):].find("\n        elif cmd ==")
+            body = rest if j < 0 else rest[:len(branch_marker) + j]
         _assert("_gyro_touch_remote(" in body,
                 f"{branch_marker.split()[2].rstrip(':')} branch refreshes silence clock")
 

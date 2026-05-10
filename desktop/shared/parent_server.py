@@ -1740,144 +1740,9 @@ def _udp_listener():
             except Exception as e:
                 log.error("GYRO_AIM_WIZARD handler failed: %s", e, exc_info=True)
         elif cmd == CMD_GYRO_START:
-            # #813 §4 — explicit press-START. Server-side handshake:
-            # resolve fixture+mover, claim, start stream, lights on
-            # (§4.2 step 6), send CLAIM_ACK (idempotent retransmission
-            # protected by the nonce dedupe window — §3.2). No arm-check
-            # timer is scheduled; the claim lives until press-Stop /
-            # Inactive / 600 s all-comms-silence (§6.1 / §6.2 / §6.3).
-            gf = _gyro_fixture_for_ip(ip)
-            target_mover_id = gf.get("assignedMoverId") if gf else None
-            device_id = f"gyro-{ip}"
-            _gyro_touch_remote(device_id)  # §6.3 silence-clock
-            start_nonce = None
-            if len(data) >= 10:
-                try:
-                    (start_nonce,) = struct.unpack_from("<H", data, 8)
-                except Exception:
-                    start_nonce = None
-
-            # Idempotent retransmission: same nonce within the dedupe
-            # window just replays the cached response (ACK or DENIED) —
-            # no second claim attempt. #872: replays carry the original
-            # reason so the puck renders the same message it would have
-            # rendered for the first DENIED.
-            with _gyro_handshake_lock:
-                st_hs = _gyro_handshake.setdefault(device_id, {})
-                prev_nonce = st_hs.get("start_nonce")
-                prev_resp = st_hs.get("start_response")
-                prev_reason = st_hs.get("start_response_reason",
-                                        GYRO_DENIED_IDLE)
-                prev_ts = st_hs.get("ack_sent_ts") or 0
-                is_replay = (
-                    start_nonce is not None
-                    and prev_nonce == start_nonce
-                    and prev_resp is not None
-                    and (time.time() - prev_ts) < GYRO_HANDSHAKE_DEDUPE_S
-                )
-                cached_mover = st_hs.get("mover_id")
-            if is_replay:
-                log.debug("GYRO_START replay from %s nonce=%d resp=%s reason=%s",
-                          ip, start_nonce, prev_resp, prev_reason)
-                if prev_resp == "ack" and cached_mover is not None:
-                    _send_gyro_claim_ack(ip, start_nonce, cached_mover)
-                else:
-                    _send_gyro_claim_denied(ip, prev_reason)
-                continue
-
-            def _record_denied(reason):
-                """Send DENIED with `reason` and cache it so a same-nonce
-                retransmission replays the same reason (#872 §3.6)."""
-                _send_gyro_claim_denied(ip, reason)
-                with _gyro_handshake_lock:
-                    st_hs2 = _gyro_handshake.setdefault(device_id, {})
-                    st_hs2["start_nonce"] = start_nonce
-                    st_hs2["start_response"] = "denied"
-                    st_hs2["start_response_reason"] = reason
-                    st_hs2["ack_sent_ts"] = time.time()
-
-            # #801 / #872 — refuse GYRO_START when the controller is
-            # Inactive at the orchestrator level. Reason 1 lets the puck
-            # render "Gyro is disabled — enable in Setup" instead of the
-            # legacy ambiguous "Mover held by other".
-            if gf is not None and not gf.get("gyroEnabled"):
-                log.info("GYRO_START from %s nonce=%s — controller Inactive, refusing",
-                          ip, start_nonce)
-                _record_denied(GYRO_DENIED_CONTROLLER_INACTIVE)
-                continue
-            if target_mover_id is None:
-                # #872 — was silent pre-fix; puck timed out without an
-                # actionable error. Now sends DENIED with reason 3 so the
-                # puck renders "No moving head assigned".
-                log.info("GYRO_START from %s — no assigned mover, refusing", ip)
-                _record_denied(GYRO_DENIED_NO_MOVER_ASSIGNED)
-                continue
-            elif _mover_engine is None:
-                # #872 — was silent pre-fix; now reason 4.
-                log.warning("GYRO_START from %s — mover engine not available", ip)
-                _record_denied(GYRO_DENIED_ENGINE_UNAVAILABLE)
-                continue
-            else:
-                # #823 — press-Start IS the operator's "I'm using this
-                # remote now" gesture; clear any hard-stale flag on the
-                # matching Remote BEFORE the claim lands. Without this,
-                # the engine tick auto-releases the brand-new claim on
-                # its very next iteration (~25 ms later) when the Remote
-                # still carries `stale_reason="session-ended"` from the
-                # prior press-Stop. Same architectural argument as #812
-                # cleared `connection-lost` on resume — except press-
-                # Start is more explicit and shouldn't wait for an orient
-                # packet to do the clearing.
-                remote_pre = _remotes.by_device(device_id)
-                if remote_pre is not None and remote_pre.stale_reason is not None:
-                    log.info("GYRO_START from %s — clearing stale_reason=%s",
-                             ip, remote_pre.stale_reason)
-                    remote_pre.clear_stale()
-                dname = _gyro_device_name(ip, gf)
-                ok, reason = _mover_engine.claim(target_mover_id, device_id,
-                                                 dname, "gyro",
-                                                 smoothing=gf.get("smoothing", 0.15))
-                if not ok:
-                    log.info("GYRO_START from %s nonce=%s — claim DENIED (%s)",
-                              ip, start_nonce, reason)
-                    _record_denied(GYRO_DENIED_ALREADY_CLAIMED)
-                else:
-                    _mover_engine.start_stream(target_mover_id, device_id)
-                    # #813 §1.1 / §4.2 step 6 — turn the lights on.
-                    # Press-Start is the moment the head should visibly
-                    # come alive; pre-fix the operator had to hold-to-
-                    # calibrate before any output was produced.
-                    _gyro_lights_on(target_mover_id)
-                    if start_nonce is not None:
-                        _send_gyro_claim_ack(ip, start_nonce, target_mover_id)
-                        # Fire an immediate heartbeat so the puck has
-                        # something to reply to (HB_REP) right away.
-                        _send_gyro_heartbeat(ip)
-                        # Cache the nonce + response for idempotent START
-                        # retransmissions (#813 §3.2). No arm-check timer
-                        # is scheduled — the claim lives until §6.1 / §6.2
-                        # / §6.3 fires, never on a speculative deadline.
-                        with _gyro_handshake_lock:
-                            st_hs = _gyro_handshake.setdefault(device_id, {})
-                            st_hs["start_nonce"] = start_nonce
-                            st_hs["start_response"] = "ack"
-                            st_hs["ack_sent_ts"] = time.time()
-                            st_hs["mover_id"] = target_mover_id
-                        log.info(
-                            "GYRO_START from %s nonce=%d — claim+start_stream ok "
-                            "mover=%d (lights on, ACK + initial HB sent)",
-                            ip, start_nonce, target_mover_id)
-                    else:
-                        # Legacy puck (firmware ≤ v1.2.6, no nonce). Pre-
-                        # #825 behaviour: silent success, no ACK. The puck
-                        # advances UI on absence-of-DENIED; the orphan-
-                        # claim risk is exactly what #825 fixes for new
-                        # firmware, but back-compat keeps the old puck
-                        # working.
-                        log.info(
-                            "GYRO_START from %s (legacy, no nonce) — "
-                            "claim+start_stream ok mover=%d",
-                            ip, target_mover_id)
+            # #874 — extracted to a top-level callable for direct
+            # contract testing. Behavior unchanged.
+            _handle_gyro_start_packet(ip, data)
         elif cmd == CMD_GYRO_BATT and len(data) >= 12:
             # #813 follow-up — GyroBattPayload: vbat100(2) pct(1) flags(1).
             # Stamp into _gyro_state so /api/gyros and the SPA can surface
@@ -2057,6 +1922,153 @@ def _bootstrap_ssh_defaults():
             _ssh["sshKeyPath"] = key_path
         _save("ssh", _ssh)
         log.info("SSH defaults set: root/orangepi, key=%s", _ssh.get("sshKeyPath") or "(none)")
+
+def _handle_gyro_start_packet(ip, data):
+    """Top-level CMD_GYRO_START dispatch.
+
+    Extracted from `_udp_listener`'s in-line `elif cmd ==
+    CMD_GYRO_START:` branch (#874) so the contract is directly
+    testable — drive a synthetic packet at this function and assert
+    the wire output (`_send_gyro_claim_ack` / `_send_gyro_claim_denied`)
+    + claim-store side effects.
+
+    Behavior unchanged from the pre-#874 in-line dispatch. See
+    `docs/gyro-claim-lifecycle.md` §3.3 / §3.6 / §4.2 for the full
+    handshake spec the body implements."""
+    # #813 §4 — explicit press-START. Server-side handshake:
+    # resolve fixture+mover, claim, start stream, lights on
+    # (§4.2 step 6), send CLAIM_ACK (idempotent retransmission
+    # protected by the nonce dedupe window — §3.2). No arm-check
+    # timer is scheduled; the claim lives until press-Stop /
+    # Inactive / 600 s all-comms-silence (§6.1 / §6.2 / §6.3).
+    gf = _gyro_fixture_for_ip(ip)
+    target_mover_id = gf.get("assignedMoverId") if gf else None
+    device_id = f"gyro-{ip}"
+    _gyro_touch_remote(device_id)  # §6.3 silence-clock
+    start_nonce = None
+    if len(data) >= 10:
+        try:
+            (start_nonce,) = struct.unpack_from("<H", data, 8)
+        except Exception:
+            start_nonce = None
+
+    # Idempotent retransmission: same nonce within the dedupe
+    # window just replays the cached response (ACK or DENIED) —
+    # no second claim attempt. #872: replays carry the original
+    # reason so the puck renders the same message it would have
+    # rendered for the first DENIED.
+    with _gyro_handshake_lock:
+        st_hs = _gyro_handshake.setdefault(device_id, {})
+        prev_nonce = st_hs.get("start_nonce")
+        prev_resp = st_hs.get("start_response")
+        prev_reason = st_hs.get("start_response_reason",
+                                GYRO_DENIED_IDLE)
+        prev_ts = st_hs.get("ack_sent_ts") or 0
+        is_replay = (
+            start_nonce is not None
+            and prev_nonce == start_nonce
+            and prev_resp is not None
+            and (time.time() - prev_ts) < GYRO_HANDSHAKE_DEDUPE_S
+        )
+        cached_mover = st_hs.get("mover_id")
+    if is_replay:
+        log.debug("GYRO_START replay from %s nonce=%d resp=%s reason=%s",
+                  ip, start_nonce, prev_resp, prev_reason)
+        if prev_resp == "ack" and cached_mover is not None:
+            _send_gyro_claim_ack(ip, start_nonce, cached_mover)
+        else:
+            _send_gyro_claim_denied(ip, prev_reason)
+        return
+
+    def _record_denied(reason):
+        """Send DENIED with `reason` and cache it so a same-nonce
+        retransmission replays the same reason (#872 §3.6)."""
+        _send_gyro_claim_denied(ip, reason)
+        with _gyro_handshake_lock:
+            st_hs2 = _gyro_handshake.setdefault(device_id, {})
+            st_hs2["start_nonce"] = start_nonce
+            st_hs2["start_response"] = "denied"
+            st_hs2["start_response_reason"] = reason
+            st_hs2["ack_sent_ts"] = time.time()
+
+    # #801 / #872 — refuse GYRO_START when the controller is
+    # Inactive at the orchestrator level. Reason 1 lets the puck
+    # render "Gyro is disabled — enable in Setup" instead of the
+    # legacy ambiguous "Mover held by other".
+    if gf is not None and not gf.get("gyroEnabled"):
+        log.info("GYRO_START from %s nonce=%s — controller Inactive, refusing",
+                  ip, start_nonce)
+        _record_denied(GYRO_DENIED_CONTROLLER_INACTIVE)
+        return
+    if target_mover_id is None:
+        # #872 — was silent pre-fix; puck timed out without an
+        # actionable error. Now sends DENIED with reason 3 so the
+        # puck renders "No moving head assigned".
+        log.info("GYRO_START from %s — no assigned mover, refusing", ip)
+        _record_denied(GYRO_DENIED_NO_MOVER_ASSIGNED)
+        return
+    if _mover_engine is None:
+        # #872 — was silent pre-fix; now reason 4.
+        log.warning("GYRO_START from %s — mover engine not available", ip)
+        _record_denied(GYRO_DENIED_ENGINE_UNAVAILABLE)
+        return
+
+    # #823 — press-Start IS the operator's "I'm using this remote
+    # now" gesture; clear any hard-stale flag on the matching Remote
+    # BEFORE the claim lands. Without this, the engine tick auto-
+    # releases the brand-new claim on its very next iteration
+    # (~25 ms later) when the Remote still carries
+    # `stale_reason="session-ended"` from the prior press-Stop. Same
+    # architectural argument as #812 cleared `connection-lost` on
+    # resume — except press-Start is more explicit and shouldn't
+    # wait for an orient packet to do the clearing.
+    remote_pre = _remotes.by_device(device_id)
+    if remote_pre is not None and remote_pre.stale_reason is not None:
+        log.info("GYRO_START from %s — clearing stale_reason=%s",
+                 ip, remote_pre.stale_reason)
+        remote_pre.clear_stale()
+    dname = _gyro_device_name(ip, gf)
+    ok, reason = _mover_engine.claim(target_mover_id, device_id,
+                                     dname, "gyro",
+                                     smoothing=gf.get("smoothing", 0.15))
+    if not ok:
+        log.info("GYRO_START from %s nonce=%s — claim DENIED (%s)",
+                  ip, start_nonce, reason)
+        _record_denied(GYRO_DENIED_ALREADY_CLAIMED)
+        return
+    _mover_engine.start_stream(target_mover_id, device_id)
+    # #813 §1.1 / §4.2 step 6 — turn the lights on. Press-Start is
+    # the moment the head should visibly come alive; pre-fix the
+    # operator had to hold-to-calibrate before any output was produced.
+    _gyro_lights_on(target_mover_id)
+    if start_nonce is not None:
+        _send_gyro_claim_ack(ip, start_nonce, target_mover_id)
+        # Fire an immediate heartbeat so the puck has something
+        # to reply to (HB_REP) right away.
+        _send_gyro_heartbeat(ip)
+        # Cache the nonce + response for idempotent START
+        # retransmissions (#813 §3.2). No arm-check timer is
+        # scheduled — the claim lives until §6.1 / §6.2 / §6.3
+        # fires, never on a speculative deadline.
+        with _gyro_handshake_lock:
+            st_hs = _gyro_handshake.setdefault(device_id, {})
+            st_hs["start_nonce"] = start_nonce
+            st_hs["start_response"] = "ack"
+            st_hs["ack_sent_ts"] = time.time()
+            st_hs["mover_id"] = target_mover_id
+        log.info("GYRO_START from %s nonce=%d — claim+start_stream ok "
+                  "mover=%d (lights on, ACK + initial HB sent)",
+                  ip, start_nonce, target_mover_id)
+    else:
+        # Legacy puck (firmware ≤ v1.2.6, no nonce). Pre-#825
+        # behaviour: silent success, no ACK. The puck advances UI
+        # on absence-of-DENIED; the orphan-claim risk is exactly
+        # what #825 fixes for new firmware, but back-compat keeps
+        # the old puck working.
+        log.info("GYRO_START from %s (legacy, no nonce) — "
+                  "claim+start_stream ok mover=%d",
+                  ip, target_mover_id)
+
 
 def _send_gyro_claim_denied(ip, reason=GYRO_DENIED_IDLE):
     """#772 / #872 — fire-and-forget CMD_GYRO_CLAIM_DENIED to a puck
@@ -18302,13 +18314,39 @@ def api_fw_binary(board):
          with a clear error so the operator republishes instead of
          poisoning the cache.
     """
-    from firmware_manager import _registry_fetch_assets
+    from firmware_manager import _registry_fetch_assets, _verify_sha256
     rel_path = _OTA_APP_FILENAME.get(board)
     if not rel_path:
         return jsonify(ok=False, err=f"unknown board: {board}"), 404
     legacy_rel_path = {"esp32": "esp32/main.ino.bin",
                         "esp32s3": "esp32s3/main.ino.bin",
                         "d1mini": "d1mini/main.ino.bin"}.get(board)
+
+    # #873 — registry entry resolved up-front so the otaSha256 pin is
+    # available for verification regardless of which path produced
+    # bin_path (local FW dir / cache / fresh GitHub fetch). Pre-#873
+    # the entry was only loaded inside the GitHub-fetch branch, so
+    # SHA verification couldn't run on cache hits — the audit gap
+    # the issue describes.
+    reg = _resolve_registry()
+    board_to_fwid = {"esp32": "child-led-esp32",
+                      "d1mini": "child-led-d1mini",
+                      "esp32s3": "gyro-esp32s3"}
+    fwid = board_to_fwid.get(board)
+    entry = next((e for e in reg.get("firmware", [])
+                  if e.get("id") == fwid), None) if fwid else None
+    ota_asset = entry.get("otaAsset") if entry else None
+    # D1 Mini's single binary serves both flash + OTA, so
+    # `releaseAsset` is the OTA asset for it. ESP32 boards must
+    # carry `otaAsset` explicitly.
+    if not ota_asset and board == "d1mini" and entry:
+        ota_asset = entry.get("releaseAsset")
+    expected_sha = entry.get("otaSha256") if entry else None
+    # D1 Mini SHA pin (when present) lives on `sha256` because there's
+    # no merged-vs-app distinction.
+    if not expected_sha and board == "d1mini" and entry:
+        expected_sha = entry.get("sha256")
+
     candidates = [_FW_DIR / rel_path, _FW_DIR / legacy_rel_path,
                   _FW_CACHE_DIR / rel_path, _FW_CACHE_DIR / legacy_rel_path]
     bin_path = None
@@ -18327,23 +18365,6 @@ def api_fw_binary(board):
             break
 
     if bin_path is None:
-        # Look up the registry entry so we know which release tag +
-        # asset to fetch. #870: prefer `otaAsset` (app-only); reject
-        # the legacy `releaseAsset` fallback because that name pinned
-        # the merged binary, which OTA can't accept.
-        reg = _resolve_registry()
-        board_to_fwid = {"esp32": "child-led-esp32",
-                          "d1mini": "child-led-d1mini",
-                          "esp32s3": "gyro-esp32s3"}
-        fwid = board_to_fwid.get(board)
-        entry = next((e for e in reg.get("firmware", [])
-                      if e.get("id") == fwid), None) if fwid else None
-        ota_asset = entry.get("otaAsset") if entry else None
-        # D1 Mini's single binary serves both flash + OTA, so
-        # `releaseAsset` is the OTA asset for it. ESP32 boards must
-        # carry `otaAsset` explicitly.
-        if not ota_asset and board == "d1mini" and entry:
-            ota_asset = entry.get("releaseAsset")
         if entry and entry.get("releaseTag") and ota_asset:
             try:
                 import urllib.request as _ur
@@ -18392,6 +18413,37 @@ def api_fw_binary(board):
                    f"(registry entry missing releaseTag/otaAsset, or "
                    f"GitHub fetch failed)")
         return jsonify(ok=False, err=err), 502 if entry and not ota_asset else 404
+
+    # #873 — verify the resolved binary against the registry's
+    # otaSha256 pin before serving. `_verify_sha256` is tristate:
+    #   True  → match, serve.
+    #   False → confirmed mismatch (corrupted / wrong file at the
+    #           expected name); refuse with 502 and log. Operator
+    #           can clear the cache or republish the release.
+    #   None  → file couldn't be read (transient I/O, AV lock); log
+    #           a warning and serve anyway. The size-guard already
+    #           rejected the obvious case (merged binary), and a
+    #           transient read error here is no worse than the
+    #           pre-#873 behaviour where the same byte stream went
+    #           out unchallenged.
+    # Entries without otaSha256 fall through to the unverified-
+    # serve path so the route stays back-compat with registries
+    # that haven't been re-pinned by build_release.ps1 yet.
+    if expected_sha:
+        verdict = _verify_sha256(bin_path, expected_sha)
+        if verdict is False:
+            log.error("OTA SHA mismatch for %s: expected %s; refusing serve",
+                       board, expected_sha[:12])
+            return jsonify(
+                ok=False,
+                err=f"otaSha256 mismatch for {board} — cached binary "
+                    f"does not match the registry pin. Clear "
+                    f"%APPDATA%\\SlyLED\\firmware\\{board}\\ and retry."), 502
+        if verdict is None:
+            log.warning("OTA SHA verify could not read %s; serving "
+                         "without integrity check (transient I/O?)",
+                         bin_path)
+
     return send_file(str(bin_path), mimetype="application/octet-stream",
                      download_name=f"slyled-{board}.bin")
 
