@@ -328,17 +328,17 @@ class MoverControlEngine:
                 claim._prior_remote_convention = remote.convention
                 remote.set_convention(resolved_conv)
 
-        # #847 — trust cross-session puck calibration. Pre-fix every
+        # #847 — trust cross-session gyro calibration. Pre-fix every
         # claim started with `calibrated_here = False` and the tick
         # loop's `if … claim.calibrated_here …` gate at the orient →
         # pan/tilt path silently dropped every DMX write until the
         # operator ran calibrate-end this session. Operators with a
-        # puck already calibrated against this mover (R_world_to_stage
+        # gyro already calibrated against this mover (R_world_to_stage
         # set, calibrated_against.objectId == mover_id) saw a claim
         # that reported `calibrated: false`, panNorm/tiltNorm stuck at
         # 0.5, and `droppedWrites` ticking at 40 Hz — even though
         # AimSphere had everything it needed to resolve.
-        # Now: if the puck's persisted cal matches this mover and the
+        # Now: if the gyro's persisted cal matches this mover and the
         # mover has Home + Secondary anchors so AimSphere can resolve,
         # accept the cross-session cal as the calibration-of-record.
         # The original "don't trust persisted calibration" rationale
@@ -362,7 +362,7 @@ class MoverControlEngine:
                 and mover.get("homeTiltDmx16") is not None
                 and mover.get("homeSecondary")):
             claim.calibrated_here = True
-            log.info("Mover %d: trusted cross-session puck cal from %s "
+            log.info("Mover %d: trusted cross-session gyro cal from %s "
                      "(calibrated_against mover, R_world_to_stage set)",
                      mover_id, device_id)
         return True, "ok"
@@ -653,7 +653,7 @@ class MoverControlEngine:
 
             have_aim = False
             if claim.state == "streaming":
-                # Only drive pan/tilt from the puck once the operator has
+                # Only drive pan/tilt from the gyro once the operator has
                 # calibrated THIS session. Stale-across-restart calibration
                 # would point the fixture at the previous aim direction; we
                 # want the layout-forward seed held until re-calibration.
@@ -693,7 +693,7 @@ class MoverControlEngine:
             # Always write the non-pan/tilt claim state (dimmer, colour,
             # strobe, channel defaults) while streaming or calibrating —
             # that's what turns the light on. Pan/tilt are only written
-            # once `claim.have_pan_tilt` is true (i.e. a fresh puck aim
+            # once `claim.have_pan_tilt` is true (i.e. a fresh gyro aim
             # has overridden the seeded layout-forward position).
             if claim.state in ("streaming", "calibrating"):
                 self._write_dmx(mover, prof_info, claim,

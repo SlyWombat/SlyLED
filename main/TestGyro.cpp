@@ -1,5 +1,5 @@
 /*
- * TestGyro.cpp — diagnostic display + /imu HTTP for the gyro puck (#776).
+ * TestGyro.cpp — diagnostic display + /imu HTTP for the gyro controller (#776).
  */
 
 #include "BoardConfig.h"

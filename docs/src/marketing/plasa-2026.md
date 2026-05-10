@@ -29,7 +29,7 @@ price bracket attempts:
    cone with a single USB webcam, rejects reflections with a blink
    confirmation, and solves a parametric pan/tilt model to within
    100 mm of a commanded stage-mm point at 3 m throw. No beacons,
-   no IR wands, no pucks — commodity hardware only.
+   no IR wands, no gyros — commodity hardware only.
 
 2. **Local-first vision AI** — an integrated Ollama runtime runs
    small vision-language models on the operator's own machine to

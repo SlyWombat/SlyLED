@@ -76,8 +76,8 @@ def test_create_and_list():
     _clear_remotes()
     with app.test_client() as c:
         r = c.post("/api/remotes", json={
-            "name": "Test Puck",
-            "kind": "gyro-puck",
+            "name": "Test Gyro",
+            "kind": "gyro",
             "deviceId": "gyro-192.0.2.1",
             "pos": [1000, 2000, 1600],
         })
@@ -85,7 +85,7 @@ def test_create_and_list():
         rd = r.get_json()
         _assert(rd["ok"], "create ok")
         created_id = rd["remote"]["id"]
-        _assert(rd["remote"]["name"] == "Test Puck", "name persisted")
+        _assert(rd["remote"]["name"] == "Test Gyro", "name persisted")
         _assert(rd["remote"]["pos"] == [1000, 2000, 1600], "pos persisted")
 
         r = c.get("/api/remotes")
@@ -172,7 +172,7 @@ def test_calibrate_and_orient_flow():
     try:
         with app.test_client() as c:
             rid = c.post("/api/remotes",
-                         json={"name": "Cal", "kind": "gyro-puck"}).get_json()["remote"]["id"]
+                         json={"name": "Cal", "kind": "gyro"}).get_json()["remote"]["id"]
             # Initial orient sample — establishes last_quat_world
             c.post(f"/api/remotes/{rid}/orient",
                    json={"roll": 0, "pitch": 0, "yaw": 0})
@@ -235,7 +235,7 @@ def test_diagnostic_endpoint():
         d = r.get_json()
         _assert(d["rawQuat"] is None, "rawQuat None before orient")
         # #777 / #856 — body-forward default flipped from +Y to +X
-        # alongside the puck's BOTTOM_FORWARD → FLAT_PITCH_YAW switch.
+        # alongside the gyro's BOTTOM_FORWARD → FLAT_PITCH_YAW switch.
         _assert(d["bodyForwardLocal"] == [1.0, 0.0, 0.0],
                 "body forward convention (post-#777 +X-forward)")
         _assert(d["bodyUpLocal"] == [0.0, 0.0, 1.0], "body up convention")
@@ -368,7 +368,7 @@ def test_806_calibrate_end_reads_canonical():
     try:
         with app.test_client() as c:
             rid = c.post("/api/remotes",
-                         json={"name": "Cal806", "kind": "gyro-puck"}).get_json()["remote"]["id"]
+                         json={"name": "Cal806", "kind": "gyro"}).get_json()["remote"]["id"]
             c.post(f"/api/remotes/{rid}/orient",
                    json={"roll": 0, "pitch": 0, "yaw": 0})
             r = c.post(f"/api/remotes/{rid}/calibrate-end",
@@ -402,7 +402,7 @@ def test_805_no_silent_fallback_when_unresolvable():
     try:
         with app.test_client() as c:
             rid = c.post("/api/remotes",
-                         json={"name": "NoCal", "kind": "gyro-puck"}).get_json()["remote"]["id"]
+                         json={"name": "NoCal", "kind": "gyro"}).get_json()["remote"]["id"]
             c.post(f"/api/remotes/{rid}/orient",
                    json={"roll": 0, "pitch": 0, "yaw": 0})
             r = c.post(f"/api/remotes/{rid}/calibrate-end",
@@ -427,7 +427,7 @@ def test_806_remote_calibrate_end_route_also_guards():
     try:
         with app.test_client() as c:
             rid = c.post("/api/remotes",
-                         json={"name": "G2", "kind": "gyro-puck"}).get_json()["remote"]["id"]
+                         json={"name": "G2", "kind": "gyro"}).get_json()["remote"]["id"]
             c.post(f"/api/remotes/{rid}/orient",
                    json={"roll": 0, "pitch": 0, "yaw": 0})
             r = c.post(f"/api/remotes/{rid}/calibrate-end",

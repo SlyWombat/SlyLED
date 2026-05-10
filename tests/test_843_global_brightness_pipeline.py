@@ -74,7 +74,7 @@ def test_brightness_endpoint_broadcasts_to_led_children():
             {"id": 1, "ip": "10.0.0.10", "type": "esp32", "hostname": "led1"},
             {"id": 2, "ip": "10.0.0.11", "type": "d1mini", "hostname": "led2"},
             {"id": 3, "ip": "10.0.0.12", "type": "dmx",   "hostname": "bridge"},
-            {"id": 4, "ip": "10.0.0.13", "type": "gyro",  "hostname": "puck"},
+            {"id": 4, "ip": "10.0.0.13", "type": "gyro",  "hostname": "gyro"},
         ]
         parent_server._settings["globalBrightness"] = 255
         _install_send_capture()

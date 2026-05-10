@@ -49,7 +49,7 @@ constexpr uint32_t GYRO_I2C_FREQ = 400000UL;
 // ── Battery voltage ADC (optional — set to 0 if no battery circuit) ─────
 // Waveshare ESP32-S3-Touch-LCD-1.28 with battery. The vendor schematic
 // nominally lists a 200k/100k divider (×3.0), but live calibration on
-// a known-full puck (2026-05-05) showed the firmware reading 3.87 V at
+// a known-full gyro (2026-05-05) showed the firmware reading 3.87 V at
 // ~62% off the LCD when the cell was actually freshly charged — that's
 // a ~7% under-read, consistent with shipping-hardware divider value
 // 220k/100k (×3.2). Bump the constant accordingly; the Vbat-derived

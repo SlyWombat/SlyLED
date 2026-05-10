@@ -93,8 +93,8 @@ def _phone_landscape(target_aim_stage=(0.0, 1.0, 0.0)):
     return r
 
 
-def _puck(target_aim_stage=(0.0, 1.0, 0.0)):
-    """Gyro puck, LCD-up, default convention (FLAT_PITCH_YAW post-#777)."""
+def _gyro(target_aim_stage=(0.0, 1.0, 0.0)):
+    """Gyro gyro, LCD-up, default convention (FLAT_PITCH_YAW post-#777)."""
     r = Remote(id=97, kind=KIND_PUCK)  # default forward=(1,0,0), up=(0,0,1)
     r.convention = OrientConvention.FLAT_PITCH_YAW
     r.calibrate(target_aim_stage=target_aim_stage,
@@ -167,7 +167,7 @@ def test_phone_portrait_yaw_left_pans_stage_left():
     print(f"      aim_stage = {tuple(round(v, 3) for v in r.aim_stage)}")
     # #862 — qz-negate hack removed. Phone-yaw direction is known-
     # failing pending #826 (empirical aim-axis wizard). Operator can
-    # use the puck for accurate yaw or wait for the wizard. The hack
+    # use the gyro for accurate yaw or wait for the wizard. The hack
     # made this cell pass at the cost of breaking `calibrate()` /
     # orient-frame parity (the live-rig calibrate-end head-swing).
     _assert(r.aim_stage[0] > 0.3,
@@ -236,37 +236,37 @@ def test_phone_landscape_pitch_forward_tilts_down():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# E. Puck × LCD-up × pitch — gyro tipped forward → tilt down.
+# E. Gyro × LCD-up × pitch — gyro tipped forward → tilt down.
 
-def test_puck_pitch_forward_tilts_down():
-    r = _puck()
+def test_gyro_pitch_forward_tilts_down():
+    r = _gyro()
     q = quat_from_axis_angle((0.0, 1.0, 0.0), -math.radians(30))
     r.update_from_quat(q)
-    _assert(r.aim_stage is not None, "puck pitch produces aim_stage")
+    _assert(r.aim_stage is not None, "gyro pitch produces aim_stage")
     if r.aim_stage is None:
         return
     print(f"      aim_stage = {tuple(round(v, 3) for v in r.aim_stage)}")
     _assert(r.aim_stage[2] < -0.3,
-            f"puck pitch forward → aim_stage.z < -0.3 (got {r.aim_stage[2]:.3f})",
+            f"gyro pitch forward → aim_stage.z < -0.3 (got {r.aim_stage[2]:.3f})",
             known_failing=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# F. Puck × LCD-up × yaw — gyro yawed left → pan stage-left.
+# F. Gyro × LCD-up × yaw — gyro yawed left → pan stage-left.
 
-def test_puck_yaw_left_pans_stage_left():
-    r = _puck()
+def test_gyro_yaw_left_pans_stage_left():
+    r = _gyro()
     q = quat_from_axis_angle((0.0, 0.0, 1.0), +math.radians(30))
     r.update_from_quat(q)
-    _assert(r.aim_stage is not None, "puck yaw produces aim_stage")
+    _assert(r.aim_stage is not None, "gyro yaw produces aim_stage")
     if r.aim_stage is None:
         return
     print(f"      aim_stage = {tuple(round(v, 3) for v in r.aim_stage)}")
-    # Puck is BOTTOM_FORWARD_ROLL_PITCH default? No — post-#777 it's
+    # Gyro is BOTTOM_FORWARD_ROLL_PITCH default? No — post-#777 it's
     # FLAT_PITCH_YAW (full Euler). Yaw must propagate. Same sign-flip
     # symptom as the phone-portrait yaw test — known-failing per #824.
     _assert(r.aim_stage[0] > 0.3,
-            f"puck yaw left → aim_stage.x > +0.3 (got {r.aim_stage[0]:.3f})",
+            f"gyro yaw left → aim_stage.x > +0.3 (got {r.aim_stage[0]:.3f})",
             known_failing=True)
 
 
@@ -296,7 +296,7 @@ def test_euler_and_quat_paths_agree():
 # H. Identity rotation after calibrate-against-(0,1,0) → aim straight forward.
 
 def test_identity_quat_aims_at_calibration_target():
-    for builder in (_phone_portrait, _phone_landscape, _puck):
+    for builder in (_phone_portrait, _phone_landscape, _gyro):
         r = builder(target_aim_stage=(0.0, 1.0, 0.0))
         r.update_from_quat((1.0, 0.0, 0.0, 0.0))
         _assert(r.aim_stage is not None, f"{builder.__name__}: identity quat produces aim_stage")
@@ -438,7 +438,7 @@ def test_phone_grip_matrix_identity():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# L. Wire-format parity — the puck speaks Euler over UDP CMD_GYRO_ORIENT,
+# L. Wire-format parity — the gyro speaks Euler over UDP CMD_GYRO_ORIENT,
 # the phone speaks quat over HTTP /api/mover-control/orient. Given physically
 # equivalent rotations, both wire paths must converge on aim_stage.
 #
@@ -447,20 +447,20 @@ def test_phone_grip_matrix_identity():
 # for HTTP). Diverging implementations of the two — e.g. the qz-flip
 # applying to one path but not the other — fail this test.
 
-def test_puck_euler_path_matches_quat_path():
-    """Puck UDP-Euler and an equivalent quat update on the same Remote
+def test_gyro_euler_path_matches_quat_path():
+    """Gyro UDP-Euler and an equivalent quat update on the same Remote
     should produce identical aim_stage. (Same shape as test G but explicit
     about the wire-path framing, and uses combined rotation.)"""
-    r1 = _puck()
-    r2 = _puck()
+    r1 = _gyro()
+    r2 = _gyro()
     r1.update_from_euler_deg(roll=15.0, pitch=10.0, yaw=20.0)
     r2.update_from_quat(quat_from_euler_zyx_deg(15.0, 10.0, 20.0))
     if r1.aim_stage is None or r2.aim_stage is None:
-        _assert(False, "puck Euler+quat both produce aim_stage")
+        _assert(False, "gyro Euler+quat both produce aim_stage")
         return
     for i, axis in enumerate("xyz"):
         _assert(_close(r1.aim_stage[i], r2.aim_stage[i], tol=1e-4),
-                f"puck wire-path parity .{axis} "
+                f"gyro wire-path parity .{axis} "
                 f"(euler={r1.aim_stage[i]:.4f} quat={r2.aim_stage[i]:.4f})")
 
 
@@ -483,9 +483,9 @@ def test_phone_quat_and_euler_paths_agree_combined():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# M. Phone-vs-puck PARITY — both clients must agree on the same "operator
+# M. Phone-vs-gyro PARITY — both clients must agree on the same "operator
 # gesture in operator's frame" given they share the FLAT_PITCH_YAW
-# convention and an X-forward / Z-up grip (puck LCD-up == phone landscape
+# convention and an X-forward / Z-up grip (gyro LCD-up == phone landscape
 # ROTATION_90). If a fix to one breaks the other, this matrix breaks
 # loudly.
 
@@ -497,49 +497,49 @@ def _gesture_yaw_left(deg=20.0):
     return quat_from_axis_angle((0.0, 0.0, 1.0), +math.radians(deg))
 
 
-def test_phone_landscape_and_puck_match_on_pitch():
-    """Phone landscape (forward=+X) and puck LCD-up (forward=+X) must
+def test_phone_landscape_and_gyro_match_on_pitch():
+    """Phone landscape (forward=+X) and gyro LCD-up (forward=+X) must
     produce IDENTICAL aim_stage for the same body-frame pitch gesture.
     Currently both XFAIL on tilt direction — but they should fail
     TOGETHER. If they diverge, a per-kind branch went wrong."""
     rphone = _phone_landscape()
-    rpuck = _puck()
+    rgyro = _gyro()
     q = _gesture_pitch_forward()
     rphone.update_from_quat(q)
-    rpuck.update_from_quat(q)
-    if rphone.aim_stage is None or rpuck.aim_stage is None:
-        _assert(False, "landscape phone + puck both produce aim_stage")
+    rgyro.update_from_quat(q)
+    if rphone.aim_stage is None or rgyro.aim_stage is None:
+        _assert(False, "landscape phone + gyro both produce aim_stage")
         return
     print(f"      phone aim_stage = {tuple(round(v, 3) for v in rphone.aim_stage)}")
-    print(f"      puck  aim_stage = {tuple(round(v, 3) for v in rpuck.aim_stage)}")
+    print(f"      gyro  aim_stage = {tuple(round(v, 3) for v in rgyro.aim_stage)}")
     # Without a per-kind branch, these MUST match. The #824 qz-flip is
     # phone-only — for pure pitch that's a no-op (qz=0), so this passes.
     for i, axis in enumerate("xyz"):
-        _assert(_close(rphone.aim_stage[i], rpuck.aim_stage[i], tol=1e-3),
-                f"phone-landscape vs puck pitch parity .{axis} "
-                f"(phone={rphone.aim_stage[i]:.4f} puck={rpuck.aim_stage[i]:.4f})")
+        _assert(_close(rphone.aim_stage[i], rgyro.aim_stage[i], tol=1e-3),
+                f"phone-landscape vs gyro pitch parity .{axis} "
+                f"(phone={rphone.aim_stage[i]:.4f} gyro={rgyro.aim_stage[i]:.4f})")
 
 
-def test_phone_landscape_and_puck_agree_on_yaw_post_862():
-    """#862 — qz-negate hack removed. Phone and puck now agree on yaw
+def test_phone_landscape_and_gyro_agree_on_yaw_post_862():
+    """#862 — qz-negate hack removed. Phone and gyro now agree on yaw
     direction (both are wrong in the same direction relative to
     operator-stage convention; the wizard #826 will fix both via
     `forward_local` / `up_local` calibration). The pre-#862 cell asserted
     DIVERGENCE by design, anchoring the qz-hack; that's the precise hack
     we removed for the calibrate-frame fix."""
     rphone = _phone_landscape()
-    rpuck = _puck()
+    rgyro = _gyro()
     q = _gesture_yaw_left()
     rphone.update_from_quat(q)
-    rpuck.update_from_quat(q)
-    if rphone.aim_stage is None or rpuck.aim_stage is None:
-        _assert(False, "phone+puck both produce aim_stage on yaw")
+    rgyro.update_from_quat(q)
+    if rphone.aim_stage is None or rgyro.aim_stage is None:
+        _assert(False, "phone+gyro both produce aim_stage on yaw")
         return
     print(f"      phone aim_stage = {tuple(round(v, 3) for v in rphone.aim_stage)}")
-    print(f"      puck  aim_stage = {tuple(round(v, 3) for v in rpuck.aim_stage)}")
-    _assert(_close(rphone.aim_stage[0], rpuck.aim_stage[0], tol=1e-3),
-            f"phone-landscape and puck yaw aim_stage.x agree post-#862 "
-            f"(phone={rphone.aim_stage[0]:.4f} puck={rpuck.aim_stage[0]:.4f})")
+    print(f"      gyro  aim_stage = {tuple(round(v, 3) for v in rgyro.aim_stage)}")
+    _assert(_close(rphone.aim_stage[0], rgyro.aim_stage[0], tol=1e-3),
+            f"phone-landscape and gyro yaw aim_stage.x agree post-#862 "
+            f"(phone={rphone.aim_stage[0]:.4f} gyro={rgyro.aim_stage[0]:.4f})")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -838,8 +838,8 @@ ALL = [
     test_phone_portrait_yaw_left_pans_stage_left,
     test_phone_portrait_roll_does_not_move_aim,
     test_phone_landscape_pitch_forward_tilts_down,
-    test_puck_pitch_forward_tilts_down,
-    test_puck_yaw_left_pans_stage_left,
+    test_gyro_pitch_forward_tilts_down,
+    test_gyro_yaw_left_pans_stage_left,
     test_euler_and_quat_paths_agree,
     test_identity_quat_aims_at_calibration_target,
     # I. mirror gestures
@@ -852,11 +852,11 @@ ALL = [
     # K. surface-rotation grip matrix
     test_phone_grip_matrix_identity,
     # L. wire-format parity
-    test_puck_euler_path_matches_quat_path,
+    test_gyro_euler_path_matches_quat_path,
     test_phone_quat_and_euler_paths_agree_combined,
-    # M. phone-vs-puck parity
-    test_phone_landscape_and_puck_match_on_pitch,
-    test_phone_landscape_and_puck_agree_on_yaw_post_862,
+    # M. phone-vs-gyro parity
+    test_phone_landscape_and_gyro_match_on_pitch,
+    test_phone_landscape_and_gyro_agree_on_yaw_post_862,
     # N. CALIBRATE-FRAME parity (the live regression cell)
     test_phone_calibrate_with_nonidentity_quat_then_pitch,
     test_phone_calibrate_with_nonidentity_quat_identity_delta_aims_at_target,

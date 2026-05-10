@@ -1,6 +1,6 @@
 /*
  * TestGyro.h — diagnostic build of the Waveshare ESP32-S3 1.28" round-LCD
- * gyro puck. Compiled when both BOARD_GYRO and GYRO_TEST_BOARD are defined.
+ * gyro controller. Compiled when both BOARD_GYRO and GYRO_TEST_BOARD are defined.
  *
  * Goal (issue #776): show what the IMU actually reports per axis, so we
  * can resolve the "head moves all over the place vs tiny wrist motion"
@@ -8,7 +8,7 @@
  * server-side convention transform masks the picture.
  *
  * Same hardware + same OTA receive path as the regular gyro firmware,
- * so the test build can be pushed onto a live puck via OTA and the
+ * so the test build can be pushed onto a live gyro via OTA and the
  * regular firmware can be pushed back the same way once diagnostics
  * are done.
  */

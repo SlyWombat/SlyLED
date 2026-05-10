@@ -2,9 +2,9 @@
 """diag_orient_transitions.py — print intermediate values for the two
 sign-error patterns the contract matrix exposed (#824 redesign).
 
-Pattern 1: yaw gesture → aim_stage.x reversed (phone AND puck).
+Pattern 1: yaw gesture → aim_stage.x reversed (phone AND gyro).
 Pattern 2: pitch gesture → aim_stage.z reversed when forward_local has
-           +X component (landscape phone + puck), but NOT for portrait
+           +X component (landscape phone + gyro), but NOT for portrait
            phone (forward_local = +Y).
 
 Prints raw numbers at every transition (input quat → f_remote in world
@@ -110,9 +110,9 @@ _trace(
     live_quat=quat_from_axis_angle((0.0, 0.0, 1.0), +math.radians(30)),
 )
 
-# 1B. Puck (LCD-up, forward=+X), same +30° world-Z yaw.
+# 1B. Gyro (LCD-up, forward=+X), same +30° world-Z yaw.
 _trace(
-    "Pattern1B: puck LCD-up, +30° world-Z yaw",
+    "Pattern1B: gyro LCD-up, +30° world-Z yaw",
     kind=KIND_PUCK,
     forward_local=(1.0, 0.0, 0.0),
     up_local=(0.0, 0.0, 1.0),
@@ -143,9 +143,9 @@ _trace(
     live_quat=quat_from_axis_angle((0.0, 1.0, 0.0), -math.radians(30)),
 )
 
-# 2C. Puck LCD-up, pitch -30° around world +Y. forward=(1,0,0), FLIPS.
+# 2C. Gyro LCD-up, pitch -30° around world +Y. forward=(1,0,0), FLIPS.
 _trace(
-    "Pattern2C: puck LCD-up, -30° world-Y pitch (forward=+X)",
+    "Pattern2C: gyro LCD-up, -30° world-Y pitch (forward=+X)",
     kind=KIND_PUCK,
     forward_local=(1.0, 0.0, 0.0),
     up_local=(0.0, 0.0, 1.0),

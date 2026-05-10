@@ -1,20 +1,20 @@
-"""test_869_puck_aim_wizard.py — #869 puck-side empirical aim-axis wizard.
+"""test_869_gyro_aim_wizard.py — #869 gyro-side empirical aim-axis wizard.
 
 Same architecture as the Android wizard (#826) but driven over UDP
-because the puck has no HTTPS stack. Three captured Euler triples
+because the gyro has no HTTPS stack. Three captured Euler triples
 (neutral / pitch_forward / yaw_left) ride one CMD_GYRO_AIM_WIZARD
 (0x6F) packet; the orchestrator converts them to quats and dispatches
 to `_apply_aim_wizard_to_remote` — the SAME function the Android HTTP
 wizard endpoint calls. Derived `forward_local` / `up_local` end up
-on the puck's `gyro-<ip>` Remote.
+on the gyro's `gyro-<ip>` Remote.
 
 Tests pin: the new CMD constant, the elif-branch existence, the
 Euler-unpack shape, the dispatch to the shared wizard math, the
-auto-register-as-puck behaviour (so a wizard can land before the
+auto-register-as-gyro behaviour (so a wizard can land before the
 first orient frame creates the Remote), plus the firmware Protocol.h
 pin and the CLAUDE.md UDP-table row.
 
-Run: python -X utf8 tests/test_869_puck_aim_wizard.py
+Run: python -X utf8 tests/test_869_gyro_aim_wizard.py
 """
 
 import inspect
@@ -97,14 +97,14 @@ def test_aim_wizard_uses_shared_math():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. Auto-register as puck if Remote doesn't exist yet (so an operator
+# 5. Auto-register as gyro if Remote doesn't exist yet (so an operator
 #    running the wizard before the first orient frame still gets a
-#    puck Remote with the derived axes — no first-orient race).
+#    gyro Remote with the derived axes — no first-orient race).
 
-def test_aim_wizard_auto_registers_puck():
+def test_aim_wizard_auto_registers_gyro():
     body = _wizard_handler_body()
     _assert("_auto_register_remote" in body,
-            "AIM_WIZARD handler auto-registers a puck Remote if not present")
+            "AIM_WIZARD handler auto-registers a gyro Remote if not present")
     _assert("KIND_PUCK" in body,
             "auto-register uses KIND_PUCK (matches the orient handler)")
 
@@ -184,7 +184,7 @@ def test_claude_md_table_row():
 # ─────────────────────────────────────────────────────────────────────────────
 # 9. Guardrail: the Android wizard's HTTP path is untouched.
 #    `/api/remotes/aim-wizard` and `_apply_aim_wizard_to_remote` are
-#    SHARED with the puck handler — we must not have forked them.
+#    SHARED with the gyro handler — we must not have forked them.
 
 def test_shared_function_is_singular():
     src = inspect.getsource(parent_server)
@@ -198,7 +198,7 @@ ALL = [
     test_aim_wizard_branch_exists,
     test_aim_wizard_unpacks_9_floats,
     test_aim_wizard_uses_shared_math,
-    test_aim_wizard_auto_registers_puck,
+    test_aim_wizard_auto_registers_gyro,
     test_aim_wizard_end_to_end_persists_axes,
     test_protocol_h_constant,
     test_claude_md_table_row,
@@ -207,7 +207,7 @@ ALL = [
 
 
 if __name__ == "__main__":
-    print("=== #869 puck aim-wizard contract ===")
+    print("=== #869 gyro aim-wizard contract ===")
     for t in ALL:
         print(f"\n-- {t.__name__} --")
         try:

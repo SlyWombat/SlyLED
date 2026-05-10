@@ -1,7 +1,7 @@
 ## 15. Firmware & OTA Updates
 
 The Firmware tab is the operator's single window onto every flashable
-device on the rig: LED performers, the DMX-bridge, the gyro puck, and
+device on the rig: LED performers, the DMX-bridge, the gyro controller, and
 the camera nodes. Every flashable device reports its current firmware
 version up to the orchestrator on each PING/PONG cycle, so a stale
 device shows as "outdated" within seconds of the orchestrator booting.
@@ -37,7 +37,7 @@ release; the operator never has to keep it in their head.
    "verification OK" before the board reboots into the new firmware.
 
 The Gyro Controller (ESP32-S3) ships with USB-CDC serial in the
-firmware. If a wedged build leaves the puck unable to enumerate over
+firmware. If a wedged build leaves the gyro unable to enumerate over
 USB, hold the **BOOT** button while plugging in to enter the manual
 ROM bootloader; the Firmware tab then re-flashes through esptool's
 recovery path.

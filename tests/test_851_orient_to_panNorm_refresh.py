@@ -1,8 +1,8 @@
 """#851 acceptance — claim.panNorm/tiltNorm refresh from orient packets.
 
-Bug: head locks at the first computed pose despite continuous puck
+Bug: head locks at the first computed pose despite continuous gyro
 movement. droppedWrites=0, claim.calibrated=True, but panNorm doesn't
-move while the puck sweeps through degrees of orient.
+move while the gyro sweeps through degrees of orient.
 
 This harness drives three distinct (roll, pitch, yaw) tuples through
 the actual `Remote.update_from_euler_deg` → `aim_stage` →
@@ -10,7 +10,7 @@ the actual `Remote.update_from_euler_deg` → `aim_stage` →
 runs). Asserts:
 
   * After each orient update, `claim.pan_smooth` differs from the
-    prior tick's value (puck moves → head moves).
+    prior tick's value (gyro moves → head moves).
   * Three identical orients produce stable panNorm (no IK jitter).
 
 If the freeze is in any code under test, this harness fails loud. If
@@ -83,7 +83,7 @@ def _seed_streaming_claim(eng, remote):
 def test_851_three_distinct_orients_advance_panNorm():
     """Acceptance per #851: three distinct orient tuples → three
     distinct panNorm values on the claim."""
-    remote = Remote(id=1, name="puck", kind=KIND_PUCK, device_id="gyro-test")
+    remote = Remote(id=1, name="gyro", kind=KIND_PUCK, device_id="gyro-test")
     # Calibrate against an arbitrary in-cone target so R_world_to_stage
     # is set and `aim_stage` derives from `last_quat_world`.
     remote.update_from_euler_deg(0, 0, 0)
@@ -92,7 +92,7 @@ def test_851_three_distinct_orients_advance_panNorm():
     eng = _build_engine(remote)
     claim = _seed_streaming_claim(eng, remote)
 
-    # Three distinct orients within the puck's normal travel. Vary BOTH
+    # Three distinct orients within the gyro's normal travel. Vary BOTH
     # pitch (drives tilt) AND yaw (drives az → pan) so the test
     # exercises both axes — pure-pitch sweeps would legitimately keep
     # az=0 and pan_norm constant, masking a real freeze.

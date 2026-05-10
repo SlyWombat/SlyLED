@@ -3,7 +3,7 @@ function loadSetup(){
   document.getElementById('t-setup').innerHTML='<p style="color:#888">Loading fixtures...</p>';
   _renderSetup();
   // #514 — periodic poll of the mover-control claim status so the Setup
-  // hardware table shows a green "ACTIVE" badge on every gyro puck that
+  // hardware table shows a green "ACTIVE" badge on every gyro controller that
   // currently has an active mover claim. The span is stamped async so
   // initial render stays fast.
   if(!window._gyroLockPollTimer){
@@ -1651,7 +1651,7 @@ function addDiscovered(ip){
         setTimeout(loadSetup,1500);
       });
     }else if(ctype==='gyro'){
-      // Gyro puck — idempotent: if a gyro fixture already exists for this
+      // Gyro gyro — idempotent: if a gyro fixture already exists for this
       // child id, don't spawn a duplicate.
       var existing=(_fixtures||[]).find(function(f){return f.fixtureType==='gyro'&&f.gyroChildId===cid;});
       if(existing){
@@ -2719,6 +2719,18 @@ function _gyroConfigModalRender(childId, c){
     h+='<label style="font-size:.78em;color:#94a3b8;display:block;margin-bottom:.3em">Live status</label>';
     h+='<div id="gcfg-live" style="padding:.4em .6em;border:1px solid #1e293b;border-radius:4px;font-size:.82em;color:#94a3b8;margin-bottom:.6em">';
     h+='\u25cb Not connected</div>';
+    h+='</div>';
+
+    // #872 Bug E \u2014 Calibration. Persistent state visible regardless
+    // of whether the gyro is currently streaming. Reads from
+    // /api/remotes (persisted, not live), so a previously-calibrated
+    // gyro shows its frame even when offline. Clear button drops the
+    // persisted R_world_to_stage so the next press-Start captures fresh.
+    h+='<div style="border-top:1px solid #1e293b;padding-top:.6em;margin-top:.4em">';
+    h+='<label style="font-size:.78em;color:#94a3b8;display:block;margin-bottom:.3em">Calibration</label>';
+    h+='<div id="gcfg-cal" data-child-id="'+childId+'" style="padding:.4em .6em;border:1px solid #1e293b;border-radius:4px;font-size:.82em;color:#94a3b8;margin-bottom:.6em">';
+    h+='\u25cb Loading\u2026</div>';
+    h+='</div>';
 
     // ── Smoothing (the only operator-facing preference in the
     //    stage-space architecture; pan/tilt mapping comes from the
@@ -2768,7 +2780,93 @@ function _gyroConfigModalRender(childId, c){
   // started before assignment was set never re-armed; Live Status
   // stayed "Not connected" forever.
   _gyroLivePoll(childId);
+  _gyroLoadCalState(childId);
   window._gcfgPoll=setInterval(function(){_gyroLivePoll(childId);},2000);
+}
+
+
+// #872 Bug E — render the persistent calibration state into
+// #gcfg-cal. Sourced from /api/remotes (persisted), NOT
+// /api/remotes/live, so an offline-but-previously-calibrated gyro
+// still shows its frame + Clear button. Re-renders whenever the
+// modal opens or the Clear button POSTs.
+function _gyroLoadCalState(childId){
+  var el=document.getElementById('gcfg-cal');
+  if(!el)return;
+  var gf=(_fixtures||[]).find(function(f){
+    return f.fixtureType==='gyro'&&f.gyroChildId===childId;
+  });
+  if(!gf){
+    el.innerHTML='<span style="color:#64748b">No gyro fixture configured.</span>';
+    el.style.borderColor='#1e293b';
+    return;
+  }
+  // Use the fixture name (operator-assigned) rather than 'gyro' so
+  // the modal's wording matches whatever the operator chose. Empty
+  // fallback to hostname if the fixture has no name yet.
+  var gyroName=gf.name||'this gyro';
+  var childIp=(_children||[]).reduce(function(a,c){
+    return c.id===gf.gyroChildId?c.ip:a;
+  },null);
+  if(!childIp){
+    el.innerHTML='<span style="color:#64748b">Waiting for child IP…</span>';
+    return;
+  }
+  var deviceId='gyro-'+childIp;
+  ra('GET','/api/remotes',null,function(r){
+    if(!document.getElementById('gcfg-cal'))return;  // modal closed
+    var list=(r&&r.remotes)||[];
+    var remote=list.find(function(rm){return rm.deviceId===deviceId;});
+    if(!remote){
+      el.innerHTML='<span style="color:#64748b">Not yet seen. Press Start on '
+        +escapeHtml(gyroName)+' to register.</span>';
+      el.style.borderColor='#1e293b';
+      return;
+    }
+    if(!remote.calibrated){
+      el.innerHTML='<span style="color:#94a3b8">○ Not calibrated.</span>'
+        +' <span style="color:#64748b">Aim '+escapeHtml(gyroName)
+        +' at the moving head and hold Calibrate.</span>';
+      el.style.borderColor='#1e293b';
+      return;
+    }
+    // Calibrated. Show what it was calibrated against + when, plus
+    // a Clear button that hits the #872 clear-calibration route.
+    var against=remote.calibratedAgainst||{};
+    var againstLabel='';
+    if(against.kind==='mover'&&against.objectId!=null){
+      var mover=(_fixtures||[]).find(function(f){return f.id===against.objectId;});
+      againstLabel=mover?(' against <b>'+escapeHtml(mover.name)+'</b>'):'';
+    }
+    var when='';
+    if(remote.calibratedAt){
+      var d=new Date(remote.calibratedAt*1000);
+      when=' <span style="color:#64748b">('+d.toLocaleString()+')</span>';
+    }
+    el.innerHTML=
+      '<span style="color:#22c55e">●</span> '
+      +'<b>'+escapeHtml(gyroName)+'</b> calibrated'+againstLabel+when
+      +' <button class="btn" onclick="_gyroClearCal('+remote.id+','+childId+')"'
+      +' style="background:#334155;color:#cbd5e1;font-size:.7em;margin-left:.4em">Clear calibration</button>';
+    el.style.borderColor='#059669';
+  });
+}
+
+
+// #872 Bug E — fire POST /api/remotes/<id>/clear-calibration and
+// re-render the modal's Calibration section. Confirmation prompt
+// because the operator is dropping persistent state.
+function _gyroClearCal(remoteId,childId){
+  if(!confirm('Clear the calibration for this gyro? '
+    +'Next press-Start will need a fresh calibrate gesture.'))return;
+  ra('POST','/api/remotes/'+remoteId+'/clear-calibration',{},function(r){
+    if(r&&r.ok){
+      _gyroLoadCalState(childId);
+    }else{
+      var hs=document.getElementById('hs');
+      if(hs)hs.textContent='Clear failed: '+(r&&r.err||'unknown');
+    }
+  });
 }
 
 // #801 \u2014 `_gyroSendLock` deleted. The orchestrator's auto-lock-
@@ -2795,7 +2893,7 @@ function _gyroLivePoll(childId){
     return;
   }
   // Poll both the claim state (mover-control) and the primitive's stream
-  // state (remote-orientation). Show the fullest picture — the puck can be
+  // state (remote-orientation). Show the fullest picture — the gyro can be
   // streaming orient data before any lock/claim exists.
   ra('GET','/api/mover-control/status',null,function(ds){
     ra('GET','/api/remotes/live',null,function(dr){
@@ -2828,18 +2926,13 @@ function _gyroLivePoll(childId){
           stateLabel='Streaming (uncal)';
           border='#059669';
         }
-        // #872 Bug E \u2014 when calibrated, surface a Clear button so the
-        // operator can reset the persisted frame without rotating
-        // against another mover or restarting. Hits the new
-        // POST /api/remotes/<id>/clear-calibration route.
-        var calBtn='';
-        if(remote.calibrated&&remote.id!=null){
-          calBtn=' <button class="btn" onclick="ra(\'POST\',\'/api/remotes/'+remote.id
-            +'/clear-calibration\',{},function(){_gyroLivePoll('+childId+');})"'
-            +' style="background:#334155;color:#cbd5e1;font-size:.7em;margin-left:.3em">Clear cal</button>';
-        }
+        // Clear-cal moved to the dedicated Calibration section
+        // below (#872 Bug E). Live status now only renders the
+        // streaming/stale badge; the calibration state + Clear
+        // button live in #gcfg-cal so they're visible even when
+        // the gyro isn't currently streaming.
         parts.push(dot+' <b>'+escapeHtml(remote.name||('remote '+remote.id))+'</b> \u2014 '+stateLabel
-          +' <span style="color:#64748b">('+age.toFixed(1)+'s ago)</span>'+calBtn);
+          +' <span style="color:#64748b">('+age.toFixed(1)+'s ago)</span>');
       }
       if(claim){
         parts.push('<b>Lock:</b> '+escapeHtml(claim.deviceName)+' ('+claim.state+')'

@@ -361,7 +361,7 @@ def _classify_fixtures(fixtures, profile_lib=None):
         # #836 — non-light fixtures (camera, gyro, …) are deliberately
         # NOT bucketed. Pre-fix the else-branch swallowed them into
         # `led_fixtures`, producing inert LED-base tracks for cameras
-        # and gyro pucks that pollute the bake and inflate the
+        # and gyro gyros that pollute the bake and inflate the
         # dashboard's fixture count without producing any visible
         # output (those fixtures can't render an action).
 

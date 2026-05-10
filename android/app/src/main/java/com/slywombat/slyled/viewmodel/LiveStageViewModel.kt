@@ -218,7 +218,7 @@ class LiveStageViewModel @Inject constructor(
                 // landed in 3.5 min of music despite UI showing master
                 // bouncing 150–255) due to TCP retransmit + OkHttp
                 // connection-pool churn at audio rate. UDP mirrors the
-                // existing puck telemetry pattern on :4210 and survives
+                // existing gyro telemetry pattern on :4210 and survives
                 // packet loss the same way audio always does — drop a
                 // hop, the next one (50 ms later) replaces it.
                 val host = repository.baseUrl

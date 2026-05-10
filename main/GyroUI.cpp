@@ -250,7 +250,7 @@ static void drawIdle() {
     gyroClearScreen(GC_BLACK);
     // #813 green-field — Start button no longer waits for an orchestrator
     // CTRL(1) "lock" packet. WiFi connectivity is the operator-visible
-    // gate: if the puck has a network it can broadcast `CMD_GYRO_START`
+    // gate: if the gyro has a network it can broadcast `CMD_GYRO_START`
     // on press; the orchestrator binds UDP 4210 and replies (CLAIM_ACK
     // is implicit — claim transitions to streaming silently; CLAIM_DENIED
     // arrives only on refusal, handled by gyroUdpClaimDeniedConsume()).
@@ -633,7 +633,7 @@ static void drawSettingsPage() {
     drawBatteryInfo();
 
     // WiFi info — #778: when connected, render hostname + RSSI + IP
-    // beneath the status line so the operator can read the puck's
+    // beneath the status line so the operator can read the gyro's
     // DHCP-assigned address right off the LCD instead of `arp -a`-ing
     // from the workstation.
     if (wifiOk()) {
@@ -698,11 +698,11 @@ static void drawWizardPage() {
     const char* prompt2 = "";
     switch (s_wizStep) {
         case 0:
-            prompt1 = "Hold puck aimed";
+            prompt1 = "Hold gyro aimed";
             prompt2 = "at head, then tap";
             break;
         case 1:
-            prompt1 = "Tip puck FORWARD";
+            prompt1 = "Tip gyro FORWARD";
             prompt2 = "(toward floor), tap";
             break;
         case 2:
@@ -733,7 +733,7 @@ static void drawWizardPage() {
     gyroDrawText(28, 220, "swipe to cancel", 1, GC_DKGREY);
 }
 
-// Capture the puck's current orientation into the s_wizEulers slot
+// Capture the gyro's current orientation into the s_wizEulers slot
 // for the active step. After step 2, ship the triple as one
 // CMD_GYRO_AIM_WIZARD packet and bounce back to IDLE.
 static void wizardCaptureCurrentStep() {
@@ -1088,7 +1088,7 @@ void gyroUIUpdate() {
             // carrying a matching nonce; CLAIM_DENIED reverts; an overall
             // timeout reverts with "NO RESPONSE". This eliminates the
             // pre-#825 silent-failure window where the orchestrator held
-            // an orphan claim while the puck UI rolled back on its own.
+            // an orphan claim while the gyro UI rolled back on its own.
             s_idleSettings = false;
             s_calibHeld = false;
             // Allocate a fresh nonce; gyroUdpSendStartWithNonce() ships

@@ -49,7 +49,7 @@ state:
 
 1. Create the mover fixture with Home + Secondary (so AimSphere
    resolves).
-2. `_ps._remotes.add(...)` a puck Remote with `R_world_to_stage`,
+2. `_ps._remotes.add(...)` a gyro Remote with `R_world_to_stage`,
    `calibrated`, `calibrated_against` set against the mover (#847's
    trust-cross-session-cal path).
 3. `_ps._mover_engine.claim(...)` + `start_stream(...)`.

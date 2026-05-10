@@ -136,7 +136,7 @@ def test_engine_aim_to_pan_tilt_live_geometry_advances():
     # Seed a claim so `_aim_to_pan_tilt` has a `current_pose` source.
     from mover_control import MoverClaim
     claim = MoverClaim(mover_id=LIVE_FIXTURE["id"],
-                        device_id="puck-1", device_name="SLYG-001")
+                        device_id="gyro-1", device_name="SLYG-001")
     claim.pan_smooth = LIVE_FIXTURE["homePanDmx16"] / 65535.0
     claim.tilt_smooth = LIVE_FIXTURE["homeTiltDmx16"] / 65535.0
     claim.have_pan_tilt = True

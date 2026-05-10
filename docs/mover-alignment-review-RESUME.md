@@ -37,7 +37,7 @@ PR #643 is open and ready for review. It bundles:
   - Fn 1: walk a defined path, capture per-mover aim error vs ArUco-marked walking pose
   - Fn 2: gyro + phone per-axis sweep, look for residual delta asymmetry
   - Fn 3 live demo: run the wash prototype on the 3-mover basement rig
-- Hardware needed: 3 DMX movers, 2 cameras, ESP32 gyro puck, Android phone. All already on the basement rig per `project_basement_rig.md`.
+- Hardware needed: 3 DMX movers, 2 cameras, ESP32 gyro controller, Android phone. All already on the basement rig per `project_basement_rig.md`.
 
 ### Fn 1 attempt — 2026-04-23 — blocked on calibration regression
 

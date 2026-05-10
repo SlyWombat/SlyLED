@@ -809,6 +809,46 @@ class ProfileLibrary:
             self._profiles[p["id"]] = dict(p, builtin=True)
         if data_dir:
             self._load_custom(data_dir)
+        # #876 — audit every loaded profile for the typed-slot clobber
+        # bug class: bits=16 declared on pan/tilt but no matching
+        # pan-fine/tilt-fine sibling, AND the contiguous fallback slot
+        # (`coarse_offset + 1`) is already occupied by a typed channel.
+        # Audit is logged-only — profiles still load. The orchestrator
+        # surfaces the warning in operator-visible logs at startup and
+        # compute_pan_tilt_writes refuses the fallback at write time.
+        self._audit_pan_tilt_profile_shape()
+
+    def _audit_pan_tilt_profile_shape(self):
+        """Walk every loaded profile, log a warning for any whose
+        pan or tilt declares bits=16 without an explicit *-fine
+        sibling AND has a typed channel at coarse+1 that would be
+        clobbered by the legacy contiguous fallback. See #876."""
+        import logging
+        log = logging.getLogger("slyled")
+        for pid, prof in self._profiles.items():
+            channels = prof.get("channels") or []
+            ch_map = {c.get("type"): c.get("offset") for c in channels if c.get("type")}
+            for axis in ("pan", "tilt"):
+                coarse_off = ch_map.get(axis)
+                if coarse_off is None:
+                    continue
+                fine_off = ch_map.get(f"{axis}-fine")
+                ch_def = next((c for c in channels if c.get("type") == axis), None)
+                bits = ch_def.get("bits", 8) if ch_def else 8
+                if bits != 16 or fine_off is not None:
+                    continue
+                next_ch = next((c for c in channels
+                                if c.get("offset") == coarse_off + 1), None)
+                next_type = next_ch.get("type") if next_ch else None
+                if next_ch is not None and next_type not in (None, "", f"{axis}-fine"):
+                    log.warning(
+                        "Profile %s: %s declares bits=16 but no %s-fine "
+                        "channel; contiguous fallback slot (offset %d) is "
+                        "typed %r — operator-visible LSB drops + a clobbered "
+                        "neighbour channel. Fix the profile by either adding "
+                        "%s at the correct offset, or changing %s bits to 8.",
+                        pid, axis, axis, coarse_off + 1, next_type,
+                        f"{axis}-fine", axis)
 
     def _load_custom(self, data_dir):
         """Load custom profiles from data_dir/dmx_profiles/*.json."""

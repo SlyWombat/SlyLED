@@ -30,7 +30,7 @@ function loadDash(){
     dashRunnerTimer=setInterval(refreshRunnerStatus,1000);
     if(!startupDone)_pollStartup();
     // Remote Controllers dashboard card (#492) — lists every entry in
-    // /api/remotes/live (both gyro pucks auto-registered via UDP and
+    // /api/remotes/live (both gyro gyros auto-registered via UDP and
     // phones auto-registered via /api/mover-control/orient). Renders an
     // empty placeholder when no remotes exist so the operator knows
     // where to look after installing the Android APK.
@@ -49,7 +49,7 @@ function _renderRemotesDash(){
   var h='<div id="remotes-dash-cards" style="margin-top:.8em">';
   h+='<div style="font-size:.85em;font-weight:bold;color:#94a3b8;margin-bottom:.4em">Remote Controllers</div>';
   h+='<div id="remotes-dash-list" style="display:flex;flex-wrap:wrap;gap:.6em;min-height:2em">';
-  h+='<div id="remotes-dash-empty" style="color:#475569;font-size:.78em;font-style:italic">None connected — start the gyro puck or open Controller mode on the Android app.</div>';
+  h+='<div id="remotes-dash-empty" style="color:#475569;font-size:.78em;font-style:italic">None connected — press Start on a gyro or open Controller mode on the Android app.</div>';
   h+='</div></div>';
   el.innerHTML+=h;
   _refreshRemotesDash();
@@ -98,7 +98,7 @@ function _refreshRemotesDash(){
     // #492 — phones are ephemeral; only surface them on the dashboard
     // while they're actively streaming orient data. Hard-stale or idle
     // phones are hidden so a stale GUID from yesterday's test doesn't
-    // clutter the live operator view. Gyro pucks are registered
+    // clutter the live operator view. Gyro gyros are registered
     // hardware — always shown.
     var remotes=all.filter(function(r){
       if(r.kind==='phone'){
@@ -178,7 +178,7 @@ function _refreshRemotesDash(){
 
 // #690 — Dashboard ×-button hits the existing DELETE /api/remotes/<id>
 // endpoint and refreshes the panel. confirm() guards against accidental
-// removal of an active gyro puck the operator just placed.
+// removal of an active gyro controller the operator just placed.
 function _removeRemoteDash(rid, name){
   if(!confirm('Remove "'+name+'" from the remotes registry?\n\n'
     +'If the device sends another orient packet later it will auto-register again.'))return;

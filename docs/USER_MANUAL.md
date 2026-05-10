@@ -27,7 +27,7 @@
 22. [Appendix B — Moving-Head Calibration Pipeline](#appendix-b)
 23. [Appendix C — Documentation Maintenance](#appendix-c)
 24. [Appendix D — Idle Behaviour](#appendix-d)
-25. [Appendix E — Remote Control: Android Phone & Gyro Puck](#appendix-e)
+25. [Appendix E — Remote Control: Android Phone & Gyro Gyro](#appendix-e)
 
 ---
 
@@ -683,7 +683,7 @@ Track actions are full citizens of the show timeline:
   referenced by any clip in the running timeline) does **not**
   evaluate (#835). This stops a leftover preset action from
   blacking out movers in unrelated timelines.
-- When a remote (Android phone or gyro puck) claims a head via the
+- When a remote (Android phone or gyro controller) claims a head via the
   mover-control claim arbiter (chapter on Remote control), the
   claimed head is muted from the Track action for the duration of the
   claim — operator gestures take priority over the show. Releasing
@@ -1201,7 +1201,7 @@ Before running full calibration, use the orientation test to confirm pan and til
 ## 15. Firmware & OTA Updates
 
 The Firmware tab is the operator's single window onto every flashable
-device on the rig: LED performers, the DMX-bridge, the gyro puck, and
+device on the rig: LED performers, the DMX-bridge, the gyro controller, and
 the camera nodes. Every flashable device reports its current firmware
 version up to the orchestrator on each PING/PONG cycle, so a stale
 device shows as "outdated" within seconds of the orchestrator booting.
@@ -1237,7 +1237,7 @@ release; the operator never has to keep it in their head.
    "verification OK" before the board reboots into the new firmware.
 
 The Gyro Controller (ESP32-S3) ships with USB-CDC serial in the
-firmware. If a wedged build leaves the puck unable to enumerate over
+firmware. If a wedged build leaves the gyro unable to enumerate over
 USB, hold the **BOOT** button while plugging in to enter the manual
 ROM bootloader; the Firmware tab then re-flashes through esptool's
 recovery path.
@@ -1320,7 +1320,7 @@ ticking at 40 Hz.
 #### Headline scenario
 
 5 movers + 5 LED performers, 100 actions in the library, 10 timeline
-clips per fixture, 10 tracked people, 2 gyro pucks, 1 Android
+clips per fixture, 10 tracked people, 2 gyro gyros, 1 Android
 auto-brightness feed:
 
 | Metric | Median | p95 | Max |
@@ -1342,7 +1342,7 @@ Run for 15 s sustained each. The label maps to typical venue capacity and crew s
 | Venue | Movers | LEDs | Actions | Clips/fixture | Gyros | People | CPU med | CPU p95 | RSS max | `live` p95 | `monitor` p95 |
 |-------|-------:|-----:|--------:|--------------:|------:|-------:|--------:|--------:|--------:|-----------:|--------------:|
 | Club (≤150 cap, single op) | 2 | 2 | 20 | 4 | 1 | 0 | 3 % | 3 % | 77 MB | 0.94 ms | 0.49 ms |
-| Theatre (300-800 cap, 1 LD + 1 puck) | 5 | 5 | 50 | 6 | 1 | 4 | 3 % | 4 % | 77 MB | 1.10 ms | 0.32 ms |
+| Theatre (300-800 cap, 1 LD + 1 gyro) | 5 | 5 | 50 | 6 | 1 | 4 | 3 % | 4 % | 77 MB | 1.10 ms | 0.32 ms |
 | Concert (1k-5k cap, 2 LDs) | 10 | 20 | 100 | 8 | 2 | 10 | 4 % | 5 % | 77 MB | 1.14 ms | 0.36 ms |
 | Arena (10k-50k cap, full crew) | 30 | 60 | 300 | 10 | 4 | 20 | 8 % | 9 % | 78 MB | 1.86 ms | 0.27 ms |
 | Stadium / festival (50k+ cap) | 50 | 120 | 500 | 12 | 4 | 30 | 10 % | 10 % | 79 MB | 2.27 ms | 0.27 ms |
@@ -1394,8 +1394,8 @@ whether to update or work around.
 | **Runtime view empty** | The 3D Runtime tab shows the stage but no fixtures. | Check that fixtures are positioned in the **Layout** tab. DMX-only rigs render correctly since v1.7.30. |
 | **Beam cone wrong direction** | The 3D viz cone aims at the wrong wall. | Beam direction comes from the fixture's `rotation = [rx, ry, rz]` in stage space. Z is up; rx > 0 aims down. See chapter 4 for the full convention. |
 | **3D viz cone disagrees with the physical head** | Cone in the viz points stage-left but the moving head is aimed stage-right. | Fixed in v1.7.52 (#806/#809): the canonical aim vector is the source of truth and the physical IK derives from it. If you still see the disagreement on v1.7.52+, re-save the fixture's Home and Secondary in the Set Home wizard. |
-| **Calibrate-end pan jump** | Pressing release on calibrate snaps the head to a different pose than the puck was reporting. | Fixed in v1.7.52 (#805). Pre-fix the legacy IK fallback was capturing the wrong aim vector at release time. Operators on v1.7.52+ who still see a jump should report it with the gyro-puck firmware version (must be ≥ v1.2.4). |
-| **Press Start blinks back to "start" on the puck** | Operator presses Start after a WiFi gap, the puck UI flashes claim-acknowledge for a frame, then reverts to IDLE while the orchestrator holds an orphan claim. | Fixed in v1.7.83 (#812 / #813 / #825). Press-Start now uses a 16-bit nonce + CLAIM_ACK, with HB_REP heartbeats to reconcile divergent state. If you see the symptom on v1.7.83+, check that the puck firmware is ≥ v1.2.7 (registry will warn). |
+| **Calibrate-end pan jump** | Pressing release on calibrate snaps the head to a different pose than the gyro was reporting. | Fixed in v1.7.52 (#805). Pre-fix the legacy IK fallback was capturing the wrong aim vector at release time. Operators on v1.7.52+ who still see a jump should report it with the gyro firmware version (must be ≥ v1.2.4). |
+| **Press Start blinks back to "start" on the gyro** | Operator presses Start after a WiFi gap, the gyro UI flashes claim-acknowledge for a frame, then reverts to IDLE while the orchestrator holds an orphan claim. | Fixed in v1.7.83 (#812 / #813 / #825). Press-Start now uses a 16-bit nonce + CLAIM_ACK, with HB_REP heartbeats to reconcile divergent state. If you see the symptom on v1.7.83+, check that the gyro firmware is ≥ v1.2.7 (registry will warn). |
 | **Auto Brightness has no effect on the lights** | The Android Auto Brightness UI shows the master sliding with the music, but DMX heads and LED strips don't dim. | Fixed in v1.7.83 (#843). The fast-path POST now broadcasts `CMD_SET_BRIGHTNESS` to LED children and gamma-scales DMX dimmer / RGB at render time. Operators on older builds can fall back to the manual Settings → Global Brightness slider until they update. |
 | **Looping playlist blacks out between iterations** | A single-item or multi-item playlist set to **Loop All** flashes everything to zero for one frame at every wrap. | Fixed in v1.7.83 (#840). Single-item loops route through the modulo-wrap playback path; multi-item loops pass `is_final=False` to suppress the natural-end blackout sweep until the playlist actually stops. |
 | **Track action blacks out movers in unrelated timelines** | A timeline that doesn't reference a particular Track action still has its movers go dark whenever that action exists in the action library. | Fixed in v1.7.83 (#835). Track actions now only evaluate on timelines that reference them; orphan actions stay dormant. |
@@ -1405,7 +1405,7 @@ whether to update or work around.
 | **Performers not syncing** | A child shows offline in Setup but is powered up. | Check that the orchestrator and the child are on the same WiFi subnet. The Setup tab's **Refresh** rescans via mDNS + UDP broadcast. |
 | **Canvas wrong size** | The Layout canvas is much smaller or larger than the room. | Stage dimensions (Settings → Stage) drive canvas size: `canvasW = stage.w × 1000`. Adjust stage width/height in metres rather than canvas pixels. |
 | **OTA flash refused with SHA mismatch** | Firmware tab refuses to update with `sha256 mismatch`. | Fixed in v1.7.61 (#814). The orchestrator now falls back to the GitHub release for the registered `releaseTag` when the on-disk binary disagrees with the registry. If you still see this, click **Refresh** on the Firmware tab to re-fetch `registry.json` from GitHub. |
-| **Gyro stale-reason latch never clears** | "Connection lost" stays on a puck status row even after the puck resumes streaming. | Fixed in v1.7.62 (#821) and again in v1.7.63 (#823). Press-Start clears the remote stale_reason; cache self-destructs on a transient read failure. |
+| **Gyro stale-reason latch never clears** | "Connection lost" stays on a gyro status row even after the gyro resumes streaming. | Fixed in v1.7.62 (#821) and again in v1.7.63 (#823). Press-Start clears the remote stale_reason; cache self-destructs on a transient read failure. |
 
 If you hit something not in this table, the orchestrator's log
 (Settings → Logging → enable file logging) captures every UDP send and
@@ -2697,7 +2697,7 @@ A parked moving head:
 | **Cold start** | Orchestrator boot | Every DMX fixture parks once the engine comes up. Avoids the "head was left aimed at the back wall last night" surprise. |
 | **Timeline natural end** | `_dmx_playback_loop` exit | Heads driven by the timeline's bake park when the show finishes. Track-action-driven heads also park (#807) — pre-fix only the bake-driven heads parked, leaving any tracker-claimed mover stuck at its last pose. |
 | **Operator presses Stop** | `_dmx_playback_stop` set | Same as natural end. The blackout sweep applies only on stop or final-iteration end (#840), not between loop iterations. |
-| **Claim release** | Mover-control claim arbiter | When an Android phone or gyro puck releases a claim, the head returns to the show if a show is running, otherwise parks. The release is instant — no slewed easing in v1.7.83+. |
+| **Claim release** | Mover-control claim arbiter | When an Android phone or gyro controller releases a claim, the head returns to the show if a show is running, otherwise parks. The release is instant — no slewed easing in v1.7.83+. |
 | **Power-cycle re-settle** | First PONG from a child after a boot | When a fixture's child board power-cycles, the orchestrator resends the current globalBrightness (#843) and the next show frame writes a known pose. Pre-v1.7.83 the child could come up at full brightness for one frame; the PONG-time top-up closes that window. |
 
 ### What does NOT trigger a park
@@ -2712,7 +2712,7 @@ show.
 - **DMX-test sliders on the Settings tab** — same reasoning. The
   sliders override show output for as long as the operator is
   driving them.
-- **Brief gaps within an active claim** — a phone or puck temporarily
+- **Brief gaps within an active claim** — a phone or gyro temporarily
   losing WiFi for a second doesn't release the claim. The remote-
   control claim TTL is 15 s; a head only parks when the TTL elapses
   without a heartbeat (#813 §6.3 "all-comms silence").
@@ -2737,11 +2737,11 @@ state per fixture).
 
 ---
 
-## Appendix E — Remote Control: Android Phone & Gyro Puck
+## Appendix E — Remote Control: Android Phone & Gyro Gyro
 
 Two remote controllers can drive moving heads in real time alongside
 a running show: an Android phone running the SlyLED operator app and
-a Waveshare ESP32-S3 round-LCD gyro puck. Both go through the same
+a Waveshare ESP32-S3 round-LCD gyro controller. Both go through the same
 claim arbiter on the orchestrator, both follow the same handshake
 protocol, and both cooperate with the show timeline through the
 mover-control claim arbiter. This appendix describes the full
@@ -2752,12 +2752,12 @@ preset shows.
 
 The claim is the orchestrator's "this remote currently owns mover
 N" lock. It carries a 16-bit nonce, a TTL, and a current pose so
-the system can reconcile the puck's UI state with the orchestrator's
+the system can reconcile the gyro's UI state with the orchestrator's
 arbiter state when one of them reboots or drops a packet.
 
 ```
 1. IDLE on remote.
-2. Operator presses Start (puck) or Claim (Android).
+2. Operator presses Start (gyro) or Claim (Android).
 3. Remote ships CMD_GYRO_START / claim request with a fresh 16-bit nonce.
 4. Orchestrator allocates a mover, replies CLAIM_ACK with the
    nonce + assigned moverId. The remote advances UI to ACTIVE
@@ -2776,18 +2776,18 @@ and is the source of truth for any change to the protocol.
 
 #### What the operator sees
 
-- **Press Start on the puck** — page advances to "ACTIVE" within
+- **Press Start on the gyro** — page advances to "ACTIVE" within
   ~150 ms. If the orchestrator can't claim a mover (none online,
   none available), the page reverts to IDLE with a denial reason.
-- **Press Stop on the puck** — page returns to IDLE; the head
+- **Press Stop on the gyro** — page returns to IDLE; the head
   returns to whatever the show was driving (or parks if no show is
   running).
-- **Calibrate** — hold the **Calibrate** button (puck or Android)
+- **Calibrate** — hold the **Calibrate** button (gyro or Android)
   for as long as you need; release to capture the new reference
-  pose. The screen advances to the colour picker page on the puck;
+  pose. The screen advances to the colour picker page on the gyro;
   the Android app advances to the gesture page.
 - **Connection lost** — both remotes show a stale-reason badge if
-  the orchestrator stops hearing heartbeats. The puck self-clears
+  the orchestrator stops hearing heartbeats. The gyro self-clears
   when it resumes streaming (#812 / #821 / #823); operator can also
   force-clear via `POST /api/remotes/<id>/clear-stale`.
 
@@ -2810,16 +2810,16 @@ remote's orientation.
   the orchestrator's master brightness from the local mic envelope
   at ~20 Hz, gamma-scaled to the rig (#820, #843).
 
-The phone-specific yaw axis is mirrored relative to the puck (#824)
+The phone-specific yaw axis is mirrored relative to the gyro (#824)
 because the phone's natural-portrait orientation puts the operator's
-"left" 90 ° offset from the puck's body frame. The operator never
+"left" 90 ° offset from the gyro's body frame. The operator never
 needs to think about this; the orchestrator's `_apply_quat` for
 `KIND_PHONE` handles the negation.
 
-#### Gyro puck
+#### Gyro gyro
 
-- **Pitch** (tip puck forward / back) — beam pitches up / down.
-- **Yaw** (rotate around the puck's vertical axis) — beam pans.
+- **Pitch** (tip gyro forward / back) — beam pitches up / down.
+- **Yaw** (rotate around the gyro's vertical axis) — beam pans.
 - **Roll** (tilt left / right) — colour-wheel selection on profiles
   with a colour wheel; ignored on RGB-only profiles.
 - **Press Start** — claim mover and start streaming.
@@ -2849,7 +2849,7 @@ Claims take priority over the show timeline:
 A claim doesn't take over colour or dimmer:
 
 - The remote's gestures drive **only pan / tilt** (and colour wheel
-  for the puck's roll axis on profiles that support it).
+  for the gyro's roll axis on profiles that support it).
 - The head's dimmer and RGB stay under the show's control. If the
   show is dim, the claimed head stays dim — the operator picks pan
   and tilt; the show paints colour and intensity.
@@ -2861,7 +2861,7 @@ A claim doesn't take over colour or dimmer:
 The handshake's heartbeats include both ends' state, so divergent
 combinations are reconciled:
 
-| Puck UI | Orchestrator | What happens |
+| Gyro UI | Orchestrator | What happens |
 | --- | --- | --- |
 | ACTIVE | claim held | Normal — heartbeats keep TTL alive. |
 | ACTIVE | no claim | Orchestrator reconstructs the claim (orchestrator-restart bootstrap). |

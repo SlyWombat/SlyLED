@@ -4,7 +4,10 @@ DMXUniverse — Thread-safe 512-byte buffer for a single DMX-512 universe.
 Used by both ArtNetEngine and sACN_Engine for channel data management.
 """
 
+import logging
 import threading
+
+log = logging.getLogger("slyled.dmx_universe")
 
 
 class DMXUniverse:
@@ -296,9 +299,37 @@ def compute_pan_tilt_writes(pan, tilt, profile):
             elif v16 > 65535:
                 v16 = 65535
             if fine_off is None:
-                # bits=16 declared without an explicit fine entry.
-                # Legacy contiguous fallback only — modern profiles
-                # always carry an explicit pan-fine / tilt-fine sibling.
+                # #876 — refuse the contiguous fallback (`coarse_off
+                # + 1`) when that slot is already occupied by a typed
+                # channel other than the matching `*-fine`. Pre-fix
+                # this branch blindly wrote the LSB into the next
+                # offset, which on the 350W BeamLight profile (bits=16
+                # declared without an explicit pan-fine / tilt-fine
+                # sibling) ended up clobbering `tilt` with pan_lo and
+                # `pan-tilt-speed` with tilt_lo. The operator's #868
+                # smoothing write to pan-tilt-speed never reached the
+                # fixture because pan/tilt overwrote it every tick.
+                next_ch = next((c for c in channels
+                                if c.get("offset") == coarse_off + 1), None)
+                next_type = next_ch.get("type") if next_ch else None
+                fine_type = f"{axis}-fine"
+                if next_ch is not None and next_type not in (None, "", fine_type):
+                    log.warning(
+                        "compute_pan_tilt_writes: profile declares "
+                        "bits=16 on %s but lacks %s; the contiguous "
+                        "fallback slot (offset %d) is already typed "
+                        "%r — refusing to clobber. Writing coarse "
+                        "(8-bit visible resolution) only. Fix the "
+                        "profile by either (a) adding an explicit "
+                        "%s channel at the correct offset, or (b) "
+                        "changing %s bits to 8 if the hardware is "
+                        "8-bit-only.",
+                        axis, fine_type, coarse_off + 1, next_type,
+                        fine_type, axis)
+                    writes.append((coarse_off, (v16 >> 8) & 0xFF))
+                    continue
+                # Slot at coarse_off+1 is empty or is the matching
+                # *-fine: legacy contiguous fallback is safe.
                 fine_off = coarse_off + 1
             writes.append((coarse_off, (v16 >> 8) & 0xFF))
             writes.append((fine_off,    v16        & 0xFF))

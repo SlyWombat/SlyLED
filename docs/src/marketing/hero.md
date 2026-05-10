@@ -15,7 +15,7 @@ hero_image: /slyled/screenshots/spa-dashboard.png
 
 Design shows in a true 3D stage model. Calibrate every moving head from
 a $30 USB webcam. Run the rig from your browser, a phone in your
-pocket, or an ESP32 puck on the wall — all of it over your own
+pocket, or an ESP32 gyro on the wall — all of it over your own
 network, with none of your data leaving the building.
 
 SlyLED is a complete orchestrator + performer + bridge stack for
@@ -27,14 +27,14 @@ at your neighbourhood electronics shop.
 
 ## What makes it different
 
-- **Camera-assisted mover calibration** — no beacons, no IR pucks, no
+- **Camera-assisted mover calibration** — no beacons, no IR gyros, no
   wands. A webcam watching the stage is enough to solve every moving
   head's pan/tilt within 100 mm at 3 m throw, fully automatic.
 - **Local-first vision AI** — camera exposure, gain, and white
   balance tuned by a vision model running on the operator's own
   machine via Ollama. Cloud is optional, never required.
 - **Three control surfaces, one engine** — DMX faders in the browser,
-  gyroscope aim from a phone, wall-mounted gyro pucks. Claim / release
+  gyroscope aim from a phone, wall-mounted gyro gyros. Claim / release
   semantics keep two operators from fighting over the same beam.
 - **Bilingual documentation, code-synchronised** — the user manual is
   a build artefact. Edit the markdown sources in English or French,

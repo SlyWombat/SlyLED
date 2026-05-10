@@ -44,7 +44,7 @@ AI calibration.
 - **Local-first vision AI.** Camera auto-tune, person tracking, and
   depth estimation all run on the operator's machine. No cloud. No
   API keys. No telemetry.
-- **One engine for every remote.** Gyro puck, Android phone, and
+- **One engine for every remote.** Gyro gyro, Android phone, and
   on-screen sliders drive moving heads through the same control path.
 - **Dynamic shows that adapt to the rig.** Fourteen themes re-lay a
   full performance at runtime against the current fixture layout.

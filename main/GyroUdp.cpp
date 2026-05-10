@@ -266,7 +266,7 @@ void gyroUdpUpdate() {
     }
 
     // #825 — heartbeat reply at 2 s cadence. Sent regardless of streaming
-    // state so the orchestrator can detect divergence (puck rolled back,
+    // state so the orchestrator can detect divergence (gyro rolled back,
     // orchestrator restarted) without needing the orient stream. Default
     // advertised state is IDLE; UI updates it via gyroUdpSetUiState().
     if (now - s_hbRepLastMs >= 2000u) {
@@ -358,7 +358,7 @@ void gyroUdpHandleCmd(uint8_t cmd, IPAddress sender,
         // #813 green-field — capture parent IP from heartbeats so
         // post-claim outbound packets switch from broadcast (default)
         // to unicast. The orchestrator no longer sends CMD_GYRO_CTRL
-        // periodically, so this heartbeat is the puck's only learned-
+        // periodically, so this heartbeat is the gyro's only learned-
         // address signal during a claim. First heartbeat arrives ~2 s
         // after CMD_GYRO_START is accepted.
         if (sender != IPAddress(255, 255, 255, 255)) {
@@ -508,12 +508,12 @@ void gyroUdpSendOff() {
 void gyroUdpSendAimWizard(const float eulerNeutral[3],
                           const float eulerPitchForward[3],
                           const float eulerYawLeft[3]) {
-    // #869 — empirical aim-axis wizard for the puck. Three captured
+    // #869 — empirical aim-axis wizard for the gyro. Three captured
     // Euler triples (roll, pitch, yaw in degrees) packed into one
     // UDP packet. Server converts each to a body-to-world quat via
     // quat_from_euler_zyx_deg and runs the same `_aim_wizard
     // _compute` math the Android wizard (#826) uses. No retry / no
-    // ACK in v1: puck UI confirms send-complete and trusts the
+    // ACK in v1: gyro UI confirms send-complete and trusts the
     // orchestrator to persist; HB_REP echoes the new state. Add a
     // dedicated ACK in a follow-up if field loss-rate proves a
     // problem.

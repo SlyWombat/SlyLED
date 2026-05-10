@@ -1,6 +1,6 @@
 # IMU axis test — Waveshare ESP32-S3 1.28″ round LCD (QMI8658) — 2026-05-01
 
-Live test of the gyro puck's QMI8658 6-axis IMU using the diagnostic
+Live test of the gyro controller's QMI8658 6-axis IMU using the diagnostic
 firmware `gyro-test-v1.0.0` (issue #776). Goal: identify which chip
 axis maps to which body axis (forward / up / right) and confirm
 whether the firmware's complementary filter produces stable readings
@@ -8,7 +8,7 @@ in the chosen orientation.
 
 ## Hardware under test
 
-- Device: SLYG-FC98 (Waveshare ESP32-S3 round-LCD gyro puck)
+- Device: SLYG-FC98 (Waveshare ESP32-S3 round-LCD gyro controller)
 - IP: 192.168.10.211 over WiFi
 - IMU: QMI8658 (6-axis: 3-axis accel + 3-axis gyro; **no magnetometer**)
 - Filter: complementary, 98% gyro integration + 2% accelerometer correction
@@ -17,7 +17,7 @@ in the chosen orientation.
 
 ## Method
 
-Operator held the puck **LCD-up, +X-forward, +Y-right, +Z-up** —
+Operator held the gyro **LCD-up, +X-forward, +Y-right, +Z-up** —
 i.e. the standard "phone laid flat on a table" pose with the chip's
 +X axis pointing toward the operator's "forward" direction. From this
 pose:
@@ -56,7 +56,7 @@ HOME baseline; raw accel + gyro values archived for axis identification.
 | Tilt **down** | rotation around chip-Y (pitch) | **−** |
 | Twist (not tested) | rotation around chip-X (roll) | (per right-hand rule) |
 
-Net: with the puck held LCD-up / +X-forward, the chip's native frame
+Net: with the gyro held LCD-up / +X-forward, the chip's native frame
 **already matches** the standard X-forward / Y-right / Z-up
 right-handed body frame. No firmware-side axis remap is needed for
 this pose.
@@ -71,33 +71,33 @@ this pose.
    commanded over the test sequence. Returns to ~0° at HOME within
    0.1° on each round trip.
 3. **Roll (chip-X) is fine in the stable regime, but goes wild at
-   pitch ≈ ±90°.** That's gimbal lock: when the puck is pointed
+   pitch ≈ ±90°.** That's gimbal lock: when the gyro is pointed
    straight up or down, gravity vector loses its projection on
    chip's Y-Z plane; `accelRoll = atan2(ay, az)` becomes
    `atan2(0, 0)`, which sign-flips on noise. Roll readings during
    TILT-UP and TILT-DOWN are garbage and should be ignored or
    replaced with a quaternion-based representation.
 4. **The "all over the place" symptom in #776 was caused by the
-   wrong physical mount.** Earlier deployment had the puck mounted
+   wrong physical mount.** Earlier deployment had the gyro mounted
    "flat at the end of a stick, forward through the bottom" — that
-   pose puts gravity on chip-X **continuously**, so the puck was
+   pose puts gravity on chip-X **continuously**, so the gyro was
    operating *inside the gimbal-lock degeneracy* the whole time.
    Tiny wrist motion → 100°+ roll noise. The Z-up / X-forward pose
    keeps the device safely outside that degeneracy.
 
 ## Recommendations
 
-1. **Firmware** — the puck's native chip frame (X-forward, Y-right,
+1. **Firmware** — the gyro's native chip frame (X-forward, Y-right,
    Z-up) is already correct. No board-level axis remap needed.
    Don't add one.
-2. **Server** — switch the `gyro-puck` default `OrientConvention`
+2. **Server** — switch the `gyro` default `OrientConvention`
    from `BOTTOM_FORWARD_ROLL_PITCH` (drops yaw, was needed only for
    the broken stick-mount pose) to `FLAT_PITCH_YAW` (full Euler).
    Yaw is now the cleanest signal for pan; dropping it was working
    around the wrong bug. Also flip `REMOTE_FORWARD_LOCAL` from
    `(0, 1, 0)` (Y-forward) to `(1, 0, 0)` (X-forward) so the body
-   frame matches what the puck actually reports.
-3. **Operator workflow** — the puck must be held flat-LCD-up / nose
+   frame matches what the gyro actually reports.
+3. **Operator workflow** — the gyro must be held flat-LCD-up / nose
    along chip-X. Document this in the user manual.
 4. **Future hardware** — to eliminate the residual ~10–20°/round-trip
    yaw drift, swap to a 9-axis IMU with magnetometer (ICM-20948,

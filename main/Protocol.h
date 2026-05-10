@@ -45,15 +45,15 @@ constexpr uint8_t CMD_GYRO_COLOR     = 0x63;   // gyro→parent: colour preset /
 constexpr uint8_t CMD_GYRO_CALIBRATE = 0x64;   // gyro→parent: calibrate start/end + orientation
 constexpr uint8_t CMD_GYRO_HEARTBEAT = 0x65;   // parent→gyro: keep-alive (2 s cadence while a claim is active)
 constexpr uint8_t CMD_GYRO_START         = 0x66; // gyro→parent: explicit press-START (#772) — claim + start_stream
-constexpr uint8_t CMD_GYRO_CLAIM_DENIED  = 0x67; // parent→gyro: claim refused, revert puck to IDLE (#772)
+constexpr uint8_t CMD_GYRO_CLAIM_DENIED  = 0x67; // parent→gyro: claim refused, revert gyro to IDLE (#772)
 constexpr uint8_t CMD_GYRO_BATT          = 0x68; // gyro→parent: battery telemetry (vbat100 + pct + flags), 10 s cadence
 constexpr uint8_t CMD_GYRO_STOP          = 0x69; // gyro→parent: explicit press-STOP (#819) — release claim + park + end session. Nonce(2) since #825 (legacy header-only still accepted).
-constexpr uint8_t CMD_GYRO_CLAIM_ACK     = 0x6A; // parent→gyro: claim established (#825) — { nonce(2), moverId(2) }. Puck advances UI on matching nonce.
-constexpr uint8_t CMD_GYRO_STOP_ACK      = 0x6B; // parent→gyro: stop confirmed (#825) — { nonce(2) }. Puck stops retrying STOP on matching nonce.
+constexpr uint8_t CMD_GYRO_CLAIM_ACK     = 0x6A; // parent→gyro: claim established (#825) — { nonce(2), moverId(2) }. Gyro advances UI on matching nonce.
+constexpr uint8_t CMD_GYRO_STOP_ACK      = 0x6B; // parent→gyro: stop confirmed (#825) — { nonce(2) }. Gyro stops retrying STOP on matching nonce.
 constexpr uint8_t CMD_GYRO_HEARTBEAT_REP = 0x6C; // gyro→parent: heartbeat reply (#825) — { uiState(1), claimNonce(2), seq(2) }. 2 s cadence; reconciles divergent claim state and bootstraps after orchestrator restart.
 constexpr uint8_t CMD_AUTOBRI_PUSH       = 0x6D; // phone→parent: Android Auto Brightness master push (#861) — { master(1), flags(1), seq(1) }. 20 Hz fire-and-forget; orchestrator coalesces by overwriting `_settings["globalBrightness"]` per packet. Replaces the prior HTTP `POST /api/brightness` fast path which suffered TCP retransmit / connection-pool churn at audio rate.
 constexpr uint8_t CMD_GYRO_OFF           = 0x6E; // gyro→parent: explicit press-OFF (#867) — same nonce shape as CMD_GYRO_STOP but server releases the claim with blackout=True so the head goes dark. STOP releases the claim leaving the head at its last frame; OFF releases AND blackouts. ACK reuses CMD_GYRO_STOP_ACK with the matching nonce.
-constexpr uint8_t CMD_GYRO_AIM_WIZARD    = 0x6F; // gyro→parent: empirical aim-axis wizard (#869) — three captured Euler triples in degrees (roll, pitch, yaw) for {neutral, pitch_forward, yaw_left}, each 3×float32 LE = 36 bytes payload. Puck's IMU outputs Euler natively, so we ship Euler and convert server-side via quat_from_euler_zyx_deg before dispatching to the same `_aim_wizard_compute` (#826) the Android wizard uses. Server persists derived forward_local/up_local on the puck's `gyro-<ip>` Remote. No ACK in v1 — fire-and-forget; HB_REP echoes the new state.
+constexpr uint8_t CMD_GYRO_AIM_WIZARD    = 0x6F; // gyro→parent: empirical aim-axis wizard (#869) — three captured Euler triples in degrees (roll, pitch, yaw) for {neutral, pitch_forward, yaw_left}, each 3×float32 LE = 36 bytes payload. Gyro's IMU outputs Euler natively, so we ship Euler and convert server-side via quat_from_euler_zyx_deg before dispatching to the same `_aim_wizard_compute` (#826) the Android wizard uses. Server persists derived forward_local/up_local on the gyro's `gyro-<ip>` Remote. No ACK in v1 — fire-and-forget; HB_REP echoes the new state.
 
 // ── Action type codes ─────────────────────────────────────────────────────────
 // (uint8_t — avoids Mbed prototype-generator issues with enums)
@@ -218,7 +218,7 @@ struct __attribute__((packed)) GyroCalibratePayload {
 
 // GyroBattPayload — gyro→parent every ~10 s (4 bytes)
 // Lets the orchestrator surface battery state in /api/gyros + future SPA
-// without the operator swiping to the puck Settings page. Voltage is
+// without the operator swiping to the gyro Settings page. Voltage is
 // scaled ×100 (e.g. 4128 → 4.128 V) to keep an integer wire format.
 struct __attribute__((packed)) GyroBattPayload {
   uint16_t vbat100;     // cell voltage × 100 (e.g. 4128 = 4.128 V)
@@ -228,21 +228,21 @@ struct __attribute__((packed)) GyroBattPayload {
 
 // #825 — rock-solid press-START/STOP handshake.
 //
-// CMD_GYRO_START / CMD_GYRO_STOP gain a 2-byte nonce so the puck can match
+// CMD_GYRO_START / CMD_GYRO_STOP gain a 2-byte nonce so the gyro can match
 // orchestrator ACKs against the gesture that produced them and retransmit
 // the same packet on timeout without doubling-up on the engine.
 //
-// Header-only legacy variants (puck firmware ≤ v1.2.6) still parse — the
+// Header-only legacy variants (gyro firmware ≤ v1.2.6) still parse — the
 // orchestrator treats absent nonce as 0 and replies with no ACK, matching
 // pre-#825 behaviour.
 struct __attribute__((packed)) GyroStartStopPayload {
-  uint16_t nonce;       // puck-generated, monotonic across gestures
+  uint16_t nonce;       // gyro-generated, monotonic across gestures
 };  // 2 bytes
 
 // CMD_GYRO_CLAIM_ACK (parent→gyro) — confirms claim+start_stream succeeded.
 struct __attribute__((packed)) GyroClaimAckPayload {
   uint16_t nonce;       // echoes the START nonce
-  uint16_t moverId;     // mover the claim is bound to (sanity check on the puck)
+  uint16_t moverId;     // mover the claim is bound to (sanity check on the gyro)
 };  // 4 bytes
 
 // CMD_GYRO_STOP_ACK (parent→gyro) — confirms claim release.
@@ -251,11 +251,11 @@ struct __attribute__((packed)) GyroStopAckPayload {
 };  // 2 bytes
 
 // CMD_GYRO_HEARTBEAT_REP (gyro→parent) — 2 s cadence reply to the existing
-// parent→gyro CMD_GYRO_HEARTBEAT (0x65). Carries the puck's current UI
+// parent→gyro CMD_GYRO_HEARTBEAT (0x65). Carries the gyro's current UI
 // state and the nonce of the claim it considers "current". Server compares
 // against its own _claims dict; divergence triggers reconciliation
-// (release if puck went IDLE without sending STOP; reconstruct the claim
-// from the heartbeat payload if puck is ACTIVE but server has no record —
+// (release if gyro went IDLE without sending STOP; reconstruct the claim
+// from the heartbeat payload if gyro is ACTIVE but server has no record —
 // the orchestrator-restart bootstrap path).
 //
 // uiState values:
@@ -265,8 +265,8 @@ struct __attribute__((packed)) GyroStopAckPayload {
 //   3 = STOPPING      (sent STOP, waiting for STOP_ACK or timeout)
 struct __attribute__((packed)) GyroHeartbeatRepPayload {
   uint8_t  uiState;
-  uint16_t claimNonce;  // nonce of the claim the puck considers current; 0 if none
-  uint16_t seq;         // monotonic per-puck counter for log/debug
+  uint16_t claimNonce;  // nonce of the claim the gyro considers current; 0 if none
+  uint16_t seq;         // monotonic per-gyro counter for log/debug
 };  // 5 bytes
 
 constexpr uint8_t GYRO_UI_IDLE        = 0;
@@ -276,9 +276,9 @@ constexpr uint8_t GYRO_UI_STOPPING    = 3;
 
 // #872 — CMD_GYRO_CLAIM_DENIED reason codes (1-byte payload).
 // See `docs/gyro-claim-lifecycle.md` §3.6. Pre-#872 servers send a
-// header-only DENIED; the puck reads that as reason 0 (legacy /
+// header-only DENIED; the gyro reads that as reason 0 (legacy /
 // unspecified) and renders the original "BUSY / Mover held by other"
-// message. Newer servers send the reason byte and the puck renders an
+// message. Newer servers send the reason byte and the gyro renders an
 // actionable message keyed off the code.
 constexpr uint8_t GYRO_DENIED_IDLE                = 0;
 constexpr uint8_t GYRO_DENIED_CONTROLLER_INACTIVE = 1;

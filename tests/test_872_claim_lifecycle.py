@@ -3,7 +3,7 @@
 Covers the two architectural changes:
 
   • Bug A: CMD_GYRO_CLAIM_DENIED carries a 1-byte reason code so the
-    puck firmware can render an actionable message instead of the
+    gyro firmware can render an actionable message instead of the
     legacy single "Mover held by other" string. All four causes
     (controller-inactive, already-claimed, no-mover-assigned, engine-
     unavailable) map to distinct reason codes.
@@ -91,7 +91,7 @@ def test_send_denied_packet_carries_reason_byte():
 def test_default_reason_is_idle_for_back_compat():
     """`_send_gyro_claim_denied(ip)` (no reason kwarg) defaults to
     GYRO_DENIED_IDLE so legacy call sites that haven't been updated
-    still send a valid packet — the puck reads reason 0 as
+    still send a valid packet — the gyro reads reason 0 as
     legacy/unspecified and renders the original 'Mover held by other'
     string."""
     sent = []
@@ -130,7 +130,7 @@ def test_start_handler_emits_correct_reason_per_cause():
 
 def test_dedupe_replays_original_reason():
     """Replays of a same-nonce START re-emit the cached reason so the
-    puck UI renders the same message it did the first time. Operator
+    gyro UI renders the same message it did the first time. Operator
     must press Start with a fresh nonce to retry, even if the
     underlying cause has been resolved (#872 §3.6)."""
     src = inspect.getsource(parent_server)

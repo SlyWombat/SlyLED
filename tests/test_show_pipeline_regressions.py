@@ -230,7 +230,7 @@ def test_860_slymovehead_geometry_orient_to_pan_smooth():
 
     This test pins the steady-state contract: with valid Home +
     Secondary on a slymovehead-shape fixture, the seven orient samples
-    from #860's live log (calibrate-end + 6 puck-moves) MUST produce
+    from #860's live log (calibrate-end + 6 gyro-moves) MUST produce
     distinct pan_smooth values. If a future regression brings back the
     silent-swallow pattern, this test surfaces it before reaching the
     rig.
@@ -269,9 +269,9 @@ def test_860_slymovehead_geometry_orient_to_pan_smooth():
         parent_server._layout.setdefault("children", []).append(
             {"id": fid, "x": 0, "y": 0, "z": 2000})
 
-        did = "#860-slymovehead-puck"
+        did = "#860-slymovehead-gyro"
         remote = parent_server._remotes.add(
-            name="LiveTestPuck", kind=_KP_860, device_id=did)
+            name="LiveTestGyro", kind=_KP_860, device_id=did)
         remote.R_world_to_stage = (1.0, 0.0, 0.0, 0.0)
         remote.calibrated = True
         remote.calibrated_at = time.time()
@@ -279,9 +279,9 @@ def test_860_slymovehead_geometry_orient_to_pan_smooth():
         remote.stale_reason = None
 
         ok_c, _ = parent_server._mover_engine.claim(
-            fid, did, "LiveTestPuck", "gyro",
+            fid, did, "LiveTestGyro", "gyro",
             smoothing=0.15, convention="flat_pitch_yaw")
-        _ok(ok_c, "#860 claim acquires (puck pre-cal'd via #847 path)")
+        _ok(ok_c, "#860 claim acquires (gyro pre-cal'd via #847 path)")
         parent_server._mover_engine.start_stream(fid, did)
 
         cl = parent_server._mover_engine._claims.get(fid)
@@ -292,7 +292,7 @@ def test_860_slymovehead_geometry_orient_to_pan_smooth():
         # Operator's 7 orient samples from #860's live log.
         orient_aim_seq = [
             (0.348, 0.312, 0.884),    # calibrate-end
-            (-0.146, 0.915, 0.375),   # puck moves 1
+            (-0.146, 0.915, 0.375),   # gyro moves 1
             (0.065, 0.985, 0.157),    # 2
             (0.082, 0.989, 0.119),    # 3
             (0.115, 0.984, 0.133),    # 4

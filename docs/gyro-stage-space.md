@@ -1,7 +1,7 @@
 # Gyro / Phone Remote Controller — Stage-Space Orientation Architecture
 
 **Status:** Design — decisions locked (`docs/remote-assumptions.docx`), ready for phase 1
-**Scope:** ESP32 gyro puck (`SLYG-*`) and Android phone in controller mode. Both feed `POST /api/mover-control/orient`.
+**Scope:** ESP32 gyro controller (`SLYG-*`) and Android phone in controller mode. Both feed `POST /api/mover-control/orient`.
 **Tracking issue:** #484
 **Related:** #468 (unified mover control), #474 (absolute stage-space mapping), #477 (axis verification), #478–#483 (Android parity — blocked on this)
 
@@ -37,7 +37,7 @@ These five points are the spec. The rest of this document is how to realise them
 - **Calibration** is against any stage object with an orientation vector, not hard-coded to movers. Stage object is held still by the engine during calibration.
 - **Feature #1 — mover-follow:** 1:1 mapping from remote rotation to mover aim rotation in stage angles. Shipped alongside the primitive, but isolated from it.
 - Inverted / angled fixture mounts are handled by the mount rotation matrix, not per-fixture flip flags.
-- One pipeline handles both ESP32 puck and Android phone.
+- One pipeline handles both ESP32 gyro and Android phone.
 - Each active remote is a first-class stage-space object (position + orientation) with a visible aim ray in the 3D viewport.
 
 **Non-goals (v1)**
@@ -75,14 +75,14 @@ Origin `(0,0,0)` = floor, stage right, back wall. All components (calibration, r
     `dz = -sin(tilt)`
 - **pan_range / tilt_range:** on the fixture (typically 540° / 270°).
 
-### 3.3 Remote frame — ESP32 gyro puck
+### 3.3 Remote frame — ESP32 gyro controller
 
 - IMU: QMI8658 (6-axis, no magnetometer).
 - Output from `main/GyroIMU.cpp:151–168` (complementary filter, `CF_ALPHA = 0.98`):
   - `roll` = atan2(ay, az) + gyro integration → rotation about body X (tilt left/right)
   - `pitch` = atan2(-ax, √(ay²+az²)) + gyro integration → rotation about body Y (tilt forward/back)
   - `yaw` = pure gyro integration about body Z. **Drifts** (no magnetometer). Reset by `gyroIMUZero()` on calibrate hold.
-- Body axes of the puck (to be confirmed against physical labelling in implementation):
+- Body axes of the gyro (to be confirmed against physical labelling in implementation):
   - `+X` → screen 3-o'clock direction
   - `+Y` → screen top (12-o'clock) — **defined as "forward"** (this is the pointing direction)
   - `+Z` → screen normal, out of the LCD face — **defined as "up"**
@@ -104,7 +104,7 @@ Origin `(0,0,0)` = floor, stage right, back wall. All components (calibration, r
 
 ### 3.5 Implication: ESP32 vs Android
 
-| Property | ESP32 puck | Android phone |
+| Property | ESP32 gyro | Android phone |
 |----------|-----------|---------------|
 | Yaw reference | Gyro integration; resets on calibrate | Magnetic north (when mag valid) |
 | Long-term stability | Drifts minutes-scale | Stable |
@@ -235,7 +235,7 @@ Future consumer features (floor-spot follow, record/replay, camera slewing, snap
 
 ## 6. Wire format decision
 
-**ESP32 → server:** keep `CMD_GYRO_ORIENT` with int16 `roll/pitch/yaw` × 100. No change. Simple, stable, already deployed on all pucks.
+**ESP32 → server:** keep `CMD_GYRO_ORIENT` with int16 `roll/pitch/yaw` × 100. No change. Simple, stable, already deployed on all gyros.
 
 **Android → server:** **v2 stays Euler.** Payload remains `{roll, pitch, yaw}` as sent today. The server converts Euler → quaternion internally before the primitive's math runs (ZYX order, consistent with the ESP32 path).
 
@@ -249,7 +249,7 @@ A remote is a first-class stage-space object — not an attribute of a claim. It
 
 ### 7.1 Persistence
 
-Remotes appear in the layout alongside fixtures, so operators can place a puck or phone at its known position and the viewport can render it.
+Remotes appear in the layout alongside fixtures, so operators can place a gyro or phone at its known position and the viewport can render it.
 
 Stored in `desktop/shared/data/remotes.json` (new file) or a new array in the existing layout JSON, whichever fits the existing persistence pattern (resolve during implementation):
 
@@ -258,8 +258,8 @@ Stored in `desktop/shared/data/remotes.json` (new file) or a new array in the ex
   "remotes": [
     {
       "id":   1,
-      "name": "Stage Left Puck",
-      "kind": "gyro-puck",
+      "name": "Stage Left Gyro",
+      "kind": "gyro",
       "deviceId": "gyro-192.168.10.201",
       "pos":  [1500, 2100, 1600],
       "rot":  [0, 0, 0]
@@ -309,8 +309,8 @@ DELETE /api/remotes/<id>                  -> remove
     {
       "id":         1,
       "deviceId":   "gyro-192.168.10.201",
-      "kind":       "gyro-puck",
-      "name":       "Stage Left Puck",
+      "kind":       "gyro",
+      "name":       "Stage Left Gyro",
       "pos":        [1500, 2100, 1600],
       "aim":        [0.20, 0.80, -0.55],
       "calibrated": true,
@@ -345,14 +345,14 @@ When stale, the controller UI (desktop modal + Android overlay) shows a prominen
 
 In the Three.js viewport (`desktop/shared/spa/js/scene-3d.js`), add a `remotes` group parallel to fixtures and temporal objects:
 
-- **Icon at `pos`:** small sprite — disc for gyro puck, rounded rectangle for phone.
+- **Icon at `pos`:** small sprite — disc for gyro controller, rounded rectangle for phone.
 - **Ray from `pos` along `aim`** of configurable length (default 3000 mm or until it hits floor/wall, whichever is first — reuse `ray_surface_intersect` at `mover_calibrator.py:660`).
 - **Colour coding by connection state + data age:**
   - Green = streaming, fresh (age < 2s)
   - Amber = streaming, stale (age 2–10s)
   - Blue = armed (calibrated, no live data yet)
   - Grey = idle / uncalibrated
-- **Label:** `{remoteName} → {consumer targets}`  (e.g. "Stage Left Puck → Stage Left MH").
+- **Label:** `{remoteName} → {consumer targets}`  (e.g. "Stage Left Gyro → Stage Left MH").
 
 Rationale: temporal objects currently only carry position + bounding box (`parent_server.py:4072–4111`). Remotes have orientation and a ray, so a dedicated group is cleaner than shoehorning into temporals. The viewport rendering is a pure consumer of `/api/remotes/live` — no coupling to mover-follow.
 
@@ -393,7 +393,7 @@ Both files shrink compared to today's combined file.
 
 ### 9.5 Firmware
 
-ESP32 puck firmware stays as-is (still sends Euler via `CMD_GYRO_ORIENT`). No protocol break on the wire. The change is server-side.
+ESP32 gyro firmware stays as-is (still sends Euler via `CMD_GYRO_ORIENT`). No protocol break on the wire. The change is server-side.
 
 Android APK in v2 adds the `quat` field to `POST /api/mover-control/orient` (§6). If an older APK is in the field, the server falls back to Euler → quaternion and still runs the stage-space pipeline. This isn't a compatibility layer — it's just that the math accepts both input shapes.
 
@@ -446,7 +446,7 @@ Split by layer:
 
 | # | Decision | Detail |
 |---|----------|--------|
-| 1 | Remote "forward" axis | Body `+Y` (screen top / 12-o'clock) on both ESP32 puck and Android phone. Android controller mode locks landscape; phone top edge = forward. |
+| 1 | Remote "forward" axis | Body `+Y` (screen top / 12-o'clock) on both ESP32 gyro and Android phone. Android controller mode locks landscape; phone top edge = forward. |
 | 2 | Euler order for `fixture.rotation` | Match the existing baker/viewport convention. Implementation must read `desktop/shared/bake_engine.py` and `scene-3d.js` and use the same order — no changing it to fit the IK. |
 | 3 | Android wire format (v1) | **Stay in Euler.** Server converts to quaternion internally (ZYX). A follow-up issue adds the native rotation-vector quaternion on the wire — tracked separately (§12). |
 | 4 | Remote position input | Default stage centre at head height (`stageW/2, stageD * 0.7, 1600`), placement via the layout UI. No camera tracking in v1. |

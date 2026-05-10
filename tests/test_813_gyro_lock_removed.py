@@ -4,7 +4,7 @@
 Asserts the orchestrator no longer runs the 5 s gyro auto-lock loop and
 no longer auto-claims on first orient packet. Press-Start
 (`CMD_GYRO_START`) is the sole claim trigger; idle orchestrator emits
-zero UDP traffic toward gyro pucks.
+zero UDP traffic toward gyro gyros.
 
 Run:  python -X utf8 tests/test_813_gyro_lock_removed.py
 """
@@ -66,7 +66,7 @@ def test_release_packet_helper_kept():
     are still required for operator-driven Active→Inactive transitions.
     They must NOT have been deleted along with the auto-lock loop —
     operator can still flip a fixture to Inactive in the SPA and the
-    puck must receive the disable signal."""
+    gyro must receive the disable signal."""
     _assert(hasattr(parent_server, "_gyro_send_release_packet"),
             "_gyro_send_release_packet kept (Inactive transition)")
     _assert(hasattr(parent_server, "_gyro_inactive_transition"),

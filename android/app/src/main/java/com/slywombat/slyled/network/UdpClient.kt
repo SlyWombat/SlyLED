@@ -22,7 +22,7 @@ import javax.inject.Singleton
  * suffered TCP retransmit / connection-pool churn at audio rate
  * (live-test 2026-05-08: zero POSTs landed in 3.5 min of music despite
  * UI showing master bouncing 150–255). UDP fire-and-forget mirrors the
- * existing puck telemetry pattern on `:4210`.
+ * existing gyro telemetry pattern on `:4210`.
  *
  * Header layout matches CLAUDE.md UDP protocol v5:
  *   magic(uint16 LE = 0x534C) version(uint8 = 5) cmd(uint8) epoch(uint32 LE)

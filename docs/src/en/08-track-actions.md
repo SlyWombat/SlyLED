@@ -77,7 +77,7 @@ Track actions are full citizens of the show timeline:
   referenced by any clip in the running timeline) does **not**
   evaluate (#835). This stops a leftover preset action from
   blacking out movers in unrelated timelines.
-- When a remote (Android phone or gyro puck) claims a head via the
+- When a remote (Android phone or gyro controller) claims a head via the
   mover-control claim arbiter (chapter on Remote control), the
   claimed head is muted from the Track action for the duration of the
   claim — operator gestures take priority over the show. Releasing

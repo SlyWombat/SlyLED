@@ -7,7 +7,7 @@ Simulates a worst-case venue:
     chase, twinkle, DMX_SCENE)
   * 1 baked timeline with many tracks (each fixture × multiple clips)
   * 10 tracked people (YOLO-equivalent moving objects updated at 10 Hz)
-  * 2 gyro pucks streaming orient at 20 Hz (simulated via direct
+  * 2 gyro gyros streaming orient at 20 Hz (simulated via direct
     update_from_euler_deg — same code path as the UDP listener)
   * 1 Android Auto Brightness feed posting `/api/brightness` at 20 Hz
   * Show running, all background threads live (DMX engine,
@@ -213,7 +213,7 @@ def seed_tracked_people(c, n=10):
 
 
 def seed_gyros(c, n=2):
-    """Add N puck Remotes pre-calibrated against fixture 0 (so the
+    """Add N gyro Remotes pre-calibrated against fixture 0 (so the
     claim writer trusts cross-session cal per #847). Returns the
     device-id list and the Remote handles."""
     from remote_orientation import KIND_PUCK
@@ -234,7 +234,7 @@ def seed_gyros(c, n=2):
 # ── Background workers ──────────────────────────────────────────────────
 
 class GyroFeeder(threading.Thread):
-    """Simulates a puck streaming orient at 20 Hz (50 ms interval).
+    """Simulates a gyro streaming orient at 20 Hz (50 ms interval).
     Calls `update_from_euler_deg` directly — same code path as the UDP
     listener at parent_server.py:1385."""
     def __init__(self, remote, name="GyroFeed"):
@@ -487,7 +487,7 @@ VENUE_TIERS = [
     },
     # Mid-size theatre / event hall (~300-800 capacity)
     {
-        "label": "Theatre (300-800 cap, 1 LD + 1 puck)",
+        "label": "Theatre (300-800 cap, 1 LD + 1 gyro)",
         "n_movers": 5, "n_leds": 5, "n_actions": 50,
         "n_clips_per_fixture": 6, "n_gyros": 1, "n_people": 4,
     },

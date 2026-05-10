@@ -1,8 +1,8 @@
-## Appendix E — Remote Control: Android Phone & Gyro Puck
+## Appendix E — Remote Control: Android Phone & Gyro Gyro
 
 Two remote controllers can drive moving heads in real time alongside
 a running show: an Android phone running the SlyLED operator app and
-a Waveshare ESP32-S3 round-LCD gyro puck. Both go through the same
+a Waveshare ESP32-S3 round-LCD gyro controller. Both go through the same
 claim arbiter on the orchestrator, both follow the same handshake
 protocol, and both cooperate with the show timeline through the
 mover-control claim arbiter. This appendix describes the full
@@ -13,12 +13,12 @@ preset shows.
 
 The claim is the orchestrator's "this remote currently owns mover
 N" lock. It carries a 16-bit nonce, a TTL, and a current pose so
-the system can reconcile the puck's UI state with the orchestrator's
+the system can reconcile the gyro's UI state with the orchestrator's
 arbiter state when one of them reboots or drops a packet.
 
 ```
 1. IDLE on remote.
-2. Operator presses Start (puck) or Claim (Android).
+2. Operator presses Start (gyro) or Claim (Android).
 3. Remote ships CMD_GYRO_START / claim request with a fresh 16-bit nonce.
 4. Orchestrator allocates a mover, replies CLAIM_ACK with the
    nonce + assigned moverId. The remote advances UI to ACTIVE
@@ -37,18 +37,18 @@ and is the source of truth for any change to the protocol.
 
 #### What the operator sees
 
-- **Press Start on the puck** — page advances to "ACTIVE" within
+- **Press Start on the gyro** — page advances to "ACTIVE" within
   ~150 ms. If the orchestrator can't claim a mover (none online,
   none available), the page reverts to IDLE with a denial reason.
-- **Press Stop on the puck** — page returns to IDLE; the head
+- **Press Stop on the gyro** — page returns to IDLE; the head
   returns to whatever the show was driving (or parks if no show is
   running).
-- **Calibrate** — hold the **Calibrate** button (puck or Android)
+- **Calibrate** — hold the **Calibrate** button (gyro or Android)
   for as long as you need; release to capture the new reference
-  pose. The screen advances to the colour picker page on the puck;
+  pose. The screen advances to the colour picker page on the gyro;
   the Android app advances to the gesture page.
 - **Connection lost** — both remotes show a stale-reason badge if
-  the orchestrator stops hearing heartbeats. The puck self-clears
+  the orchestrator stops hearing heartbeats. The gyro self-clears
   when it resumes streaming (#812 / #821 / #823); operator can also
   force-clear via `POST /api/remotes/<id>/clear-stale`.
 
@@ -71,16 +71,16 @@ remote's orientation.
   the orchestrator's master brightness from the local mic envelope
   at ~20 Hz, gamma-scaled to the rig (#820, #843).
 
-The phone-specific yaw axis is mirrored relative to the puck (#824)
+The phone-specific yaw axis is mirrored relative to the gyro (#824)
 because the phone's natural-portrait orientation puts the operator's
-"left" 90 ° offset from the puck's body frame. The operator never
+"left" 90 ° offset from the gyro's body frame. The operator never
 needs to think about this; the orchestrator's `_apply_quat` for
 `KIND_PHONE` handles the negation.
 
-#### Gyro puck
+#### Gyro gyro
 
-- **Pitch** (tip puck forward / back) — beam pitches up / down.
-- **Yaw** (rotate around the puck's vertical axis) — beam pans.
+- **Pitch** (tip gyro forward / back) — beam pitches up / down.
+- **Yaw** (rotate around the gyro's vertical axis) — beam pans.
 - **Roll** (tilt left / right) — colour-wheel selection on profiles
   with a colour wheel; ignored on RGB-only profiles.
 - **Press Start** — claim mover and start streaming.
@@ -110,7 +110,7 @@ Claims take priority over the show timeline:
 A claim doesn't take over colour or dimmer:
 
 - The remote's gestures drive **only pan / tilt** (and colour wheel
-  for the puck's roll axis on profiles that support it).
+  for the gyro's roll axis on profiles that support it).
 - The head's dimmer and RGB stay under the show's control. If the
   show is dim, the claimed head stays dim — the operator picks pan
   and tilt; the show paints colour and intensity.
@@ -122,7 +122,7 @@ A claim doesn't take over colour or dimmer:
 The handshake's heartbeats include both ends' state, so divergent
 combinations are reconciled:
 
-| Puck UI | Orchestrator | What happens |
+| Gyro UI | Orchestrator | What happens |
 | --- | --- | --- |
 | ACTIVE | claim held | Normal — heartbeats keep TTL alive. |
 | ACTIVE | no claim | Orchestrator reconstructs the claim (orchestrator-restart bootstrap). |

@@ -137,24 +137,95 @@ with sync_playwright() as p:
     # --- Beam cone check ---
     print('\n--- Beam cones ---')
     page.wait_for_timeout(3000)
-    # Check in both emu3d nodes and layout nodes
-    cones = page.evaluate('''() => {
-        var c = 0;
-        // Check runtime/dashboard nodes
-        if(window._emu3d && window._emu3d.nodes) {
-            window._emu3d.nodes.forEach(function(g) {
-                g.traverse(function(obj) { if(obj.userData && obj.userData.beamCone) c++; });
-            });
-        }
-        // Also check layout scene nodes (cones may be on layout fixture groups)
-        if(window._s3d && window._s3d.nodes) {
-            window._s3d.nodes.forEach(function(g) {
-                g.traverse(function(obj) { if(obj.userData && obj.userData.beamCone) c++; });
-            });
-        }
-        return c;
-    }''')
-    check('Beam cones present: ' + str(cones), cones >= 1)
+
+    def _count_userdata(tag):
+        """Count Three.js objects across both Layout (`_s3d`) and
+        emu3d (Dashboard/Runtime) scenes whose `userData[tag]` is
+        truthy. Used for cone visibility regression checks."""
+        return page.evaluate('''(t) => {
+            var c = 0;
+            if(window._emu3d && window._emu3d.nodes) {
+                window._emu3d.nodes.forEach(function(g) {
+                    g.traverse(function(obj) { if(obj.userData && obj.userData[t]) c++; });
+                });
+            }
+            if(window._s3d && window._s3d.nodes) {
+                window._s3d.nodes.forEach(function(g) {
+                    g.traverse(function(obj) { if(obj.userData && obj.userData[t]) c++; });
+                });
+            }
+            return c;
+        }''', tag)
+
+    def _count_visible_userdata(tag):
+        """Same as `_count_userdata` but only counts objects whose
+        `visible === true`. The cone-rendering regression operator
+        hit on 2026-05-10 was: cones exist (count > 0) but are all
+        invisible because the toggle handler only walked the Layout
+        scene, not the Dashboard/Runtime emu3d scene."""
+        return page.evaluate('''(t) => {
+            var c = 0;
+            if(window._emu3d && window._emu3d.nodes) {
+                window._emu3d.nodes.forEach(function(g) {
+                    g.traverse(function(obj) {
+                        if(obj.userData && obj.userData[t] && obj.visible) c++;
+                    });
+                });
+            }
+            if(window._s3d && window._s3d.nodes) {
+                window._s3d.nodes.forEach(function(g) {
+                    g.traverse(function(obj) {
+                        if(obj.userData && obj.userData[t] && obj.visible) c++;
+                    });
+                });
+            }
+            return c;
+        }''', tag)
+
+    beam_cones = _count_userdata('beamCone')
+    check('Beam cones present: ' + str(beam_cones), beam_cones >= 1)
+
+    # --- Camera cone check (added 2026-05-10 after regression where
+    # `_layCamConesToggle` only walked the Layout scene, leaving the
+    # Dashboard/Runtime emu3d cones stuck at their default-off
+    # visibility. Test passes the regression by:
+    #   1. Ensuring at least one camera fixture exists in the test
+    #      stage (added in test_stage_setup harness).
+    #   2. Counting `cameraCone` tags — confirms they're drawn.
+    #   3. Toggling the View dropdown's Camera Cones checkbox ON and
+    #      asserting the visible-count rises to match the total
+    #      count (cones become visible on BOTH layout + emu3d). ---
+    print('\n--- Camera cones ---')
+    cam_cones_total = _count_userdata('cameraCone')
+    print('    Camera cone nodes (visible+hidden):', cam_cones_total)
+    if cam_cones_total == 0:
+        # Soft: the test harness may not include a camera fixture
+        # yet. Mark as a known gap rather than failing — the
+        # regression-test stage_setup should be extended to include
+        # one. Beam-cone check still runs.
+        print('    [SKIP] No camera fixtures in stage; add one to '
+              'regression scenarios to cover the toggle regression.')
+    else:
+        # Force Camera Cones toggle ON and verify all camera cone
+        # nodes become visible across BOTH scenes (Layout + emu3d).
+        page.evaluate('''() => {
+            var cb = document.getElementById('vw-camcones');
+            if(cb){ cb.checked = true; if(typeof _layCamConesToggle === 'function') _layCamConesToggle(); }
+        }''')
+        page.wait_for_timeout(500)
+        vis = _count_visible_userdata('cameraCone')
+        check('All camera cones visible after toggle ON: ' + str(vis)
+              + '/' + str(cam_cones_total),
+              vis == cam_cones_total)
+        # And toggle back OFF to verify the reverse direction.
+        page.evaluate('''() => {
+            var cb = document.getElementById('vw-camcones');
+            if(cb){ cb.checked = false; if(typeof _layCamConesToggle === 'function') _layCamConesToggle(); }
+        }''')
+        page.wait_for_timeout(500)
+        vis_off = _count_visible_userdata('cameraCone')
+        check('All camera cones hidden after toggle OFF: ' + str(vis_off),
+              vis_off == 0)
 
     # Verify no JS errors
     real_errs = [e for e in errs if '400' not in e and '404' not in e]

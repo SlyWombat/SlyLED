@@ -27,7 +27,7 @@
 22. [Appendix B — Moving-Head Calibration Pipeline](#appendix-b)
 23. [Appendix C — Documentation Maintenance](#appendix-c)
 24. [Appendix D — Idle Behaviour](#appendix-d)
-25. [Appendix E — Remote Control: Android Phone & Gyro Puck](#appendix-e)
+25. [Appendix E — Remote Control: Android Phone & Gyro Gyro](#appendix-e)
 
 ---
 

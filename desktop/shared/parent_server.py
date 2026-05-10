@@ -119,7 +119,7 @@ CMD_GYRO_COLOR  = 0x63   # gyro→parent: GyroColorPayload (r, g, b, flags)
 CMD_GYRO_CALIBRATE = 0x64  # gyro→parent: calibrate start/end + orientation
 CMD_GYRO_HEARTBEAT = 0x65  # parent→gyro: 2s cadence while claim active (#476)
 CMD_GYRO_START         = 0x66  # gyro→parent: explicit press-START — claim + start_stream (#772)
-CMD_GYRO_CLAIM_DENIED  = 0x67  # parent→gyro: claim refused, puck reverts to IDLE (#772)
+CMD_GYRO_CLAIM_DENIED  = 0x67  # parent→gyro: claim refused, gyro reverts to IDLE (#772)
 CMD_GYRO_BATT          = 0x68  # gyro→parent: battery telemetry (vbat100 + pct + flags), 10 s cadence (#813 follow-up)
 CMD_GYRO_STOP          = 0x69  # gyro→parent: discrete press-STOP — release claim + park + end_session (#819). Nonce(2) since #825 (legacy header-only still accepted).
 CMD_GYRO_CLAIM_ACK     = 0x6A  # parent→gyro: claim established — {nonce(2), moverId(2)} (#825).
@@ -127,7 +127,7 @@ CMD_GYRO_STOP_ACK      = 0x6B  # parent→gyro: stop confirmed — {nonce(2)} (#
 CMD_GYRO_HEARTBEAT_REP = 0x6C  # gyro→parent: heartbeat reply — {uiState(1), claimNonce(2), seq(2)} (#825).
 CMD_AUTOBRI_PUSH       = 0x6D  # phone→parent: Android Auto Brightness master push (#861) — {master(1), flags(1), seq(1)}. 20 Hz fire-and-forget UDP; orchestrator coalesces by overwriting `_settings["globalBrightness"]` per packet. Replaces the prior HTTP /api/brightness fast path.
 CMD_GYRO_OFF           = 0x6E  # gyro→parent: explicit press-OFF (#867) — same nonce shape as CMD_GYRO_STOP but server releases the claim with blackout=True so the head goes dark. STOP leaves head at last frame; OFF blackouts the head AND releases. ACK reuses CMD_GYRO_STOP_ACK.
-CMD_GYRO_AIM_WIZARD    = 0x6F  # gyro→parent: empirical aim-axis wizard (#869) — 36-byte payload: 3 Euler triples in degrees (roll, pitch, yaw) for {neutral, pitch_forward, yaw_left}, each 3×float32 LE. Server converts to quats via quat_from_euler_zyx_deg, then runs the same _aim_wizard_compute (#826) the Android wizard uses; persists derived forward_local/up_local on the puck's `gyro-<ip>` Remote.
+CMD_GYRO_AIM_WIZARD    = 0x6F  # gyro→parent: empirical aim-axis wizard (#869) — 36-byte payload: 3 Euler triples in degrees (roll, pitch, yaw) for {neutral, pitch_forward, yaw_left}, each 3×float32 LE. Server converts to quats via quat_from_euler_zyx_deg, then runs the same _aim_wizard_compute (#826) the Android wizard uses; persists derived forward_local/up_local on the gyro's `gyro-<ip>` Remote.
 
 # #825 — uiState codes carried in CMD_GYRO_HEARTBEAT_REP.
 GYRO_UI_IDLE        = 0
@@ -137,7 +137,7 @@ GYRO_UI_STOPPING    = 3
 
 # #872 — CMD_GYRO_CLAIM_DENIED reason codes (1-byte payload).
 # See `docs/gyro-claim-lifecycle.md` §3.6 for the operator-facing
-# string table the puck firmware renders. Older firmware (<1.2.11)
+# string table the gyro firmware renders. Older firmware (<1.2.11)
 # ignores the byte and falls back to the legacy "BUSY / Mover held
 # by other" string.
 GYRO_DENIED_IDLE                = 0  # unspecified / replayed-from-cache
@@ -585,15 +585,15 @@ def _gyro_device_name(ip: str, gf=None):
 
 # ── #813 — gyro Active/Inactive lifecycle (operator-driven claim) ─────────
 #
-# Press-Start on the puck firmware sends `CMD_GYRO_START` (#772). The
+# Press-Start on the gyro firmware sends `CMD_GYRO_START` (#772). The
 # orchestrator looks up the matching gyro fixture, validates Active
 # (`gyroEnabled`), and runs `MoverControlEngine.claim` + `start_stream`.
 # On refusal the orchestrator answers `CMD_GYRO_CLAIM_DENIED` so the
-# puck can revert its UI to IDLE.
+# gyro can revert its UI to IDLE.
 #
 # Inactive state (#801): refuse incoming `CMD_GYRO_START`, release any
 # live claim, and send `CMD_GYRO_CTRL(enabled=0)` on the Active→Inactive
-# transition so the puck firmware reverts its UI immediately.
+# transition so the gyro firmware reverts its UI immediately.
 #
 # Operator-facing terminology is "Active" / "Inactive"; the on-disk
 # field name remains `gyroEnabled` (bool) for backward compat.
@@ -602,7 +602,7 @@ def _gyro_device_name(ip: str, gf=None):
 # `CMD_GYRO_CTRL(enabled=1)` to every Active+disconnected gyro. That
 # loop has been removed entirely: it raced with the press-Start flow,
 # caused stale-state cascades (#812), and produced constant idle UDP
-# traffic with no real benefit now that the puck self-initiates via
+# traffic with no real benefit now that the gyro self-initiates via
 # `CMD_GYRO_START`.
 
 
@@ -650,8 +650,8 @@ def _gyro_inactive_transition(gf):
 
 
 # #813 — `_gyro_active_lock_loop` / `_tick` deleted. Press-Start on
-# the puck (`CMD_GYRO_START`) is the sole claim trigger; orchestrator
-# never spontaneously reaches out to a puck during idle.
+# the gyro (`CMD_GYRO_START`) is the sole claim trigger; orchestrator
+# never spontaneously reaches out to a gyro during idle.
 
 
 def _apply_gyro_color(gyro_ip: str, r: int, g: int, b: int, flash: bool):
@@ -1461,7 +1461,7 @@ def _udp_autobri_listener():
     `UDP_AUTOBRI_PORT`. Separate from the firmware-shared 4210
     listener so that Android Auto Brightness still works even when
     Windows kernel reservations refuse to free 4210 (rare but real;
-    the gyro puck handshake will be down in that case but Auto
+    the gyro controller handshake will be down in that case but Auto
     Brightness still arrives). Same packet format as the 4210 path
     — 8-byte header + 3-byte payload (master/flags/seq) — re-using
     `_handle_autobri_push` so the dispatch is single-source."""
@@ -1526,8 +1526,8 @@ def _udp_listener():
             roll100, pitch100, yaw100, fps, flags = struct.unpack_from("<hhhBB", data, 8)
 
             # #819 — bit 3 of orient flags used to mean STOP in proto-v4
-            # (puck firmware ≤v1.2.5). That overload mis-fired on every
-            # orient packet a v1.2.5 puck sent, auto-releasing the live
+            # (gyro firmware ≤v1.2.5). That overload mis-fired on every
+            # orient packet a v1.2.5 gyro sent, auto-releasing the live
             # claim ~25 ms after CMD_GYRO_START. Bit 3 is now reserved;
             # STOP moved to a discrete CMD_GYRO_STOP (0x69). We only warn
             # if the bit is observed and continue processing the orient —
@@ -1538,7 +1538,7 @@ def _udp_listener():
                 log.warning(
                     "GYRO_ORIENT from %s with bit 3 set (flags=0x%02x) — "
                     "protocol mismatch; expected CMD_GYRO_STOP. Ignoring "
-                    "the bit and processing orient. Reflash puck firmware "
+                    "the bit and processing orient. Reflash gyro firmware "
                     "to v1.2.6+ to clear this warning.", ip, flags)
             with _gyro_lock:
                 # #813 follow-up — merge instead of overwrite so the
@@ -1558,7 +1558,7 @@ def _udp_listener():
             # here any more.
             device_id = f"gyro-{ip}"
             # #822 — bump child.seen so Firmware Updates doesn't flag a
-            # streaming gyro as offline. The puck rarely sends CMD_PONG
+            # streaming gyro as offline. The gyro rarely sends CMD_PONG
             # in steady state; orient is the high-frequency liveness
             # signal.
             _touch_child_seen(ip)
@@ -1575,7 +1575,7 @@ def _udp_listener():
             # (#772 era) was deleted — green-field reflash assumed.
         elif cmd == CMD_GYRO_STOP:
             # #819 — discrete press-STOP. #825 — payload now carries a
-            # nonce(2). Header-only legacy variants (puck firmware ≤
+            # nonce(2). Header-only legacy variants (gyro firmware ≤
             # v1.2.6) are still accepted with nonce=0 and no STOP_ACK.
             #
             # #813 §1.2 / §6.1 — release(blackout=False). Press-Stop hands
@@ -1643,7 +1643,7 @@ def _udp_listener():
             # to whatever was driving it before the gyro session. STOP
             # is "I'm done driving, hand control back at current
             # frame"; OFF is "I'm done driving AND turn the head off
-            # right now." The puck advances UI on matching STOP_ACK.
+            # right now." The gyro advances UI on matching STOP_ACK.
             off_nonce = None
             if len(data) >= 10:
                 try:
@@ -1699,18 +1699,18 @@ def _udp_listener():
             except Exception as e:
                 log.error("GYRO_OFF handler failed: %s", e, exc_info=True)
         elif cmd == CMD_GYRO_AIM_WIZARD:
-            # #869 — puck-side empirical aim-axis wizard. Same math
+            # #869 — gyro-side empirical aim-axis wizard. Same math
             # as the Android wizard (#826): three captured poses →
             # forward_local / up_local. Wire path differs from the
             # phone (which POSTs to /api/remotes/aim-wizard) because
-            # the puck has no HTTPS stack — captures ride one UDP
+            # the gyro has no HTTPS stack — captures ride one UDP
             # packet. Payload is 3 Euler triples in degrees:
             #   bytes 8..20  = neutral       (roll, pitch, yaw)
             #   bytes 20..32 = pitch_forward (roll, pitch, yaw)
             #   bytes 32..44 = yaw_left      (roll, pitch, yaw)
             # Server converts each triple to a body-to-world unit
             # quat via quat_from_euler_zyx_deg (the same convention
-            # the puck's orient stream uses) before dispatching to
+            # the gyro's orient stream uses) before dispatching to
             # _apply_aim_wizard_to_remote.
             if len(data) < 44:
                 log.warning("GYRO_AIM_WIZARD from %s: payload too short "
@@ -1774,11 +1774,11 @@ def _udp_listener():
             # #813 §6.3 — every gyro packet refreshes the all-comms-silence
             # clock. Calibrate is optional (#813 §5.0) so we never gate any
             # downstream behaviour on having seen one — but receiving one
-            # is proof the puck is alive.
+            # is proof the gyro is alive.
             _gyro_touch_remote(f"gyro-{ip}")
             log.info("GYRO_CALIBRATE from %s: cal=%d R=%.1f P=%.1f Y=%.1f",
                      ip, calibrating, roll, pitch, yaw)
-            # Resolve the gyro fixture + target mover for this puck.
+            # Resolve the gyro fixture + target mover for this gyro.
             _gf3 = next((f for f in _fixtures if f.get("fixtureType") == "gyro"
                          and f.get("gyroChildId") is not None
                          and next((c for c in _children if c["id"] == f["gyroChildId"]
@@ -1823,12 +1823,12 @@ def _udp_listener():
             # #872 — HB_REP is diagnostics-only.
             #
             # Pre-#872 this handler reconstructed the claim from the
-            # puck's heartbeat ("orchestrator-restart bootstrap path",
-            # #813 §5.3) when the puck reported ACTIVE while the
+            # gyro's heartbeat ("orchestrator-restart bootstrap path",
+            # #813 §5.3) when the gyro reported ACTIVE while the
             # orchestrator had no claim. That path enabled the
             # operator-visible bug class in #872: SPA Release / press-
             # Stop was undone by the next 2 s heartbeat because the
-            # puck's UI was still ACTIVE and the reconstruct branch
+            # gyro's UI was still ACTIVE and the reconstruct branch
             # could not distinguish "operator just released" from
             # "orchestrator just restarted".
             #
@@ -1855,7 +1855,7 @@ def _udp_listener():
                 if last_seq != hb_seq:
                     # Diagnostics-only log. `server_has_claim` divergence
                     # used to drive the reconstruct branch; now it just
-                    # informs the log so cross-check between the puck's
+                    # informs the log so cross-check between the gyro's
                     # view and the orchestrator's view is observable.
                     server_has_claim = (
                         _mover_engine is not None
@@ -1955,7 +1955,7 @@ def _handle_gyro_start_packet(ip, data):
     # Idempotent retransmission: same nonce within the dedupe
     # window just replays the cached response (ACK or DENIED) —
     # no second claim attempt. #872: replays carry the original
-    # reason so the puck renders the same message it would have
+    # reason so the gyro renders the same message it would have
     # rendered for the first DENIED.
     with _gyro_handshake_lock:
         st_hs = _gyro_handshake.setdefault(device_id, {})
@@ -1992,7 +1992,7 @@ def _handle_gyro_start_packet(ip, data):
             st_hs2["ack_sent_ts"] = time.time()
 
     # #801 / #872 — refuse GYRO_START when the controller is
-    # Inactive at the orchestrator level. Reason 1 lets the puck
+    # Inactive at the orchestrator level. Reason 1 lets the gyro
     # render "Gyro is disabled — enable in Setup" instead of the
     # legacy ambiguous "Mover held by other".
     if gf is not None and not gf.get("gyroEnabled"):
@@ -2001,9 +2001,9 @@ def _handle_gyro_start_packet(ip, data):
         _record_denied(GYRO_DENIED_CONTROLLER_INACTIVE)
         return
     if target_mover_id is None:
-        # #872 — was silent pre-fix; puck timed out without an
+        # #872 — was silent pre-fix; gyro timed out without an
         # actionable error. Now sends DENIED with reason 3 so the
-        # puck renders "No moving head assigned".
+        # gyro renders "No moving head assigned".
         log.info("GYRO_START from %s — no assigned mover, refusing", ip)
         _record_denied(GYRO_DENIED_NO_MOVER_ASSIGNED)
         return
@@ -2043,7 +2043,7 @@ def _handle_gyro_start_packet(ip, data):
     _gyro_lights_on(target_mover_id)
     if start_nonce is not None:
         _send_gyro_claim_ack(ip, start_nonce, target_mover_id)
-        # Fire an immediate heartbeat so the puck has something
+        # Fire an immediate heartbeat so the gyro has something
         # to reply to (HB_REP) right away.
         _send_gyro_heartbeat(ip)
         # Cache the nonce + response for idempotent START
@@ -2060,18 +2060,18 @@ def _handle_gyro_start_packet(ip, data):
                   "mover=%d (lights on, ACK + initial HB sent)",
                   ip, start_nonce, target_mover_id)
     else:
-        # Legacy puck (firmware ≤ v1.2.6, no nonce). Pre-#825
-        # behaviour: silent success, no ACK. The puck advances UI
+        # Legacy gyro (firmware ≤ v1.2.6, no nonce). Pre-#825
+        # behaviour: silent success, no ACK. The gyro advances UI
         # on absence-of-DENIED; the orphan-claim risk is exactly
         # what #825 fixes for new firmware, but back-compat keeps
-        # the old puck working.
+        # the old gyro working.
         log.info("GYRO_START from %s (legacy, no nonce) — "
                   "claim+start_stream ok mover=%d",
                   ip, target_mover_id)
 
 
 def _send_gyro_claim_denied(ip, reason=GYRO_DENIED_IDLE):
-    """#772 / #872 — fire-and-forget CMD_GYRO_CLAIM_DENIED to a puck
+    """#772 / #872 — fire-and-forget CMD_GYRO_CLAIM_DENIED to a gyro
     whose START we just refused. Payload is 1 byte: a reason code from
     `GYRO_DENIED_*`. Firmware ≥ v1.2.11 reads it to render an
     actionable message; older firmware ignores the byte and falls back
@@ -2118,14 +2118,14 @@ _gyro_handshake_lock = threading.Lock()
 
 # Window (seconds) during which a duplicate START/STOP nonce replays the
 # cached response instead of running claim/release. Tuned to comfortably
-# cover the puck's retry budget (5 retries × 150 ms = 750 ms).
+# cover the gyro's retry budget (5 retries × 150 ms = 750 ms).
 GYRO_HANDSHAKE_DEDUPE_S = 5.0
 
 
 def _send_gyro_claim_ack(ip, nonce, mover_id):
-    """#825 — confirm a successful press-Start to the puck.
+    """#825 — confirm a successful press-Start to the gyro.
 
-    Payload: nonce(2) + moverId(2). The puck matches `nonce` against the
+    Payload: nonce(2) + moverId(2). The gyro matches `nonce` against the
     START it sent and advances WAITING_ACK → ACTIVE. `moverId` lets it
     sanity-check it's been bound to the mover it's expecting.
     """
@@ -2140,7 +2140,7 @@ def _send_gyro_claim_ack(ip, nonce, mover_id):
 
 
 def _send_gyro_stop_ack(ip, nonce):
-    """#825 — confirm a successful press-Stop to the puck."""
+    """#825 — confirm a successful press-Stop to the gyro."""
     try:
         pkt = _hdr(CMD_GYRO_STOP_ACK) + struct.pack("<H", int(nonce) & 0xFFFF)
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -2157,7 +2157,7 @@ def _touch_child_seen(ip):
       - The CMD_PONG handler called `c.update(info)` with the parsed
         PongPayload, which doesn't include a `seen` key — so `seen` was
         never bumped on the discovery / ping cycle.
-      - The gyro puck rarely sends CMD_PONG (only on boot broadcast); its
+      - The gyro controller rarely sends CMD_PONG (only on boot broadcast); its
         steady-state traffic is CMD_GYRO_ORIENT / BATT / HEARTBEAT_REP,
         none of which touched `_children`. A perfectly online gyro
         therefore showed as offline in the Firmware tab.
@@ -2185,12 +2185,12 @@ def _gyro_touch_remote(device_id):
     calibrate, heartbeat-rep, batt, start, stop). The 600 s stale-comms
     threshold (`STALE_HARD_SECS`) measures silence on ANY incoming packet
     from this device, not just orient — see docs/gyro-claim-lifecycle.md
-    §6.3. Without this, a puck legitimately holding a still pose (no
+    §6.3. Without this, a gyro legitimately holding a still pose (no
     orient updates) but otherwise alive would still trip the silence
     fallback, contradicting #813's rock-solid principle.
 
     Auto-registers the Remote on first call so packets that arrive
-    before any orient (BATT / HEARTBEAT_REP from an IDLE puck) still
+    before any orient (BATT / HEARTBEAT_REP from an IDLE gyro) still
     establish a tracked entity.
     """
     try:
@@ -2199,7 +2199,7 @@ def _gyro_touch_remote(device_id):
         if remote is not None:
             remote.last_data = time.time()
             if remote.stale_reason == "connection-lost":
-                # #812 — auto-clear hard-stale when the puck comes back.
+                # #812 — auto-clear hard-stale when the gyro comes back.
                 remote.stale_reason = None
                 remote.soft_stale = False
     except Exception as e:
@@ -2301,7 +2301,7 @@ def _gyro_lights_on(mover_id):
 
 
 def _send_gyro_heartbeat(ip, state="streaming"):
-    """#825 — single CMD_GYRO_HEARTBEAT to one puck. Extracted from
+    """#825 — single CMD_GYRO_HEARTBEAT to one gyro. Extracted from
     `_heartbeat_loop` so the START success path can fire an immediate
     heartbeat right after CLAIM_ACK (#813 §3.3 packet diagram). Cheap
     (~10 byte UDP); idempotent."""
@@ -2316,12 +2316,12 @@ def _send_gyro_heartbeat(ip, state="streaming"):
 
 
 def _heartbeat_loop():
-    """#476 — Emit CMD_GYRO_HEARTBEAT to every puck with an active claim.
+    """#476 — Emit CMD_GYRO_HEARTBEAT to every gyro with an active claim.
 
-    Runs every 2 s. The puck treats the heartbeat as "parent is alive and
-    still holds your claim"; if the puck doesn't hear one for >5 s it
+    Runs every 2 s. The gyro treats the heartbeat as "parent is alive and
+    still holds your claim"; if the gyro doesn't hear one for >5 s it
     shows "RECON", and >20 s it drops back to IDLE. Silence is symmetric
-    with the consumer-side auto-release: server times out at 60 s, puck
+    with the consumer-side auto-release: server times out at 60 s, gyro
     times out at 20 s — both resolve to "operator must Send-Lock again".
     """
     while True:
@@ -2363,7 +2363,7 @@ def start_background_tasks():
     threading.Thread(target=_ai_helpers_warmup, daemon=True).start()
     # No auto-claim on boot. The UDP CMD_GYRO_ORIENT handler auto-claims
     # on the first orient packet from an enabled gyro fixture, which is
-    # the operator pressing Start on the puck. That's what turns the
+    # the operator pressing Start on the gyro. That's what turns the
     # fixture on — the server staying silent on boot lets the fixture
     # hold its blackout until the operator actively starts.
 
@@ -3518,7 +3518,7 @@ def api_gyro_state():
             # has been seen for this IP. None on the orient-only path so
             # SPA / consumers can distinguish "no telemetry yet" from
             # "telemetry says 0%". batAge lets the SPA grey-out a stale
-            # battery readout (e.g. puck rebooted, battery channel quiet).
+            # battery readout (e.g. gyro rebooted, battery channel quiet).
             if "vbat" in g:
                 entry["vbat"] = round(g["vbat"], 2)
                 entry["batPct"] = g.get("batPct")
@@ -11829,12 +11829,12 @@ def _cold_start_park_when_engine_ready():
 threading.Thread(target=_cold_start_park_when_engine_ready,
                  daemon=True, name="cold-start-park").start()
 
-# #813 — gyro auto-lock loop deleted. Press-Start on the puck firmware
+# #813 — gyro auto-lock loop deleted. Press-Start on the gyro firmware
 # (`CMD_GYRO_START`) is the sole claim trigger; the orchestrator never
-# spontaneously reaches out to a puck during idle. `_gyro_inactive_transition`
+# spontaneously reaches out to a gyro during idle. `_gyro_inactive_transition`
 # is still wired into the PUT /api/fixtures gyroEnabled=False handler so
 # operator-initiated Active→Inactive transitions still release the claim
-# and notify the puck via `CMD_GYRO_CTRL(0)`.
+# and notify the gyro via `CMD_GYRO_CTRL(0)`.
 
 # #763 — arbiter facade between the show writer and the universe buffer.
 # Reads claim state from the engine, exposes is_muted() so the playback +
@@ -11989,7 +11989,7 @@ def api_mover_cal_end_ctrl():
         # orientation than the next /orient packet — the phone's
         # post-calibrate aim flips by ~117° as a result. Quaternions
         # carry no axis-convention ambiguity. Falls back to roll/pitch
-        # /yaw for the gyro puck (IMU-native ZYX) and older clients.
+        # /yaw for the gyro controller (IMU-native ZYX) and older clients.
         quat = body.get("quat")
         if isinstance(quat, list) and len(quat) == 4:
             remote.calibrate(
@@ -12195,7 +12195,7 @@ def _auto_register_remote(device_id, kind=KIND_PUCK):
     stage_w_mm = float(_stage.get("w", 3.0)) * 1000.0
     stage_d_mm = float(_stage.get("d", 1.5)) * 1000.0
     pos = [stage_w_mm / 2.0, stage_d_mm * 0.7, 1600.0]
-    name = f"Puck {device_id.split('-', 1)[-1]}" if kind == KIND_PUCK else f"Phone {device_id.split('-', 1)[-1]}"
+    name = f"Gyro {device_id.split('-', 1)[-1]}" if kind == KIND_PUCK else f"Phone {device_id.split('-', 1)[-1]}"
     return _remotes.add(name=name, kind=kind, device_id=device_id, pos=pos)
 
 
@@ -12242,7 +12242,7 @@ def api_remotes_update(remote_id):
 def api_remote_grip(remote_id):
     """#757 Issue A — set per-remote body-frame `forward_local` /
     `up_local`. Call from the Android app at session start (or when
-    the operator changes grip), or from the gyro puck's mount-config
+    the operator changes grip), or from the gyro controller's mount-config
     flow. Both vectors are 3-element lists of floats. Either may be
     omitted to leave the corresponding axis unchanged.
 
@@ -12554,7 +12554,7 @@ def api_remote_aim_wizard_by_device():
 
 @app.get("/api/remotes/live")
 def api_remotes_live():
-    """List live remotes (gyro pucks, phone-claim) plus #849 virtual
+    """List live remotes (gyro gyros, phone-claim) plus #849 virtual
     Auto Brightness entries derived from `_brightness_obs`. The dashboard
     Remote Controllers card consumes this single endpoint and renders all
     sources uniformly so the operator can see, at a glance, every
@@ -12584,7 +12584,7 @@ def api_remotes_live():
             # LOST if no POST seen in the last 3 s (issue thresholds:
             # LIVE < 1 s, STALE 1-3 s, LOST > 3 s). The dashboard's
             # `_remoteDashColor` consumes hardStale to render the grey
-            # LOST chip, mirroring the gyro-puck card vocabulary.
+            # LOST chip, mirroring the gyro card vocabulary.
             hard_stale = last_age > 3.0
             snap.append({
                 "id": -1000 - hash(remote_ip) % 10000,
@@ -12621,7 +12621,7 @@ def api_remotes_disconnect():
     *removed* from the registry so a subsequent claim re-registers cleanly
     without the latched `stale_reason="session-ended"` causing
     `mover_control._tick` to immediately auto-release the new claim. Gyro
-    pucks (persistent hardware in the operator's setup) just get
+    gyros (persistent hardware in the operator's setup) just get
     `end_session()` — same SPA "gone within 1s" effect, but without losing
     their saved position/rot/calibration record.
     """
@@ -12647,7 +12647,7 @@ def api_remotes_disconnect():
 def api_remote_diagnostic(remote_id):
     """Raw + transformed orientation for axis-convention verification (#477).
 
-    Useful when the physical puck motion doesn't match the 3D ray —
+    Useful when the physical gyro motion doesn't match the 3D ray —
     operator / developer can see every step of the sensor → stage pipeline.
     """
     r = _remotes.get(remote_id)
@@ -18842,7 +18842,7 @@ _GITHUB_RELEASE_TTL = 3600  # 1 hour cache
 # Cached remote registry pulled from raw.githubusercontent. The orchestrator
 # bundle (PyInstaller) ships a snapshot of `firmware/registry.json` at
 # build time, so an installer that's a few releases behind would compare
-# its puck against an outdated pinned-version. Pulling the live registry
+# its gyro against an outdated pinned-version. Pulling the live registry
 # from GitHub at OTA-check time means an old orchestrator can still
 # discover newer firmware bumps without reinstalling — just hits "Check
 # for updates" and gets the current main-branch versions.

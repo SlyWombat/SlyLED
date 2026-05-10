@@ -95,7 +95,7 @@ def test_remote_defaults():
 
 def test_remote_invalid_kind_falls_back():
     r = Remote(id=2, kind="bogus")
-    _eq(r.kind, KIND_PUCK, msg="unknown kind → puck")
+    _eq(r.kind, KIND_PUCK, msg="unknown kind → gyro")
 
 
 def test_remote_update_without_calibration():
@@ -130,7 +130,7 @@ def test_calibrate_then_rotate():
     """Calibrate remote at identity aiming +Y. Yaw +90° = rotation about
     body +Z, which by the right-hand rule takes body +Y to world -X.
 
-    #762 — only valid when the convention consumes yaw. Pucks default to
+    #762 — only valid when the convention consumes yaw. Gyros default to
     BOTTOM_FORWARD_ROLL_PITCH and would freeze aim under yaw rotation.
     """
     r = Remote(id=11, convention=OrientConvention.FLAT_PITCH_YAW)
@@ -219,9 +219,9 @@ def test_full_user_model():
     n = norm3(aim_target)
     aim_unit = (aim_target[0]/n, aim_target[1]/n, aim_target[2]/n)
 
-    # #762 — exercise the legacy yaw-consuming convention; the puck-default
+    # #762 — exercise the legacy yaw-consuming convention; the gyro-default
     # BOTTOM_FORWARD_ROLL_PITCH would (correctly) freeze aim under pure yaw.
-    r = Remote(id=20, name="Stage Left Puck",
+    r = Remote(id=20, name="Stage Left Gyro",
                convention=OrientConvention.FLAT_PITCH_YAW)
     # Operator physically rotates remote to match the aim direction.
     # We simulate this by saying: the remote's current sensor reading is
@@ -328,10 +328,10 @@ def test_fresh_calibration_clears_stale():
 
 def test_812_connection_lost_auto_clears_on_fresh_orient():
     """#812 — when a hard `connection-lost` latch is in place because the
-    puck's WiFi dropped for >60s, the next orient packet that arrives must
+    gyro's WiFi dropped for >60s, the next orient packet that arrives must
     auto-clear the latch and resume streaming. Pre-#812 the operator had
     to POST /api/remotes/<id>/clear-stale manually before the press-Start
-    flow on the puck firmware would unjam."""
+    flow on the gyro firmware would unjam."""
     r = Remote(id=812)
     r.update_from_euler_deg(0, 0, 0)
     r.calibrate(target_aim_stage=(0, 1, 0))
@@ -341,7 +341,7 @@ def test_812_connection_lost_auto_clears_on_fresh_orient():
     _eq(r.stale_reason, "connection-lost", msg="latch fired after 60s silence")
     _eq(r.connection_state, "stale", msg="state stuck stale before recovery")
 
-    # Puck reconnects + sends one orient packet.
+    # Gyro reconnects + sends one orient packet.
     r.update_from_euler_deg(1.0, 2.0, 3.0)
     _eq(r.stale_reason, None,
         msg="connection-lost latch auto-cleared by fresh orient")
@@ -629,7 +629,7 @@ def test_registry_handles_corrupt_entries():
             json.dump({
                 "schemaVersion": 1,
                 "remotes": [
-                    {"id": 1, "name": "Good", "kind": "gyro-puck",
+                    {"id": 1, "name": "Good", "kind": "gyro",
                      "pos": [0, 0, 1600], "rot": [0, 0, 0]},
                     {"broken": "missing id"},
                 ],
@@ -669,15 +669,15 @@ def test_body_axis_constants():
 
 # ── #762 OrientConvention defaults + yaw-drop semantics ──────────────────
 
-def test_762_puck_default_convention_is_flat_pitch_yaw():
-    """#777 — puck default convention switched from
+def test_762_gyro_default_convention_is_flat_pitch_yaw():
+    """#777 — gyro default convention switched from
     BOTTOM_FORWARD_ROLL_PITCH (yaw-dropped) to FLAT_PITCH_YAW (full
     Euler) per docs/imu-axis-test-2026-05-01.md. Tests of
     BOTTOM_FORWARD-specific behaviour pass `convention=` explicitly
     on the Remote constructor."""
     r = Remote(id=200, kind=KIND_PUCK)
     _eq(r.convention, OrientConvention.FLAT_PITCH_YAW,
-        msg="puck default convention (post-#777)")
+        msg="gyro default convention (post-#777)")
 
 
 def test_762_phone_default_convention_is_flat_pitch_yaw():
@@ -690,7 +690,7 @@ def test_762_phone_default_convention_is_flat_pitch_yaw():
 def test_762_bottom_forward_drops_yaw_in_orient():
     """Two updates with same roll+pitch but different yaw yield the same
     quaternion under BOTTOM_FORWARD_ROLL_PITCH — drift is a no-op."""
-    # #777 / #856 — puck default switched to FLAT_PITCH_YAW. Pin
+    # #777 / #856 — gyro default switched to FLAT_PITCH_YAW. Pin
     # BOTTOM_FORWARD explicitly here to test that path's yaw-drop.
     r = Remote(id=202, kind=KIND_PUCK,
                convention=OrientConvention.BOTTOM_FORWARD_ROLL_PITCH)
@@ -735,7 +735,7 @@ def test_762_bottom_forward_calibrate_pitch_anchors_pose():
     r.update_from_euler_deg(10, 5, 0)
     _eq(r.aim_stage, (1, 0, 0), tol=1e-9,
         msg="orient at calib pose (yaw stripped) reproduces target aim")
-    # And the next moment the puck's yaw drifts by 200° — aim must not move.
+    # And the next moment the gyro's yaw drifts by 200° — aim must not move.
     r.update_from_euler_deg(10, 5, -200)
     _eq(r.aim_stage, (1, 0, 0), tol=1e-9,
         msg="yaw drift after calib doesn't move aim")
@@ -757,7 +757,7 @@ def test_762_set_convention_clears_calibration():
 def test_762_persist_roundtrip_default_omitted_override_kept():
     """Default convention isn't persisted (so flipping the per-kind default
     later propagates to old records). An explicit override IS persisted."""
-    # #777 / #856 — puck default is now FLAT_PITCH_YAW; the override
+    # #777 / #856 — gyro default is now FLAT_PITCH_YAW; the override
     # we test for non-default persistence must be the OTHER value.
     r1 = Remote(id=206, kind=KIND_PUCK)  # default = FLAT_PITCH_YAW
     d1 = r1.to_persisted_dict()
@@ -776,7 +776,7 @@ def test_762_persist_roundtrip_default_omitted_override_kept():
 
 def test_762_live_dict_exposes_convention():
     """Dashboard / status panel needs to render which convention is active."""
-    # #777 / #856 — default puck convention is now flat_pitch_yaw.
+    # #777 / #856 — default gyro convention is now flat_pitch_yaw.
     r = Remote(id=208, kind=KIND_PUCK)
     d = r.live_dict()
     _eq(d["orientConvention"], "flat_pitch_yaw",
@@ -817,7 +817,7 @@ ALL = [
     test_registry_live_list,
     test_body_axis_constants,
     # #762 OrientConvention coverage
-    test_762_puck_default_convention_is_flat_pitch_yaw,
+    test_762_gyro_default_convention_is_flat_pitch_yaw,
     test_762_phone_default_convention_is_flat_pitch_yaw,
     test_762_bottom_forward_drops_yaw_in_orient,
     test_762_flat_pitch_yaw_consumes_yaw,

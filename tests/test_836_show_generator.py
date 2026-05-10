@@ -42,7 +42,7 @@ def _assert(cond, msg):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Synthetic stage matching the issue body: 3 cameras + 1 LED node +
-# 5 movers (across 4 distinct DMX profiles) + 2 gyro pucks.
+# 5 movers (across 4 distinct DMX profiles) + 2 gyro gyros.
 
 def _build_stage():
     fixtures = [
@@ -63,7 +63,7 @@ def _build_stage():
          "dmxProfileId": "psly",  "dmxStartAddr": 49, "dmxUniverse": 1},
         {"id": 24, "fixtureType": "dmx", "name": "150W Medium LED",
          "dmxProfileId": "p150r", "dmxStartAddr": 65, "dmxUniverse": 1},
-        # Gyro pucks
+        # Gyro gyros
         {"id": 22, "fixtureType": "gyro", "name": "Gyro Controller A"},
         {"id": 23, "fixtureType": "gyro", "name": "Gyro Controller B"},
     ]

@@ -74,5 +74,5 @@ structs are sized for 8 strings regardless of the board's storage limit.
 
 | Hardware                                | Notes |
 |-----------------------------------------|-------|
-| Waveshare ESP32-S3 1.28" round LCD      | Primary gyro puck — see `hardware_waveshare_gyro.md` for pin map and build flags. |
-| Android phone (Compose app)             | Uses HTTP POST to `/api/mover-control/*` — same engine as the puck. |
+| Waveshare ESP32-S3 1.28" round LCD      | Primary gyro controller — see `hardware_waveshare_gyro.md` for pin map and build flags. |
+| Android phone (Compose app)             | Uses HTTP POST to `/api/mover-control/*` — same engine as the gyro. |

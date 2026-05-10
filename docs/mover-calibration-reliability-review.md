@@ -235,7 +235,7 @@ awareness; nobody else in the consumer price bracket uses cameras.
 |------|--------|---------------|
 | **BlackTrax (CAST)** | IR beacons + wand calibration of IR cameras; then per-fixture aim at tracked beacons. | ~$30 k+; wanding is laborious. |
 | **Follow-Me 3D** | 4 measured stage points + per-fixture aim refinement; trackball operator mode. | €5 k–€25 k + hardware. |
-| **Zactrack PRO / SMART** | UWB beacons on fixtures/performers + "alignment puck": operator aims each fixture at 4 puck positions. Solves pose + stage geometry simultaneously. | €15 k–€60 k; < 1 min per fixture after setup. Philosophically closest to SlyLED. |
+| **Zactrack PRO / SMART** | UWB beacons on fixtures/performers + "alignment gyro": operator aims each fixture at 4 gyro positions. Solves pose + stage geometry simultaneously. | €15 k–€60 k; < 1 min per fixture after setup. Philosophically closest to SlyLED. |
 | **TAIT Navigator** | Delegates to a third-party tracker (BlackTrax / Zactrack). | Not a direct comparable. |
 | **Disguise Designer (d3)** | Trusts CAD/MVR pose for fixtures; calibration focuses on the tracked camera/LED volume, not the movers. | Fixture pose is set, not solved. |
 
@@ -267,7 +267,7 @@ top; MVR is a prior, not an oracle.
 camera auto-calibration (Hartley–Zisserman classics; VLP / UAV
 self-calibration literature) exists, but no turnkey "point a USB
 camera at the stage and auto-solve mover pan/tilt-to-aim" product
-ships today. Zactrack's UWB puck and BlackTrax's IR wand are the
+ships today. Zactrack's UWB gyro and BlackTrax's IR wand are the
 closest commercial analogs — both need dedicated sensing hardware and
 cost 100× what a USB webcam does.
 
@@ -302,7 +302,7 @@ we're uniquely weak, where we can uniquely win.
    detection mode, colour-filter as the fallback.
 3. **Mirror ambiguity is silent.** grandMA3 / MagicQ force the
    operator to aim at 3+ points so the hemisphere is unambiguous.
-   Zactrack's puck-alignment has the same property. We fit 4 sign
+   Zactrack's gyro-alignment has the same property. We fit 4 sign
    combinations and pick the first low-RMS one without disambiguating
    (audit Q4). **Fix:** always run `verify_signs()` as a
    post-discovery 2-probe probe (nudge pan +0.02, confirm beam delta
@@ -320,9 +320,9 @@ we're uniquely weak, where we can uniquely win.
 
 - **Price.** $30 USB webcam vs. $30 k IR-beacon rig. 1000× cost
   advantage that holds forever.
-- **Zero beacons, zero pucks, zero wands.** The "known reference
+- **Zero beacons, zero gyros, zero wands.** The "known reference
   point" is the beam itself. No physical targets to place or wire.
-  Zactrack's puck costs more than an SlyLED full kit.
+  Zactrack's gyro costs more than an SlyLED full kit.
 - **Zero operator touches on tier 1.** Pro consoles need a human to
   eyeball each aim target. Our tier 1 can sweep, capture, fit and
   verify autonomously in < 1 min if it just works. Only failure

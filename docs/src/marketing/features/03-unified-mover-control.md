@@ -5,12 +5,12 @@ icon: puzzle
 order: 3
 ---
 
-# Gyro puck, pocket phone, on-screen slider — same engine
+# Gyro gyro, pocket phone, on-screen slider — same engine
 
 Operators don't pick one input device per show. A lighting designer
 might aim a spot from a tablet during rehearsal, hand the rig to a
-follow-spot operator with a gyro puck mid-run, and fall back to a
-faders-and-sliders SPA when the puck battery dies. Most systems treat
+follow-spot operator with a gyro controller mid-run, and fall back to a
+faders-and-sliders SPA when the gyro battery dies. Most systems treat
 each of those as a separate code path, which means three sets of bugs
 and three flavours of "works a little differently."
 

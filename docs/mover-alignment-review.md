@@ -51,7 +51,7 @@ The moving-head subsystem exists for exactly **three production-relevant jobs**:
    Q4's `aimTarget` and the auto-track evaluator shipped with the camera
    review (`_evaluate_track_actions`, `parent_server.py:10970`).
 2. **Remote-vector aim.** Align the beam with a vector emitted by a
-   remote (gyro puck, phone, any device that can produce an
+   remote (gyro controller, phone, any device that can produce an
    absolute-space direction). Builds on `MoverControlEngine`
    (`mover_control.py`) and the architecture in `docs/gyro-stage-space.md`
    (#484).
@@ -101,7 +101,7 @@ Per `project_basement_rig.md`: three DMX moving heads on the basement
 rig — two ceiling-ish movers and one floor-mounted 350 W BeamLight
 (`beamlight-350w-16ch`, hybrid RGB+colour-wheel, 16-bit pan/tilt). Two
 EMEET 4K cameras feed both tracking (Fn 1) and beam-spot calibration.
-ESP32-S3 gyro puck + Android phone are the live remote-vector inputs (Fn 2).
+ESP32-S3 gyro controller + Android phone are the live remote-vector inputs (Fn 2).
 
 ### 3.2 Fn 1 — tracking pipeline (works today)
 
@@ -129,7 +129,7 @@ ESP32-S3 gyro puck + Android phone are the live remote-vector inputs (Fn 2).
 ### 3.3 Fn 2 — remote-vector aim pipeline (in transition)
 
 ```
-ESP32 gyro puck  ── CMD_GYRO_ORIENT ──▶ parent UDP listener
+ESP32 gyro controller  ── CMD_GYRO_ORIENT ──▶ parent UDP listener
 Android phone    ── POST /api/mover-control/orient ──▶ Flask
         │
         ▼
@@ -198,7 +198,7 @@ positioning:
 | Function | grandMA3 / Hog / Titan / MagicQ | Disguise / d3 | Blacktrax / Follow-Me / TAIT | SlyLED today |
 |----------|--------------------------------|---------------|------------------------------|--------------|
 | **Fn 1: object tracking** | Manual cue-based; no built-in tracker. External system writes pan/tilt over MIDI / OSC / CITP. | Some 3D-stage tracking via xR camera workflows. | **Built for this** — Blacktrax IR beacons (~$50K+ rig), Follow-Me operator-with-trackball, TAIT auto-follow via stage-mounted sensors. Industry standard but $$$. | YOLO + camera nodes, ~$100/camera. Fn 1 implemented. |
-| **Fn 2: remote-vector aim** | Faders / encoder wheels / external trackball. No "phone is the beam" UX. | Phone-as-pointer not a first-class feature. | Offstage trackball (Follow-Me) is closest. | Phone + gyro puck → 1:1 stage-space aim (#484 in design, partial code on `main`). |
+| **Fn 2: remote-vector aim** | Faders / encoder wheels / external trackball. No "phone is the beam" UX. | Phone-as-pointer not a first-class feature. | Offstage trackball (Follow-Me) is closest. | Phone + gyro controller → 1:1 stage-space aim (#484 in design, partial code on `main`). |
 | **Fn 3: spatial-effect participation across fixture types** | **No.** Effects are per-attribute, per-fixture-type (colour chase ≠ pan chase, separately authored). | Pixel-mapping content can be projected onto stage geometry; movers consume separate cues. | Tracking-driven follow only; no "wave equation for all fixtures". | Bake-time hook for sphere/plane/box effects only. No runtime primitive. |
 
 To validate in §8: GDTF / MVR (open formats from MA Lighting / Vectorworks)
@@ -350,7 +350,7 @@ Live-test checklist (basement rig, run once per question batch):
 
 1. Fn 1: walk a defined path, capture per-mover aim error vs ground
    truth (ArUco-marked walking pose).
-2. Fn 2: hold gyro puck and Android phone; for each, calibrate-start
+2. Fn 2: hold gyro controller and Android phone; for each, calibrate-start
    on the same mover, sweep through 8 cardinal directions, capture
    commanded vs achieved beam direction. Look for any per-axis
    asymmetry that would indicate residual delta math.

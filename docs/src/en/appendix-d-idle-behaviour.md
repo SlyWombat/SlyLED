@@ -30,7 +30,7 @@ A parked moving head:
 | **Cold start** | Orchestrator boot | Every DMX fixture parks once the engine comes up. Avoids the "head was left aimed at the back wall last night" surprise. |
 | **Timeline natural end** | `_dmx_playback_loop` exit | Heads driven by the timeline's bake park when the show finishes. Track-action-driven heads also park (#807) — pre-fix only the bake-driven heads parked, leaving any tracker-claimed mover stuck at its last pose. |
 | **Operator presses Stop** | `_dmx_playback_stop` set | Same as natural end. The blackout sweep applies only on stop or final-iteration end (#840), not between loop iterations. |
-| **Claim release** | Mover-control claim arbiter | When an Android phone or gyro puck releases a claim, the head returns to the show if a show is running, otherwise parks. The release is instant — no slewed easing in v1.7.83+. |
+| **Claim release** | Mover-control claim arbiter | When an Android phone or gyro controller releases a claim, the head returns to the show if a show is running, otherwise parks. The release is instant — no slewed easing in v1.7.83+. |
 | **Power-cycle re-settle** | First PONG from a child after a boot | When a fixture's child board power-cycles, the orchestrator resends the current globalBrightness (#843) and the next show frame writes a known pose. Pre-v1.7.83 the child could come up at full brightness for one frame; the PONG-time top-up closes that window. |
 
 ### What does NOT trigger a park
@@ -45,7 +45,7 @@ show.
 - **DMX-test sliders on the Settings tab** — same reasoning. The
   sliders override show output for as long as the operator is
   driving them.
-- **Brief gaps within an active claim** — a phone or puck temporarily
+- **Brief gaps within an active claim** — a phone or gyro temporarily
   losing WiFi for a second doesn't release the claim. The remote-
   control claim TTL is 15 s; a head only parks when the TTL elapses
   without a heartbeat (#813 §6.3 "all-comms silence").

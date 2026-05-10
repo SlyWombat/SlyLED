@@ -233,7 +233,7 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
   } else if (strstr(req, " /imu ")) {
     // #776 — diagnostic /imu endpoint exposed only by the gyro test
     // build. Returns the raw chip values + filter output as JSON so a
-    // laptop can poll the puck while the operator tilts each axis.
+    // laptop can poll the gyro while the operator tilts each axis.
     extern void testGyroSendImuJson(WiFiClient&);
     testGyroSendImuJson(client);
 #endif

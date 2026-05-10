@@ -18,8 +18,8 @@ on the orchestrator side:
   6. The CMD_GYRO_STOP handler accepts an optional 2-byte nonce and
      replies with STOP_ACK.
   7. The CMD_GYRO_HEARTBEAT_REP handler reconciles divergent state
-     (releases orphan claim if puck reports IDLE; reconstructs claim
-     if puck reports ACTIVE but server has no record — restart
+     (releases orphan claim if gyro reports IDLE; reconstructs claim
+     if gyro reports ACTIVE but server has no record — restart
      bootstrap path).
 
 Run:  python -X utf8 tests/test_825_gyro_handshake.py
@@ -151,7 +151,7 @@ def test_start_handler_sends_ack_on_success():
     _assert("_gyro_lights_on(" in body,
             "START handler turns the lights on at claim creation (#813 §1.1)")
     _assert("_send_gyro_heartbeat(" in body,
-            "START handler sends an immediate first HB so the puck has "
+            "START handler sends an immediate first HB so the gyro has "
             "something to reply to (#813 §3.3)")
 
 
@@ -219,7 +219,7 @@ def test_stop_handler_uses_blackout_false():
 def test_touch_remote_helper_present():
     """#813 §6.3 — every gyro packet refreshes the silence clock so
     STALE_HARD_SECS measures all-comms silence, not just orient silence.
-    A puck legitimately holding a still pose (no orient updates) but
+    A gyro legitimately holding a still pose (no orient updates) but
     sending heartbeat-rep + battery should NOT trip the fallback."""
     import inspect
     src = inspect.getsource(parent_server)
@@ -283,7 +283,7 @@ def test_hb_rep_handler_present():
 
 def test_hb_rep_does_not_release_on_idle():
     """#813 §7.2 — HB_REP-IDLE → release is anti-pattern. Operator may
-    have rolled back the puck UI for any reason; only an explicit
+    have rolled back the gyro UI for any reason; only an explicit
     operator gesture (press-Stop or Inactive toggle) releases."""
     body = _hb_rep_handler_body()
     _assert("_mover_engine.release(" not in body,

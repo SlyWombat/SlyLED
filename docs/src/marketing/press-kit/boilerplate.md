@@ -96,7 +96,7 @@ posture is an architectural decision, not a compliance afterthought.
 
 ## Unified remote control
 
-Live operators use one of three input devices: a gyroscope puck, an
+Live operators use one of three input devices: a gyroscope gyro, an
 Android phone, or an on-screen slider in the SPA. SlyLED routes all
 three through one `MoverControlEngine` in `desktop/shared/mover_control.py`.
 Claim/release semantics prevent two devices from latching the same

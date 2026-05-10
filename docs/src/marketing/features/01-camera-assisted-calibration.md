@@ -5,7 +5,7 @@ icon: target
 order: 1
 ---
 
-# No beacons. No pucks. No wands.
+# No beacons. No gyros. No wands.
 
 Every pro-tier tracking system that came before SlyLED needed dedicated
 sensing hardware — IR wands from BlackTrax, UWB beacons from Zactrack,

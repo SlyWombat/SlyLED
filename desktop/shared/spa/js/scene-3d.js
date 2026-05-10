@@ -1251,19 +1251,31 @@ function _setViewCtx(ctx){
 // visibility flag. Called when switching view contexts (tab change) so
 // the shared Three.js scene reflects the new context's saved prefs.
 function _applyAllVisibility(){
-  if(!_s3d||!_s3d.inited)return;
-  _s3d.scene.traverse(function(c){
-    if(!c.userData)return;
-    if(c.userData.ledString)c.visible=_layShowStrings;
-    if(c.userData.beamCone||c.userData.isAimPoint)c.visible=_layShowCones;
-    if(c.userData.cameraCone)c.visible=_layShowCamCones;
-    if(c.userData.orientArrow||c.userData.restArrow)c.visible=_layShowOrient;
-    if(c.type==='GridHelper'||c.userData.isGrid)c.visible=_layShowGrid;
-    if(c.userData.isLabel||c.userData.stageDimLabel)c.visible=_layShowLabels;
-    if(c.userData.stageBox)c.visible=_layShowStageBox;
-    if(c.userData.arucoMarker||c.userData.arucoRecommend)c.visible=_layShowAruco;
-    if(c.userData.stageObj)c.visible=_layShowStageObjs;
-  });
+  // Apply current `_layShow*` flags to every 3D node we manage. Two
+  // distinct scenes: the Layout viewport (`_s3d.scene`) and the
+  // shared Dashboard/Runtime viewports (`_emu3d.nodes`, list of
+  // THREE.Group instances per fixture). Pre-2026-05-10 this only
+  // traversed `_s3d.scene`, so toggling Camera Cones / Light Cones /
+  // Orientation arrows from the View dropdown on Dashboard or
+  // Runtime did nothing — the existing emu3d nodes kept their
+  // create-time visibility (camCones default = false → cones
+  // invisible until SPA reload). Now both scenes are walked.
+  function _apply(obj){
+    if(!obj.userData)return;
+    if(obj.userData.ledString)obj.visible=_layShowStrings;
+    if(obj.userData.beamCone||obj.userData.isAimPoint)obj.visible=_layShowCones;
+    if(obj.userData.cameraCone)obj.visible=_layShowCamCones;
+    if(obj.userData.orientArrow||obj.userData.restArrow)obj.visible=_layShowOrient;
+    if(obj.type==='GridHelper'||obj.userData.isGrid)obj.visible=_layShowGrid;
+    if(obj.userData.isLabel||obj.userData.stageDimLabel)obj.visible=_layShowLabels;
+    if(obj.userData.stageBox)obj.visible=_layShowStageBox;
+    if(obj.userData.arucoMarker||obj.userData.arucoRecommend)obj.visible=_layShowAruco;
+    if(obj.userData.stageObj)obj.visible=_layShowStageObjs;
+  }
+  if(_s3d&&_s3d.inited)_s3d.scene.traverse(_apply);
+  if(window._emu3d&&window._emu3d.nodes){
+    window._emu3d.nodes.forEach(function(g){g.traverse(_apply);});
+  }
 }
 function _viewSyncCheckboxes(){
   var m={strings:_layShowStrings,lightcones:_layShowCones,camcones:_layShowCamCones,orient:_layShowOrient,grid:_layShowGrid,labels:_layShowLabels,stagebox:_layShowStageBox,aruco:_layShowAruco,stageobjs:_layShowStageObjs};
@@ -1322,81 +1334,56 @@ document.addEventListener('click',function(e){
 
 var _layShowCamCones=_viewPrefs.camCones,_layShowOrient=_viewPrefs.orient,_layShowGrid=_viewPrefs.grid,_layShowLabels=_viewPrefs.labels,_layShowStageBox=_viewPrefs.stageBox,_layShowAruco=_viewPrefs.aruco,_layShowStageObjs=_viewPrefs.stageObjects;
 
+// Per-toggle handlers — each reads its checkbox, updates the
+// matching `_layShow*` flag, persists the change, then defers to
+// `_applyAllVisibility()` so the change reaches BOTH the Layout
+// scene (`_s3d.scene`) and the Dashboard/Runtime emu3d nodes
+// (`_emu3d.nodes`). Pre-2026-05-10 each handler only walked
+// `_s3d.scene`, so toggling Camera Cones / Light Cones / Orientation
+// from Dashboard or Runtime silently did nothing.
 function _layCamConesToggle(){
   var cb=document.getElementById('vw-camcones');
   _layShowCamCones=cb?cb.checked:!_layShowCamCones;
   _viewSave();
-  if(_s3d.inited){
-    _s3d.scene.traverse(function(c){
-      if(c.userData&&c.userData.cameraCone)c.visible=_layShowCamCones;
-    });
-  }
+  _applyAllVisibility();
 }
 function _layOrientToggle(){
   var cb=document.getElementById('vw-orient');
   _layShowOrient=cb?cb.checked:!_layShowOrient;
   _viewSave();
-  if(_s3d.inited){
-    _s3d.scene.traverse(function(c){
-      if(c.userData&&(c.userData.orientArrow||c.userData.restArrow))c.visible=_layShowOrient;
-    });
-  }
+  _applyAllVisibility();
 }
 function _layGridToggle(){
   var cb=document.getElementById('vw-grid');
   _layShowGrid=cb?cb.checked:!_layShowGrid;
   _viewSave();
-  if(_s3d.inited){
-    _s3d.scene.traverse(function(c){
-      if(c.userData&&c.userData.isGrid)c.visible=_layShowGrid;
-      if(c.type==='GridHelper')c.visible=_layShowGrid;
-    });
-  }
+  _applyAllVisibility();
 }
 function _layLabelsToggle(){
   var cb=document.getElementById('vw-labels');
   _layShowLabels=cb?cb.checked:!_layShowLabels;
   _viewSave();
-  if(_s3d.inited){
-    // Only toggle sprites explicitly tagged as labels — rest-vector labels
-    // are Sprites too but belong to the Orientation Vectors toggle (#529).
-    // #638 — stage dimension labels (stageDimLabel) also follow Labels.
-    _s3d.scene.traverse(function(c){
-      if(c.userData&&(c.userData.isLabel||c.userData.stageDimLabel))c.visible=_layShowLabels;
-    });
-  }
+  _applyAllVisibility();
 }
 function _layStageBoxToggle(){
   var cb=document.getElementById('vw-stagebox');
   _layShowStageBox=cb?cb.checked:!_layShowStageBox;
   _viewSave();
-  if(_s3d.inited){
-    _s3d.scene.traverse(function(c){
-      if(c.userData&&c.userData.stageBox)c.visible=_layShowStageBox;
-    });
-  }
+  _applyAllVisibility();
 }
 // #638 — ArUco marker overlay toggle
 function _layArucoToggle(){
   var cb=document.getElementById('vw-aruco');
   _layShowAruco=cb?cb.checked:!_layShowAruco;
   _viewSave();
-  if(_s3d.inited){
-    _s3d.scene.traverse(function(c){
-      if(c.userData&&(c.userData.arucoMarker||c.userData.arucoRecommend))c.visible=_layShowAruco;
-    });
-  }
+  _applyAllVisibility();
 }
 // #638 — Stage Objects toggle (music stands, static props, patrol targets)
 function _layStageObjsToggle(){
   var cb=document.getElementById('vw-stageobjs');
   _layShowStageObjs=cb?cb.checked:!_layShowStageObjs;
   _viewSave();
-  if(_s3d.inited){
-    _s3d.scene.traverse(function(c){
-      if(c.userData&&c.userData.stageObj)c.visible=_layShowStageObjs;
-    });
-  }
+  _applyAllVisibility();
 }
 
 function autoArrangeDmx(){
@@ -1446,7 +1433,7 @@ function autoArrangeDmx(){
 }
 
 // ── Remote-orientation debug visualisation (#484 phase 3) ─────────────────
-// Renders each remote (gyro puck / phone) as an icon + aim ray in the
+// Renders each remote (gyro controller / phone) as an icon + aim ray in the
 // viewport. Consumes GET /api/remotes/live — no coupling to mover-follow.
 
 var _s3dRemotes={group:null,byId:{},pollId:null};
@@ -1484,7 +1471,7 @@ function _s3dBuildRemoteGroup(rec){
   grp.userData.remoteId=rec.id;
   var col=_s3dRemoteColor(rec);
 
-  // Icon: small cube for phone, cylinder for puck.
+  // Icon: small cube for phone, cylinder for gyro.
   var iconGeo=rec.kind==='phone'
     ? new THREE.BoxGeometry(0.16,0.26,0.02)
     : new THREE.CylinderGeometry(0.09,0.09,0.03,24);
@@ -1589,7 +1576,7 @@ function s3dStopPollRemotes(){
 // ── Live fixture aim (DMX movers) ─────────────────────────────────────────
 // Polls /api/fixtures/live and updates the beam cone + aim sphere of each
 // DMX mover to its current pan/tilt-driven aim vector. This is what keeps
-// the 3D view honest when a gyro puck, timeline, or any other source moves
+// the 3D view honest when a gyro controller, timeline, or any other source moves
 // the fixture.
 
 var _s3dFixLive={pollId:null};

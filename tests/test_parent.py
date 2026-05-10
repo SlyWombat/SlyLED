@@ -3301,8 +3301,8 @@ def run():
         # Acquire a claim on cl_fid through the engine. Use a long
         # smoothing so the claim survives the test window.
         ok_c, reason = _ps_pb._mover_engine.claim(
-            cl_fid, '#848-test-device', 'TestPuck', 'gyro',
-            smoothing=0.5, convention='puck-up')
+            cl_fid, '#848-test-device', 'TestGyro', 'gyro',
+            smoothing=0.5, convention='gyro-up')
         ok('#848 claim acquired', ok_c, f'reason={reason}')
 
         # Confirm claim is muted in the arbiter snapshot.
@@ -3337,15 +3337,15 @@ def run():
         c.delete(f'/api/fixtures/{cl_fid}')
         c.delete(f'/api/fixtures/{free_fid}')
 
-        # ── #847 — claim must trust cross-session puck calibration ──
+        # ── #847 — claim must trust cross-session gyro calibration ──
         # Pre-fix: every claim started with `calibrated_here=False`,
         # the orient → pan/tilt path was gated on it, and DMX writes
         # were dropped until the operator ran calibrate-end this
-        # session. A puck already calibrated against the mover (with
+        # session. A gyro already calibrated against the mover (with
         # `R_world_to_stage` set, `calibrated_against.objectId ==
         # mover_id`) showed `calibrated:false`, panNorm/tiltNorm
         # stuck at 0.5, and `droppedWrites` ticking at 40 Hz.
-        # Fix: in `MoverControlEngine.claim`, if the puck's persisted
+        # Fix: in `MoverControlEngine.claim`, if the gyro's persisted
         # cal targets THIS mover and the mover has Home + Secondary
         # anchors (so AimSphere can resolve), set `calibrated_here =
         # True` immediately. Cross-session cal is now trusted.
@@ -3371,12 +3371,12 @@ def run():
             },
         })
 
-        # Path A — puck with R_world_to_stage set against this mover →
+        # Path A — gyro with R_world_to_stage set against this mover →
         # claim should be calibrated immediately.
         from remote_orientation import KIND_PUCK as _KIND_PUCK_847
-        cal_dev_id = '#847-cross-session-puck'
+        cal_dev_id = '#847-cross-session-gyro'
         cal_remote = _ps_pb._remotes.add(
-            name='Cross-session puck', kind=_KIND_PUCK_847,
+            name='Cross-session gyro', kind=_KIND_PUCK_847,
             device_id=cal_dev_id)
         cal_remote.R_world_to_stage = (1.0, 0.0, 0.0, 0.0)  # identity quat
         cal_remote.calibrated_against = {'kind': 'mover',
@@ -3387,9 +3387,9 @@ def run():
         _ps_pb._remotes.save()
 
         ok_c, reason = _ps_pb._mover_engine.claim(
-            cal_fid, cal_dev_id, 'Cross-session puck', 'gyro',
-            smoothing=0.5, convention='puck-up')
-        ok('#847 claim acquired (puck pre-cal)', ok_c, f'reason={reason}')
+            cal_fid, cal_dev_id, 'Cross-session gyro', 'gyro',
+            smoothing=0.5, convention='gyro-up')
+        ok('#847 claim acquired (gyro pre-cal)', ok_c, f'reason={reason}')
 
         # `get_claim` returns the to_dict() shape; the operator-facing
         # `calibrated` field is what /api/mover-control/status surfaces.
@@ -3403,22 +3403,22 @@ def run():
         except Exception:
             pass
 
-        # Negative — puck without R_world_to_stage. Same mover, no
+        # Negative — gyro without R_world_to_stage. Same mover, no
         # cross-session cal → claim should NOT be calibrated.
-        neg_dev_id = '#847-uncalibrated-puck'
+        neg_dev_id = '#847-uncalibrated-gyro'
         neg_remote = _ps_pb._remotes.add(
-            name='Uncalibrated puck', kind=_KIND_PUCK_847,
+            name='Uncalibrated gyro', kind=_KIND_PUCK_847,
             device_id=neg_dev_id)
         neg_remote.R_world_to_stage = None  # explicit: no cal
         neg_remote.calibrated_against = None
         _ps_pb._remotes.save()
 
         ok_c2, _ = _ps_pb._mover_engine.claim(
-            cal_fid, neg_dev_id, 'Uncalibrated puck', 'gyro',
-            smoothing=0.5, convention='puck-up')
+            cal_fid, neg_dev_id, 'Uncalibrated gyro', 'gyro',
+            smoothing=0.5, convention='gyro-up')
         ok('#847 negative claim acquired', ok_c2)
         neg_claim = _ps_pb._mover_engine.get_claim(cal_fid)
-        ok('#847 uncalibrated puck → calibrated:false',
+        ok('#847 uncalibrated gyro → calibrated:false',
            neg_claim is not None and neg_claim.get('calibrated') is False,
            f'calibrated={neg_claim.get("calibrated") if neg_claim else "no claim"}')
 
@@ -3427,11 +3427,11 @@ def run():
         except Exception:
             pass
 
-        # Negative — puck calibrated against a DIFFERENT mover.
+        # Negative — gyro calibrated against a DIFFERENT mover.
         # Should NOT trust the cal for this mover.
-        other_dev_id = '#847-other-mover-puck'
+        other_dev_id = '#847-other-mover-gyro'
         other_remote = _ps_pb._remotes.add(
-            name='Other-mover puck', kind=_KIND_PUCK_847,
+            name='Other-mover gyro', kind=_KIND_PUCK_847,
             device_id=other_dev_id)
         other_remote.R_world_to_stage = (1.0, 0.0, 0.0, 0.0)
         other_remote.calibrated_against = {'kind': 'mover',
@@ -3439,10 +3439,10 @@ def run():
         _ps_pb._remotes.save()
 
         _ps_pb._mover_engine.claim(
-            cal_fid, other_dev_id, 'Other-mover puck', 'gyro',
-            smoothing=0.5, convention='puck-up')
+            cal_fid, other_dev_id, 'Other-mover gyro', 'gyro',
+            smoothing=0.5, convention='gyro-up')
         wrong_claim = _ps_pb._mover_engine.get_claim(cal_fid)
-        ok('#847 puck cal against different mover → calibrated:false',
+        ok('#847 gyro cal against different mover → calibrated:false',
            wrong_claim is not None and wrong_claim.get('calibrated') is False)
 
         try:
@@ -3548,7 +3548,7 @@ def run():
         # Per #852 simulator-coverage policy: every gyro/claim bug
         # must produce a simulator regression test as part of its
         # fix. This block exercises the end-to-end orient → claim
-        # state update cycle for the puck-cal-only path that #847
+        # state update cycle for the gyro-cal-only path that #847
         # established. The simulator-level test passes pre-#851 fix
         # (the bug is production-specific — silent assertion in
         # AimSphere or degenerate cal); the #851 PR adds INFO-level
@@ -3580,10 +3580,10 @@ def run():
         _ps_pb._layout.setdefault('children', []).append(
             {'id': loop_fid, 'x': 0, 'y': 0, 'z': 2000})
 
-        # Puck Remote pre-cal'd against the mover (#847 path).
-        loop_dev = '#851-loop-puck'
+        # Gyro Remote pre-cal'd against the mover (#847 path).
+        loop_dev = '#851-loop-gyro'
         loop_remote = _ps_pb._remotes.add(
-            name='Loop-test puck', kind=_KIND_PUCK_851, device_id=loop_dev)
+            name='Loop-test gyro', kind=_KIND_PUCK_851, device_id=loop_dev)
         loop_remote.R_world_to_stage = (1.0, 0.0, 0.0, 0.0)
         loop_remote.calibrated = True
         loop_remote.calibrated_at = _time_pb.time()
@@ -3592,7 +3592,7 @@ def run():
         loop_remote.stale_reason = None
 
         ok_c, _ = _ps_pb._mover_engine.claim(
-            loop_fid, loop_dev, 'Loop-test puck', 'gyro',
+            loop_fid, loop_dev, 'Loop-test gyro', 'gyro',
             smoothing=0.15, convention='flat_pitch_yaw')
         ok('#851 claim acquired', ok_c)
         _ps_pb._mover_engine.start_stream(loop_fid, loop_dev)

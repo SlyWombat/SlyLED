@@ -63,7 +63,7 @@ void gyroUdpSendOff();
 // in degrees (roll, pitch, yaw) for {neutral, pitch-forward, yaw-left}.
 // Server converts to body-to-world unit quats and runs the same
 // _aim_wizard_compute math the Android wizard (#826) uses; persists
-// derived forward_local/up_local on the puck's Remote. One-shot fire-
+// derived forward_local/up_local on the gyro's Remote. One-shot fire-
 // and-forget; no retry.
 void gyroUdpSendAimWizard(const float eulerNeutral[3],
                           const float eulerPitchForward[3],
@@ -89,7 +89,7 @@ void gyroUdpSendCalibrateWith(bool calibrating, float roll, float pitch, float y
 // sends this once before any orient frames; server replies with claim+
 // start_stream and gates the orient stream on success. Mirrors Android's
 // /api/mover-control/claim → /api/mover-control/start sequence so the
-// puck gets explicit deny feedback when another device already holds the
+// gyro gets explicit deny feedback when another device already holds the
 // mover instead of silently reaching ACTIVE with no DMX output.
 void gyroUdpSendStart();
 
@@ -114,7 +114,7 @@ bool gyroUdpClaimDeniedConsume(uint8_t* outReason);
 constexpr uint16_t GYRO_RETRY_INTERVAL_MS = 150;
 constexpr uint8_t  GYRO_RETRY_MAX         = 5;
 
-// Press-Start variant that ships an explicit nonce. The puck advances UI
+// Press-Start variant that ships an explicit nonce. The gyro advances UI
 // only when CMD_GYRO_CLAIM_ACK arrives carrying this same nonce; stale
 // ACKs from a prior START packet replay are silently dropped. Returns
 // the nonce that was actually sent (= argument unless the slot was busy).

@@ -2,7 +2,7 @@
 
 Reproduces the live-test 2026-05-09 symptom: operator presses Start
 + Calibrate, head physically tilts on calibrate-end, then claim
-panNorm/tiltNorm freeze for 4.5 minutes despite the puck publishing
+panNorm/tiltNorm freeze for 4.5 minutes despite the gyro publishing
 visibly varied aim_stage vectors. Color wheel still works through
 the same claim — DMX delivery is healthy — freeze is in the
 pan/tilt path specifically.

@@ -92,7 +92,7 @@ def test_off_handler_uses_blackout_true():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. ACK path reuses CMD_GYRO_STOP_ACK (puck only knows one ACK shape).
+# 5. ACK path reuses CMD_GYRO_STOP_ACK (gyro only knows one ACK shape).
 
 def test_off_handler_sends_stop_ack():
     body = _off_handler_body()

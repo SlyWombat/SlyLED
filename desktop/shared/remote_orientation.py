@@ -39,7 +39,7 @@ log = logging.getLogger("slyled.remote_orientation")
 # ── #762 Orient axis conventions ──────────────────────────────────────────
 #
 # Selects which Euler axes from the remote's IMU drive the fixture aim. The
-# gyro puck (Waveshare ESP32-S3 LCD 1.28" — QMI8658, 6-axis, NO magnetometer)
+# gyro controller (Waveshare ESP32-S3 LCD 1.28" — QMI8658, 6-axis, NO magnetometer)
 # has *integrating* yaw that drifts indefinitely; only roll and pitch are
 # gravity-anchored and absolute. The Android phone has Sensor.TYPE_ROTATION_
 # VECTOR which is magnetometer-fused, so it does keep usable yaw.
@@ -49,10 +49,10 @@ log = logging.getLogger("slyled.remote_orientation")
 # but the engine default per-kind table below is the only path with UI today.
 
 class OrientConvention(str, enum.Enum):
-    # Bottom-forward grip (puck/phone held vertical, charging port toward
+    # Bottom-forward grip (gyro/phone held vertical, charging port toward
     # stage). Roll → pan, pitch → tilt. Yaw is dropped before the orientation
     # quaternion is built — drift becomes a no-op because the world frame
-    # stays anchored to the calibrate-time pose. Default for the gyro puck.
+    # stays anchored to the calibrate-time pose. Default for the gyro controller.
     BOTTOM_FORWARD_ROLL_PITCH = "bottom_forward"
     # Legacy convention — full (roll, pitch, yaw) → quaternion → R_world_to
     # _stage. Yaw is consumed; works for any controller that has a usable
@@ -79,15 +79,15 @@ def _coerce_convention(value, default=None):
 # ``moverControl.orientConvention``) overrides this; per-fixture or
 # per-claim overrides win over the engine default in turn.
 #
-# #777 — gyro-puck switched from BOTTOM_FORWARD_ROLL_PITCH (yaw-dropped)
+# #777 — gyro switched from BOTTOM_FORWARD_ROLL_PITCH (yaw-dropped)
 # to FLAT_PITCH_YAW (full Euler). The yaw-drop was a workaround for the
-# old "stick-mounted, forward through the bottom" pose that put the puck
+# old "stick-mounted, forward through the bottom" pose that put the gyro
 # in continuous gimbal lock. Live test on 2026-05-01 (see
 # docs/imu-axis-test-2026-05-01.md) confirmed yaw is the cleanest signal
-# for pan when the puck is held LCD-up / +X-forward, so the workaround
+# for pan when the gyro is held LCD-up / +X-forward, so the workaround
 # is no longer the right default.
 _DEFAULT_CONVENTION_BY_KIND = {
-    "gyro-puck": OrientConvention.FLAT_PITCH_YAW,
+    "gyro": OrientConvention.FLAT_PITCH_YAW,
     "phone":     OrientConvention.FLAT_PITCH_YAW,
 }
 
@@ -101,14 +101,14 @@ def default_convention_for_kind(kind):
 
 # Default body-frame axes of a remote: forward = +X, right = +Y, up =
 # +Z (right-handed). Confirmed against the QMI8658 chip's native frame
-# on the Waveshare ESP32-S3 puck — when the puck is held LCD-up with
+# on the Waveshare ESP32-S3 gyro — when the gyro is held LCD-up with
 # its +X axis along the wand's pointing direction, pan = yaw (rotation
 # around +Z, drifts) and tilt = pitch (rotation around +Y, accel-
 # anchored). Live test 2026-05-01: docs/imu-axis-test-2026-05-01.md
 # (#777).
 #
 # Earlier convention was forward = +Y; flipped to +X on 2026-05-01
-# alongside switching the gyro-puck default OrientConvention from
+# alongside switching the gyro default OrientConvention from
 # BOTTOM_FORWARD_ROLL_PITCH to FLAT_PITCH_YAW.
 #
 # #757 Issue A — these are now DEFAULTS only; each Remote instance
@@ -127,20 +127,20 @@ REMOTE_UP_LOCAL      = DEFAULT_REMOTE_UP_LOCAL
 # Staleness thresholds. Decision #7 says "N days" — N=7 initially.
 #
 # Two-tier comms staleness (#476, retuned per #813 §6.3 / 2026-05-06):
-#   soft (5-600s): puck fell off the air briefly — keep the claim, stop
+#   soft (5-600s): gyro fell off the air briefly — keep the claim, stop
 #                  writing pan/tilt (dmx frozen), UI pulses amber
 #                  "Reconnecting...".
-#   hard (>600s):  gone for long enough we conclude the puck has died
+#   hard (>600s):  gone for long enough we conclude the gyro has died
 #                  (power loss, hardware failure, sustained outage) and
 #                  release the claim. Per the rock-solid principle (#813
 #                  §1) this is NOT a "is the operator paying attention"
 #                  check — it is generous on purpose. Operators leaving
-#                  a puck on a table mid-show with the head still locked
-#                  are valid; the threshold only fires for "the puck is
+#                  a gyro on a table mid-show with the head still locked
+#                  are valid; the threshold only fires for "the gyro is
 #                  gone, not just resting".
 #
 #                  Pre-2026-05-06 this was 60 s and was driven by orient
-#                  silence only, which fired during legitimate puck-still
+#                  silence only, which fired during legitimate gyro-still
 #                  poses and on calibrate-screen pauses. The new 600 s
 #                  threshold is paired with the all-comms-silence
 #                  semantic in `_gyro_touch_remote` — every incoming
@@ -151,7 +151,7 @@ STALE_HARD_SECS  = 600     # comms silence beyond this → hard-stale (auto-rele
 STALE_SOFT_SECS  = 5       # comms silence beyond this → soft-stale (freeze dmx)
 # #690 — orphan-pruning grace periods for remotes that registered (e.g. via
 # UDP) but never sent orientation data. Picked to err generous: an operator
-# might register a puck before turning it on. Hard prune at 1 h.
+# might register a gyro before turning it on. Hard prune at 1 h.
 STALE_NEVER_SOFT_SECS = 5 * 60     # 5 minutes
 STALE_NEVER_HARD_SECS = 60 * 60    # 1 hour
 
@@ -162,9 +162,17 @@ STALE_COMMS_SECS = STALE_HARD_SECS
 CONNECTION_STATES = ("idle", "armed", "streaming", "stale")
 
 # Remote kinds (extend as needed).
-KIND_PUCK  = "gyro-puck"
+# Per operator terminology directive 2026-05-10 the "gyro" handheld
+# was renamed "gyro" or "gyro controller" everywhere. The wire/JSON
+# value `"gyro"` replaces the legacy `"gyro"`. Old remotes.json
+# files still carry `"gyro"`; `Remote.from_dict` accepts both
+# spellings and normalises to `KIND_GYRO` on load.
+KIND_GYRO  = "gyro"
 KIND_PHONE = "phone"
-VALID_KINDS = {KIND_PUCK, KIND_PHONE}
+VALID_KINDS = {KIND_GYRO, KIND_PHONE}
+# Back-compat alias so older imports continue to resolve.
+KIND_PUCK  = KIND_GYRO
+LEGACY_KIND_PUCK_VALUE = "gyro-puck"
 
 
 # ── Remote ────────────────────────────────────────────────────────────────
@@ -178,12 +186,12 @@ class Remote:
         "calibrated_against", "stale_reason", "soft_stale",
         "last_quat_world", "aim_stage", "up_stage", "last_data",
         "connection_state", "registered_at",
-        # #762 — orient axis convention (puck defaults to roll+pitch only,
+        # #762 — orient axis convention (gyro defaults to roll+pitch only,
         # yaw dropped to immunise against compassless drift; phone defaults
         # to legacy roll+pitch+yaw quaternion).
         "convention",
         # #757 Issue A — per-remote body-frame forward + up axes. Defaults
-        # cover landscape phone / LCD-up puck; portrait phones override.
+        # cover landscape phone / LCD-up gyro; portrait phones override.
         "forward_local", "up_local",
     )
 
@@ -192,13 +200,16 @@ class Remote:
                  forward_local=None, up_local=None):
         self.id = int(id)
         self.name = name or f"Remote {id}"
-        self.kind = kind if kind in VALID_KINDS else KIND_PUCK
+        # Back-compat: legacy "gyro" string maps to KIND_GYRO.
+        if kind == LEGACY_KIND_PUCK_VALUE:
+            kind = KIND_GYRO
+        self.kind = kind if kind in VALID_KINDS else KIND_GYRO
         self.device_id = device_id
         # #762 — pick per-kind default if no explicit convention was given.
         self.convention = (_coerce_convention(convention)
                            or default_convention_for_kind(self.kind))
         # #757 Issue A — per-remote body-frame axes. Default to the
-        # X-forward / Z-up convention (landscape phone, LCD-up puck);
+        # X-forward / Z-up convention (landscape phone, LCD-up gyro);
         # portrait phones / sideways grips override via the grip API.
         self.forward_local = (tuple(float(v) for v in forward_local)
                               if forward_local is not None
@@ -263,10 +274,17 @@ class Remote:
 
     @classmethod
     def from_persisted_dict(cls, d):
+        # Back-compat: pre-2026-05-10 remotes.json files persisted the
+        # gyro kind as `"gyro"`. The new value is `"gyro"`. Map
+        # the legacy string forward on load; the next .save() will
+        # rewrite the file with the new spelling.
+        raw_kind = d.get("kind", KIND_GYRO)
+        if raw_kind == LEGACY_KIND_PUCK_VALUE:
+            raw_kind = KIND_GYRO
         r = cls(
             id=d["id"],
             name=d.get("name", ""),
-            kind=d.get("kind", KIND_PUCK),
+            kind=raw_kind,
             device_id=d.get("deviceId"),
             pos=d.get("pos"),
             rot=d.get("rot"),
@@ -311,7 +329,7 @@ class Remote:
         """
         if quat is None and (roll is not None or pitch is not None or yaw is not None):
             # #762 — bottom-forward grip ignores yaw entirely (no compass on
-            # the puck IMU; yaw integrates and drifts). Calibrate-time pose
+            # the gyro IMU; yaw integrates and drifts). Calibrate-time pose
             # is built from roll+pitch only, so the resulting R_world_to
             # _stage maps a yaw=0 world frame onto stage. All subsequent
             # orient updates use yaw=0 too — see update_from_euler_deg.
@@ -367,11 +385,11 @@ class Remote:
     def update_from_euler_deg(self, roll, pitch, yaw):
         """Accept ZYX intrinsic Euler (aerospace convention) in degrees.
 
-        The ESP32 puck's roll/pitch/yaw and the Android phone's Euler
+        The ESP32 gyro's roll/pitch/yaw and the Android phone's Euler
         fallback both use this convention.
 
         #762 — under ``BOTTOM_FORWARD_ROLL_PITCH`` (default for the gyro
-        puck) yaw is dropped before the quaternion is built. The puck's
+        gyro) yaw is dropped before the quaternion is built. The gyro's
         QMI8658 IMU has no magnetometer, so its yaw integrates indefinitely
         and drifts; both the calibrate-time R_world_to_stage and the live
         orient stream use yaw=0, which leaves the world frame anchored to
@@ -406,13 +424,13 @@ class Remote:
         # `up_local` from three known phone poses. Until #826 ships,
         # phone yaw direction is known-failing in the contract
         # (`test_orient_contract.py` cells `phone_portrait_yaw_*`)
-        # — operator can use the puck or wait for the wizard.
+        # — operator can use the gyro or wait for the wizard.
         self.last_quat_world = q
         self.last_data = time.time()
         # #812 — auto-recover from a transient comms drop. The "connection
         # -lost" latch fires after 60s of silence (STALE_HARD_SECS) but a
         # transient WiFi drop / brief deep-sleep / firmware reset is not a
-        # deliberate retirement — when the puck or phone resumes streaming
+        # deliberate retirement — when the gyro or phone resumes streaming
         # we should treat its first orient packet as a recovery signal,
         # not require a manual POST /api/remotes/<id>/clear-stale to
         # unjam the press-Start flow. Other hard-stale reasons (`age`,
@@ -535,7 +553,7 @@ class Remote:
             "up": list(self.up_stage) if self.up_stage else None,
             "connectionState": self.connection_state,
             "lastDataAge": (now - self.last_data) if self.last_data else None,
-            # #762 — surface so the dashboard can show "puck (roll+pitch)" vs
+            # #762 — surface so the dashboard can show "gyro (roll+pitch)" vs
             # "phone (roll+pitch+yaw)" without inferring it from kind.
             "orientConvention": self.convention.value,
         }
@@ -565,7 +583,7 @@ class Remote:
         """#757 Issue A — override the device's body-frame forward / up
         axes. Used when the operator's grip differs from the
         kind-default (portrait phone instead of landscape, sideways
-        puck mount, etc.). Either argument may be None to leave that
+        gyro mount, etc.). Either argument may be None to leave that
         axis at its current value.
 
         Calibration is invalidated when grip changes — the prior

@@ -282,6 +282,63 @@ ok((0, 127) in w and (5, 255) in w,
 ok((6, 255) in w and (9, 255) in w,
    f'helper round-trips OFL profile tilt (got {w})')
 
+# ── #876 — refuse to clobber a typed slot via the contiguous fallback ──
+# Reproduces the 350W BeamLight live-test 2026-05-10: profile declared
+# `bits=16` on pan + tilt but didn't carry explicit `pan-fine`/`tilt-fine`
+# channels. The legacy fallback (`fine_off = coarse_off + 1`) wrote
+# pan_lo into the tilt slot AND tilt_lo into the pan-tilt-speed slot,
+# silently clobbering both. Post-fix the helper refuses the fallback
+# when the +1 offset is occupied by a typed channel other than the
+# matching *-fine and writes coarse only (8-bit visible resolution).
+section('#876 — typed-slot clobber refusal')
+
+malformed = {
+    "channel_map": {"pan": 0, "tilt": 1, "pan-tilt-speed": 2, "dimmer": 3},
+    "channels": [
+        {"offset": 0, "type": "pan",            "bits": 16},
+        {"offset": 1, "type": "tilt"},
+        {"offset": 2, "type": "pan-tilt-speed"},
+        {"offset": 3, "type": "dimmer"},
+    ],
+}
+w = compute_pan_tilt_writes(0.5, 0.0, malformed)
+offsets_written = sorted(o for o, _ in w)
+ok(offsets_written == [0, 1],
+   f'#876 malformed pan: only coarse offsets 0,1 written (got {offsets_written})')
+ok((0, 127) in w,
+   f'#876 pan coarse MSB landed (pan=0.5 → 127 at offset 0)  got {w}')
+ok((1, 0) in w,
+   f'#876 tilt coarse landed at offset 1 (=0 for tilt=0); pan_lo did NOT clobber  got {w}')
+ok(not any(o == 2 for o, _ in w),
+   f'#876 pan-tilt-speed (offset 2) NEVER written by compute_pan_tilt_writes  got {w}')
+
+healthy = {
+    "channel_map": {"pan": 0, "pan-fine": 1, "tilt": 2, "tilt-fine": 3, "dimmer": 4},
+    "channels": [
+        {"offset": 0, "type": "pan",       "bits": 16},
+        {"offset": 1, "type": "pan-fine"},
+        {"offset": 2, "type": "tilt",      "bits": 16},
+        {"offset": 3, "type": "tilt-fine"},
+        {"offset": 4, "type": "dimmer"},
+    ],
+}
+w2 = compute_pan_tilt_writes(0.5, 0.5, healthy)
+offsets_written2 = sorted(o for o, _ in w2)
+ok(offsets_written2 == [0, 1, 2, 3],
+   f'#876 healthy 16-bit profile writes coarse+fine for both axes (got {offsets_written2})')
+
+sparse = {
+    "channel_map": {"pan": 0, "dimmer": 5},
+    "channels": [
+        {"offset": 0, "type": "pan", "bits": 16},
+        {"offset": 5, "type": "dimmer"},
+    ],
+}
+w3 = compute_pan_tilt_writes(0.5, 0.0, sparse)
+offsets_written3 = sorted(o for o, _ in w3)
+ok(offsets_written3 == [0, 1],
+   f'#876 sparse profile: fallback safe when +1 is empty (got {offsets_written3})')
+
 # ── Summary ─────────────────────────────────────────────────────────────
 
 print(f'\n{"="*60}')
