@@ -16,7 +16,8 @@
                          "buildDefines":  [
                                               "BOARD_ESP32"
                                           ],
-                         "sourceHash":  "3dddf742063de2d1cdd3f675efc6fa34906351936086de8db5653ec6a5a56d8d"
+                         "sourceHash":  "3dddf742063de2d1cdd3f675efc6fa34906351936086de8db5653ec6a5a56d8d",
+                         "otaSha256":  "e9ad030f4a035f36b0824e80f48765575c690dd48989a1ee1cf78595f905c12e"
                      },
                      {
                          "id":  "child-led-d1mini",
@@ -51,7 +52,8 @@
                          "buildDefines":  [
                                               "DMX_BRIDGE"
                                           ],
-                         "buildFlags":  "-DDMX_BRIDGE"
+                         "buildFlags":  "-DDMX_BRIDGE",
+                         "otaSha256":  "9f62c45ff793b4eb06f667261804e683155f7243fd0082f8e1ecc92f1a88a95d"
                      },
                      {
                          "id":  "child-led-giga",
@@ -119,7 +121,8 @@
                                               "GYRO_BOARD"
                                           ],
                          "buildFlags":  "-DGYRO_BOARD",
-                         "sourceHash":  "3dddf742063de2d1cdd3f675efc6fa34906351936086de8db5653ec6a5a56d8d"
+                         "sourceHash":  "3dddf742063de2d1cdd3f675efc6fa34906351936086de8db5653ec6a5a56d8d",
+                         "otaSha256":  "959360d5a036d205c292a07674b302b3ac8efc29eebc6c4d65e6392f8b6666a3"
                      },
                      {
                          "id":  "camera-node",

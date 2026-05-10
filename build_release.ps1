@@ -606,7 +606,7 @@ foreach ($fw in $reg.firmware) {
                 Write-Host "  $($fw.id): otaSha256 -> $shortOta..." -ForegroundColor Green
             }
         } else {
-            Write-Host "  $($fw.id): otaAsset $otaAsset missing in dist/ (#870 — OTA will 502 until rebuilt)" -ForegroundColor Yellow
+            Write-Host "  $($fw.id): otaAsset $otaAsset missing in dist/ (#870 - OTA will 502 until rebuilt)" -ForegroundColor Yellow
         }
     }
 }
