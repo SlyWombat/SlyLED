@@ -519,6 +519,15 @@ Copy-Item "$root\firmware\d1mini\main.ino.bin" "$distDir\d1mini-firmware.bin" -F
 Copy-Item "$root\firmware\esp32s3\main.ino.merged.bin" "$distDir\esp32s3-gyro-firmware.bin" -Force -ErrorAction SilentlyContinue
 Copy-Item "$root\firmware\esp32s3-test\main.ino.merged.bin" "$distDir\esp32s3-gyro-test-firmware.bin" -Force -ErrorAction SilentlyContinue
 Copy-Item "$root\firmware\esp32-dmx\main.ino.merged.bin" "$distDir\esp32-dmx-bridge-firmware.bin" -Force -ErrorAction SilentlyContinue
+# #870 — also publish app-only binaries for OTA. ESP32 OTA appends
+# bytes to the inactive OTA app partition (~1.5 MB on 4 MB flash);
+# the merged image overflows the partition AND fails magic-byte
+# validation. The orchestrator's OTA proxy serves these via the
+# registry's `otaAsset` field; pre-#870 it fell back to the merged
+# binary and silently broke OTA on every fresh-cache child.
+Copy-Item "$root\firmware\esp32\main.ino.bin" "$distDir\esp32-firmware-app.bin" -Force -ErrorAction SilentlyContinue
+Copy-Item "$root\firmware\esp32s3\main.ino.bin" "$distDir\esp32s3-gyro-firmware-app.bin" -Force -ErrorAction SilentlyContinue
+Copy-Item "$root\firmware\esp32-dmx\main.ino.bin" "$distDir\esp32-dmx-bridge-firmware-app.bin" -Force -ErrorAction SilentlyContinue
 Copy-Item "$root\desktop\windows\dist\SlyLED.exe" "$distDir\SlyLED.exe" -Force -ErrorAction SilentlyContinue
 Copy-Item "$root\desktop\windows\dist\SlyLED-Setup.exe" "$distDir\SlyLED-Setup.exe" -Force -ErrorAction SilentlyContinue
 # Operator-canonical APK output: `dist/slyled-android.apk` (release-
@@ -573,6 +582,32 @@ foreach ($fw in $reg.firmware) {
         }
         $shortHash = $newHash.Substring(0, 12)
         Write-Host "  $($fw.id): sha256 -> $shortHash..." -ForegroundColor Green
+    }
+    # #870 — pin otaSha256 alongside sha256 so the OTA proxy can
+    # verify the app-only binary it serves matches the published
+    # release. Skip entries without otaAsset (D1 Mini, Giga, parent-
+    # giga, dmx-bridge-giga, camera).
+    $otaAsset = $null
+    if ($fw.PSObject.Properties['otaAsset']) { $otaAsset = $fw.otaAsset }
+    if ($otaAsset) {
+        $otaPath = Join-Path $distDir $otaAsset
+        if (Test-Path $otaPath) {
+            $otaHash = (Get-FileHash -Algorithm SHA256 -Path $otaPath).Hash.ToLower()
+            $oldOtaHash = $null
+            if ($fw.PSObject.Properties['otaSha256']) { $oldOtaHash = $fw.otaSha256 }
+            if ($otaHash -ne $oldOtaHash) {
+                $anyChanged = $true
+                if ($fw.PSObject.Properties['otaSha256']) {
+                    $fw.otaSha256 = $otaHash
+                } else {
+                    $fw | Add-Member -MemberType NoteProperty -Name otaSha256 -Value $otaHash
+                }
+                $shortOta = $otaHash.Substring(0, 12)
+                Write-Host "  $($fw.id): otaSha256 -> $shortOta..." -ForegroundColor Green
+            }
+        } else {
+            Write-Host "  $($fw.id): otaAsset $otaAsset missing in dist/ (#870 — OTA will 502 until rebuilt)" -ForegroundColor Yellow
+        }
     }
 }
 if ($anyChanged) {

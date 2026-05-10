@@ -6,16 +6,17 @@
                          "description":  "WS2812B / WS2811 / APA102 LED strip controller with 14 effects + OTA",
                          "board":  "esp32",
                          "fqbn":  "esp32:esp32:esp32",
-                         "version":  "7.5.14",
-                         "releaseTag":  "esp32-v7.5.14",
+                         "version":  "7.5.15",
+                         "releaseTag":  "esp32-v7.5.15",
                          "file":  "esp32/main.ino.merged.bin",
                          "releaseAsset":  "esp32-firmware-merged.bin",
-                         "sha256":  "b6d641385c5e79dd786b68a9b6baeddc99f4278bb407580076ab69a85f1f41b0",
+                         "otaAsset":  "esp32-firmware-app.bin",
+                         "sha256":  "1fa326798ec0e70d100e585bc4b34b0165ea836bf68f8c25201bedd1c0c845b6",
                          "flashMethod":  "esptool",
                          "buildDefines":  [
                                               "BOARD_ESP32"
                                           ],
-                         "sourceHash":  "3538b44b256cfb6269db2f7518f56ffcc19a629b1e539320d5cec6d068a79418"
+                         "sourceHash":  "3dddf742063de2d1cdd3f675efc6fa34906351936086de8db5653ec6a5a56d8d"
                      },
                      {
                          "id":  "child-led-d1mini",
@@ -23,16 +24,16 @@
                          "description":  "WS2812B / WS2811 / APA102 LED strip controller with 14 effects + OTA",
                          "board":  "d1mini",
                          "fqbn":  "esp8266:esp8266:d1_mini",
-                         "version":  "7.5.13",
-                         "releaseTag":  "d1mini-v7.5.13",
+                         "version":  "7.5.14",
+                         "releaseTag":  "d1mini-v7.5.14",
                          "file":  "d1mini/main.ino.bin",
                          "releaseAsset":  "d1mini-firmware.bin",
-                         "sha256":  "9c003e5bc179ab4c35457b13c3a2d22aacbe14d06136351f8b8ec4518edc2368",
+                         "sha256":  "3e7e92c87db146ebd0217379877f1e8b36ce228f4336dac797f57d5ae57abd92",
                          "flashMethod":  "esptool",
                          "buildDefines":  [
                                               "BOARD_D1MINI"
                                           ],
-                         "sourceHash":  "3538b44b256cfb6269db2f7518f56ffcc19a629b1e539320d5cec6d068a79418"
+                         "sourceHash":  "3dddf742063de2d1cdd3f675efc6fa34906351936086de8db5653ec6a5a56d8d"
                      },
                      {
                          "id":  "dmx-bridge-esp32",
@@ -44,6 +45,7 @@
                          "releaseTag":  "esp32-dmx-bridge-v7.5.20",
                          "file":  "esp32-dmx/main.ino.merged.bin",
                          "releaseAsset":  "esp32-dmx-bridge-firmware.bin",
+                         "otaAsset":  "esp32-dmx-bridge-firmware-app.bin",
                          "sha256":  "d8c2e67d8fa0c4f0ae3881133dc8c65923fe78e029b13f59b69fb972a63740f1",
                          "flashMethod":  "esptool",
                          "buildDefines":  [
@@ -106,17 +108,18 @@
                          "description":  "Waveshare ESP32-S3 1.28inch round LCD â€” orientation controller for DMX moving heads",
                          "board":  "esp32s3",
                          "fqbn":  "esp32:esp32:esp32s3",
-                         "version":  "1.2.10",
-                         "releaseTag":  "gyro-v1.2.10",
+                         "version":  "1.2.11",
+                         "releaseTag":  "gyro-v1.2.11",
                          "file":  "esp32s3/main.ino.merged.bin",
                          "releaseAsset":  "esp32s3-gyro-firmware.bin",
-                         "sha256":  "e672a52a89db9a7b226eedaf27d602e7725e3b1ed57f86d228d8f16e1c6b8437",
+                         "otaAsset":  "esp32s3-gyro-firmware-app.bin",
+                         "sha256":  "cc03f43a4e59b870b5a29e0c4655a13fd20a7a0d4dc73b349b4821539ccb4a28",
                          "flashMethod":  "esptool",
                          "buildDefines":  [
                                               "GYRO_BOARD"
                                           ],
                          "buildFlags":  "-DGYRO_BOARD",
-                         "sourceHash":  "3538b44b256cfb6269db2f7518f56ffcc19a629b1e539320d5cec6d068a79418"
+                         "sourceHash":  "3dddf742063de2d1cdd3f675efc6fa34906351936086de8db5653ec6a5a56d8d"
                      },
                      {
                          "id":  "camera-node",

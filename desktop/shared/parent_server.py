@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.117"
+VERSION = "1.7.118"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -18245,68 +18245,153 @@ def api_fw_download():
         log.error("Download failed: %s", e)
         return jsonify(ok=False, err=str(e)), 502
 
+# #870 — OTA-only filename split. ESP32 OTA appends bytes to the
+# inactive OTA app partition (~1.5 MB on 4 MB flash). The merged
+# binary (~4 MB: bootloader + partition table + app + ...) overflows
+# the partition AND fails magic-byte validation. Cache filenames must
+# carry an indicator of which flavour (app-only vs merged) they hold
+# so a future fetch can't write merged bytes under an app-only name.
+_OTA_APP_FILENAME = {
+    "esp32":   "esp32/main.ino.app.bin",
+    "esp32s3": "esp32s3/main.ino.app.bin",
+    "d1mini":  "d1mini/main.ino.bin",  # D1 has no merged variant
+}
+# OTA-served binaries are app-only; sane upper bound for any ESP32-
+# class app partition is well under 2 MB. A larger cached file is
+# almost certainly a merged-image cache poisoning (#870) and must be
+# treated as invalid — delete + re-fetch on next request.
+_OTA_MAX_APP_BYTES = 2 * 1024 * 1024
+
+
+def _ota_cache_is_poisoned(board, path):
+    """Return True if a cached OTA binary at `path` has the size
+    signature of a merged-image cache poisoning. Caller deletes +
+    re-fetches. D1 Mini is single-binary (no merged variant) so the
+    check is skipped."""
+    if board == "d1mini":
+        return False
+    try:
+        return path.stat().st_size > _OTA_MAX_APP_BYTES
+    except OSError:
+        return False
+
+
 @app.get("/api/firmware/binary/<board>")
 def api_fw_binary(board):
     """Serve a firmware binary for OTA — child downloads from parent
     over plain HTTP because the ESP32 client can't do HTTPS to GitHub.
 
     Resolution order:
-      1. Local file in `_FW_DIR/<board>/main.ino.bin` (dev / freshly
-         built firmware — `build_release.ps1` drops it here).
-      2. Cached file in APPDATA cache dir (downloads land here on
+      1. Local file in `_FW_DIR/<board>/main.ino.app.bin` (dev /
+         freshly built firmware — `build_release.ps1` drops the
+         app-only binary alongside the merged image).
+      2. Legacy local at `_FW_DIR/<board>/main.ino.bin` (pre-#870
+         pipelines stored the app-only here; size-checked before
+         serving so a stale merged-image at this path can't slip
+         through).
+      3. Cached file in APPDATA cache dir (downloads land here on
          first OTA after a fresh install).
-      3. Per-board release-tag download from GitHub. This goes through
-         the **registry**, not the orchestrator-app's `/releases/latest`
-         — pre-fix `_fetch_github_release()` returned the orchestrator
-         app release (v1.7.x) whose assets don't include any firmware
-         binary, so the proxy 404'd and OTA silently failed. The
-         registry pins each board's `releaseTag` (e.g.
-         `esp32-v7.5.11`) and `releaseAsset` name (`esp32-firmware-
-         merged.bin`).
+      4. Per-board release-tag download from GitHub. The registry
+         pins `releaseTag` (e.g. `esp32-v7.5.15`) and **`otaAsset`**
+         (the app-only asset name, e.g. `esp32-firmware-app.bin`).
+         Pre-#870 the proxy fell back to `releaseAsset` (the merged
+         asset name) and saved 4 MB of merged image under the
+         app-only filename — every subsequent OTA served the merged
+         binary to the child, which silently failed at the OTA
+         partition write. Releases lacking `otaAsset` now return 502
+         with a clear error so the operator republishes instead of
+         poisoning the cache.
     """
     from firmware_manager import _registry_fetch_assets
-    file_map = {"esp32": "esp32/main.ino.bin", "d1mini": "d1mini/main.ino.bin",
-                 "esp32s3": "esp32s3/main.ino.bin"}
-    rel_path = file_map.get(board)
+    rel_path = _OTA_APP_FILENAME.get(board)
     if not rel_path:
         return jsonify(ok=False, err=f"unknown board: {board}"), 404
-    bin_path = _FW_DIR / rel_path
-    if not bin_path.exists() and (_FW_CACHE_DIR / rel_path).exists():
-        bin_path = _FW_CACHE_DIR / rel_path
-    if not bin_path.exists():
-        # Look up the registry entry for this board so we know which
-        # release tag + asset to fetch.
+    legacy_rel_path = {"esp32": "esp32/main.ino.bin",
+                        "esp32s3": "esp32s3/main.ino.bin",
+                        "d1mini": "d1mini/main.ino.bin"}.get(board)
+    candidates = [_FW_DIR / rel_path, _FW_DIR / legacy_rel_path,
+                  _FW_CACHE_DIR / rel_path, _FW_CACHE_DIR / legacy_rel_path]
+    bin_path = None
+    for cand in candidates:
+        if cand.exists():
+            if _ota_cache_is_poisoned(board, cand):
+                log.warning("OTA cache poisoned at %s (%d bytes > "
+                             "_OTA_MAX_APP_BYTES) — deleting (#870)",
+                             cand, cand.stat().st_size)
+                try:
+                    cand.unlink()
+                except OSError:
+                    pass
+                continue
+            bin_path = cand
+            break
+
+    if bin_path is None:
+        # Look up the registry entry so we know which release tag +
+        # asset to fetch. #870: prefer `otaAsset` (app-only); reject
+        # the legacy `releaseAsset` fallback because that name pinned
+        # the merged binary, which OTA can't accept.
         reg = _resolve_registry()
         board_to_fwid = {"esp32": "child-led-esp32",
                           "d1mini": "child-led-d1mini",
                           "esp32s3": "gyro-esp32s3"}
         fwid = board_to_fwid.get(board)
-        entry = next((e for e in reg.get("firmware", []) if e.get("id") == fwid), None) if fwid else None
-        if entry and entry.get("releaseTag") and entry.get("releaseAsset"):
+        entry = next((e for e in reg.get("firmware", [])
+                      if e.get("id") == fwid), None) if fwid else None
+        ota_asset = entry.get("otaAsset") if entry else None
+        # D1 Mini's single binary serves both flash + OTA, so
+        # `releaseAsset` is the OTA asset for it. ESP32 boards must
+        # carry `otaAsset` explicitly.
+        if not ota_asset and board == "d1mini" and entry:
+            ota_asset = entry.get("releaseAsset")
+        if entry and entry.get("releaseTag") and ota_asset:
             try:
                 import urllib.request as _ur
-                assets = _registry_fetch_assets(release_tag=entry["releaseTag"]) or {}
-                asset_url = assets.get(entry["releaseAsset"])
+                assets = _registry_fetch_assets(
+                    release_tag=entry["releaseTag"]) or {}
+                asset_url = assets.get(ota_asset)
                 if asset_url:
-                    log.info("Proxy fetch: board=%s tag=%s asset=%s",
-                             board, entry["releaseTag"], entry["releaseAsset"])
-                    req = _ur.Request(asset_url, headers={"User-Agent": "SlyLED-Parent"})
+                    log.info("Proxy fetch: board=%s tag=%s otaAsset=%s",
+                             board, entry["releaseTag"], ota_asset)
+                    req = _ur.Request(asset_url,
+                                       headers={"User-Agent": "SlyLED-Parent"})
                     resp = _ur.urlopen(req, timeout=60)
                     data = resp.read()
+                    if (board != "d1mini"
+                            and len(data) > _OTA_MAX_APP_BYTES):
+                        log.error("Proxy fetch refused: %s/%s is %d bytes "
+                                   "(>2 MB) — registry pinned a merged "
+                                   "binary as otaAsset (#870)",
+                                   entry["releaseTag"], ota_asset, len(data))
+                        return jsonify(
+                            ok=False,
+                            err=f"otaAsset '{ota_asset}' is "
+                                f"{len(data) // 1024} kB — too large "
+                                f"for OTA. The registry must pin the "
+                                f"app-only asset, not the merged "
+                                f"image."), 502
                     cache_path = _FW_CACHE_DIR / rel_path
                     cache_path.parent.mkdir(parents=True, exist_ok=True)
                     cache_path.write_bytes(data)
                     bin_path = cache_path
                 else:
-                    log.warning("Proxy fetch: asset %s not found in release %s",
-                                entry["releaseAsset"], entry["releaseTag"])
+                    log.warning("Proxy fetch: otaAsset %s not found in "
+                                "release %s", ota_asset, entry["releaseTag"])
             except Exception as e:
                 log.error("Proxy fetch failed: %s", e)
-    if not bin_path.exists():
-        return jsonify(ok=False,
-                        err=f"firmware binary not available for {board} "
-                            "(registry entry missing releaseTag/releaseAsset, "
-                            "or GitHub fetch failed)"), 404
+    if bin_path is None or not bin_path.exists():
+        # No app-only asset anywhere. Refuse loudly instead of
+        # silently serving a merged image — the operator can republish
+        # the release with the app-only asset, or USB-flash the merged.
+        if entry and not ota_asset:
+            err = (f"registry entry for {board} lacks otaAsset — OTA "
+                   f"serves the app-only binary, not the merged image. "
+                   f"Republish the release with the app-only asset.")
+        else:
+            err = (f"firmware binary not available for {board} "
+                   f"(registry entry missing releaseTag/otaAsset, or "
+                   f"GitHub fetch failed)")
+        return jsonify(ok=False, err=err), 502 if entry and not ota_asset else 404
     return send_file(str(bin_path), mimetype="application/octet-stream",
                      download_name=f"slyled-{board}.bin")
 
@@ -19158,6 +19243,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
