@@ -141,8 +141,10 @@ interface SlyLedApi {
     @POST("api/mover-control/flash")
     suspend fun moverFlash(@Body body: JsonObject): OkResponse
 
-    @POST("api/mover-control/smoothing")
-    suspend fun moverSmoothing(@Body body: JsonObject): OkResponse
+    // `moverSmoothing` removed in #877 — the orchestrator no longer
+    // transforms the aim vector. The `/api/mover-control/smoothing`
+    // endpoint remains as a back-compat no-op on the server side, so
+    // even pre-#877 Android builds won't 400 on POST.
 
     // #479 — live status card poll.
     @GET("api/mover-control/status")

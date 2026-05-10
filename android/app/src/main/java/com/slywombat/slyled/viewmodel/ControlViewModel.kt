@@ -417,16 +417,10 @@ class ControlViewModel @Inject constructor(
         }
     }
 
-    /** EMA smoothing factor 0.05-1.0 (#481). */
-    fun setSmoothing(fixtureId: Int, smoothing: Float) {
-        viewModelScope.launch {
-            try {
-                repository.moverSmoothing(fixtureId, smoothing)
-            } catch (e: Exception) {
-                Log.w(TAG, "moverSmoothing failed: ${e.message}")
-            }
-        }
-    }
+    // `setSmoothing` removed in #877 — operator-facing smoothing
+    // slider was deleted across the stack. The repository's
+    // `moverSmoothing` method is gone too; the orchestrator's
+    // POST `/api/mover-control/smoothing` is a no-op for back-compat.
 
     /** Called when user adjusts color via color wheel or dimmer slider.
      *  Sends RGB 0-255 + optional dimmer 0-255 to server. */

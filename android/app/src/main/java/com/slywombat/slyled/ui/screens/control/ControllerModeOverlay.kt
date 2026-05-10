@@ -73,7 +73,7 @@ fun ControllerModeOverlay(
     onCalibrateEnd: (roll: Float, pitch: Float, yaw: Float, quat: FloatArray?) -> Unit,
     onColorChange: (r: Int, g: Int, b: Int, dimmer: Int?) -> Unit,
     onFlash: (on: Boolean) -> Unit,
-    onSmoothing: (smoothing: Float) -> Unit,
+    // `onSmoothing` removed in #877.
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -114,7 +114,7 @@ fun ControllerModeOverlay(
     var red by remember { mutableFloatStateOf(1f) }
     var green by remember { mutableFloatStateOf(1f) }
     var blue by remember { mutableFloatStateOf(1f) }
-    var smoothing by remember { mutableFloatStateOf(0.15f) }
+    // `smoothing` state removed in #877.
 
     // #755 BUG-D — 100 ms lift debounce for hold-to-calibrate so brief
     // unintentional finger lifts (operator drift, hand tremor) do not fire
@@ -545,33 +545,9 @@ fun ControllerModeOverlay(
 
             Spacer(Modifier.height(16.dp))
 
-            // Smoothing slider — #481 (EMA factor; higher = snappier, lower = smoother).
-            Text("SMOOTHING", style = MaterialTheme.typography.labelSmall,
-                color = Color(0xFF64748B), fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-            Spacer(Modifier.height(4.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth().height(40.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Smooth", style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF94A3B8), modifier = Modifier.width(56.dp))
-                Slider(
-                    value = smoothing,
-                    onValueChange = {
-                        smoothing = it
-                        onSmoothing(it)
-                    },
-                    valueRange = 0.05f..1.0f,
-                    modifier = Modifier.weight(1f),
-                    colors = SliderDefaults.colors(
-                        thumbColor = CyanSecondary,
-                        activeTrackColor = CyanSecondary
-                    )
-                )
-                Text("%.2f".format(smoothing),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF94A3B8), modifier = Modifier.width(44.dp))
-            }
+            // Smoothing slider removed in #877 — the orchestrator no
+            // longer transforms the aim vector. Operator-facing
+            // motor-speed tuning belongs on the fixture itself.
 
             Spacer(Modifier.height(24.dp))
         }

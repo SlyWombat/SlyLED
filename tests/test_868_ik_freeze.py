@@ -1,28 +1,27 @@
-"""test_868_ik_freeze.py — gyro post-calibrate IK freeze contract.
+"""test_868_ik_freeze.py — pan/tilt pass-through contract (post #868 + #877).
 
-Reproduces the live-test 2026-05-09 symptom: operator presses Start
-+ Calibrate, head physically tilts on calibrate-end, then claim
-panNorm/tiltNorm freeze for 4.5 minutes despite the gyro publishing
-visibly varied aim_stage vectors. Color wheel still works through
-the same claim — DMX delivery is healthy — freeze is in the
-pan/tilt path specifically.
+Originally pinned the #868 fix: software EMA on `claim.pan_smooth` /
+`claim.tilt_smooth` froze pan/tilt forever when `claim.smoothing=1.0`
+because `alpha = 1 - smoothing = 0`. #868 replaced the EMA with pure
+pass-through; smoothing then drove the DMX `pan-tilt-speed` channel.
 
-Root cause: software EMA on `claim.pan_smooth` / `claim.tilt_smooth`
-with `alpha = 1 - claim.smoothing`. With smoothing=1.0 (operator's
-fid 23 setting per `/api/fixtures` snapshot) → alpha=0 → the EMA
-update `pan_smooth += 0 * delta` was a no-op forever. But
-`_set_canonical_aim` sat in the same branch and fired regardless,
-so `/api/fixtures/live`'s aim field updated while DMX pan/tilt
-stayed frozen.
+#877 deleted smoothing entirely — operator directive: "the gyro
+vector gets matched to the moving head, that is a valid vector,
+never clamped, the moving head is told to move to that vector (it
+takes care of its own, getting as close to the vector as possible)."
+The orchestrator no longer transforms the aim vector; the
+pan-tilt-speed channel write is removed; the `claim.smoothing` field
+is gone. This file pins the new contract:
 
-Fix (per operator 2026-05-09): rip out the software EMA entirely.
-Pan/tilt motor-speed smoothing is the fixture's job, not ours.
-When the DMX profile defines a `pan-tilt-speed` channel, drive
-it from `claim.smoothing` (0=fast → DMX 0, 1=slow → DMX 255).
-Profiles without that channel skip the speed write and run at
-the engine's unsmoothed IK rate.
+  1. The orient tick writes `pan_norm` → `claim.pan_smooth` and
+     `tilt_norm` → `claim.tilt_smooth` with no transform.
+  2. `_write_dmx` writes pan/tilt only — NEVER the pan-tilt-speed
+     channel, regardless of whether the profile defines one.
+  3. `MoverClaim` does not have a `smoothing` attribute.
+  4. `MoverControlEngine.set_smoothing` is gone (operator-facing
+     slider deleted across SPA + Android).
 
-Run: python -X utf8 tests/test_868_ik_freeze.py
+Run: python3 -X utf8 tests/test_868_ik_freeze.py
 """
 
 import os
@@ -119,23 +118,7 @@ def _make_engine(get_engine_fn, get_profile_fn, fixtures):
     )
 
 
-def _make_engine_with_claim(profile, smoothing):
-    fixtures = [{"id": 14, "fixtureType": "dmx",
-                 "dmxUniverse": 1, "dmxStartAddr": 100,
-                 "profile": "test"}]
-    eng = _make_engine(lambda: FakeEngine(), lambda _p: profile, fixtures)
-    claim = MoverClaim(mover_id=14, device_id="test-dev",
-                       device_name="test-dev", device_type="gyro")
-    claim.smoothing = smoothing
-    claim.calibrated_here = True
-    claim.state = "streaming"
-    eng._claims[14] = claim
-    return eng, claim
-
-
-# ─── Tests ────────────────────────────────────────────────────────────────────
-
-# Synthetic 17-step trace from the issue's live capture.
+# ─── Synthetic 17-step trace from the issue's live capture ───────────────────
 TRACE = [
     (0.4705, 0.0078), (0.1650, 0.0260), (0.6362, 0.0110), (0.5234, 0.1500),
     (0.7812, 0.2200), (0.4100, 0.0500), (0.3300, 0.3700), (0.6900, 0.4500),
@@ -146,9 +129,9 @@ TRACE = [
 
 
 def _drive_trace(claim, trace):
-    """Drive the new pass-through assignment from the tick loop, then
-    return the smooth-state trace. Mirrors the rewritten block in
-    mover_control.py:670-679 — direct assignment, no EMA."""
+    """Drive the new pure pass-through assignment from the tick
+    loop. Mirrors the rewritten block in mover_control.py — direct
+    assignment, no EMA, no transform."""
     out = []
     for pan_norm, tilt_norm in trace:
         claim.pan_smooth = pan_norm
@@ -158,65 +141,79 @@ def _drive_trace(claim, trace):
     return out
 
 
-def test_pan_smooth_tracks_ik_directly_no_smoothing():
-    """smoothing=0.0 — software pass-through equals IK output exactly."""
-    _, claim = _make_engine_with_claim(PROFILE_WITH_SPEED, 0.0)
+# ─── Tests ───────────────────────────────────────────────────────────────────
+
+def test_pan_tilt_passthrough_tracks_ik_exactly():
+    """Orient tick writes pan_norm → claim.pan_smooth one-to-one.
+    Used to assert this against the legacy EMA; #877 makes it the
+    only assertion needed since there's no smoothing."""
+    claim = MoverClaim(mover_id=14, device_id="test-dev",
+                       device_name="test-dev", device_type="gyro")
     out = _drive_trace(claim, TRACE)
     for i, (ps, ts) in enumerate(out):
         if (ps, ts) != TRACE[i]:
-            _assert(False,
-                    f"tick {i}: got ({ps}, {ts}), expected {TRACE[i]}")
+            _assert(False, f"tick {i}: got ({ps}, {ts}), expected {TRACE[i]}")
             return
-    _assert(True, "smoothing=0 → pan/tilt_smooth tracks IK exactly")
+    _assert(True, "pan/tilt_smooth tracks IK output exactly")
 
 
-def test_smoothing_one_does_not_freeze_software_path():
-    """The exact freeze the operator hit. With software EMA gone,
-    smoothing=1.0 still passes IK output through to pan_smooth /
-    tilt_smooth — no freeze possible at this layer regardless of
-    smoothing value."""
-    _, claim = _make_engine_with_claim(PROFILE_WITH_SPEED, 1.0)
-    out = _drive_trace(claim, TRACE)
-    pan_distinct = len(set(round(p, 4) for p, _ in out))
-    _assert(pan_distinct == len(set(round(p, 4) for p, _ in TRACE)),
-            f"smoothing=1.0 software path reproduces every distinct IK "
-            f"input ({pan_distinct} values)")
-    _assert(out[-1] == TRACE[-1],
-            f"final tick equals last IK input: got {out[-1]}, "
-            f"expected {TRACE[-1]}")
+def test_no_smoothing_attribute_on_claim():
+    """#877 — MoverClaim no longer carries a `smoothing` field. Test
+    documents the deletion; a future patch that re-adds it accidentally
+    will fail here."""
+    claim = MoverClaim(mover_id=14, device_id="test-dev",
+                       device_name="test-dev", device_type="gyro")
+    _assert(not hasattr(claim, "smoothing"),
+            f"MoverClaim has no smoothing attribute "
+            f"(got hasattr={hasattr(claim, 'smoothing')})")
 
 
-def test_smoothing_lands_on_dmx_speed_channel_when_profile_has_one():
-    """Operator's smoothing slider [0..1] → pan-tilt-speed DMX byte
-    [0..255]. 0=fast (DMX 0), 1=slow (DMX 255)."""
+def test_no_set_smoothing_method_on_engine():
+    """#877 — `set_smoothing` was deleted from MoverControlEngine.
+    The HTTP `/api/mover-control/smoothing` route now exists only as
+    a back-compat no-op; the engine method is gone."""
+    eng = _make_engine(lambda: FakeEngine(),
+                       lambda _p: PROFILE_NO_SPEED, [])
+    _assert(not callable(getattr(eng, "set_smoothing", None)),
+            f"MoverControlEngine has no callable set_smoothing "
+            f"(got {getattr(eng, 'set_smoothing', None)!r})")
+
+
+def test_pan_tilt_speed_channel_never_written():
+    """#877 — `_write_dmx` does NOT touch the pan-tilt-speed channel,
+    even when the profile defines one at a known offset. Pre-#877
+    this channel got `int(claim.smoothing × 255)`."""
     fixtures = [{"id": 14, "fixtureType": "dmx",
                  "dmxUniverse": 1, "dmxStartAddr": 100,
                  "profile": "test"}]
     fake_eng = FakeEngine()
-    cases = [(0.0, 0), (0.15, 38), (0.5, 128), (1.0, 255)]
-    for smoothing, expected_dmx in cases:
-        eng = _make_engine(lambda: fake_eng,
-                           lambda _p: PROFILE_WITH_SPEED, fixtures)
-        claim = MoverClaim(mover_id=14, device_id="test-dev",
-                           device_name="test-dev", device_type="gyro")
-        claim.smoothing = smoothing
-        claim.have_pan_tilt = True
-        claim.pan_smooth = 0.5
-        claim.tilt_smooth = 0.5
-        claim.state = "streaming"
-        eng._claims[14] = claim
-        mover = fixtures[0]
-        eng._write_dmx(mover, PROFILE_WITH_SPEED, claim, include_pan_tilt=True)
-        # Address 100 + offset 4 = 104.
-        actual = fake_eng.universes[1].channels.get(104)
-        _assert(actual == expected_dmx,
-                f"smoothing={smoothing} → DMX[104]={actual}, "
-                f"expected {expected_dmx}")
+    eng = _make_engine(lambda: fake_eng,
+                       lambda _p: PROFILE_WITH_SPEED, fixtures)
+    claim = MoverClaim(mover_id=14, device_id="test-dev",
+                       device_name="test-dev", device_type="gyro")
+    claim.have_pan_tilt = True
+    claim.pan_smooth = 0.5
+    claim.tilt_smooth = 0.5
+    claim.state = "streaming"
+    eng._claims[14] = claim
+    mover = fixtures[0]
+    eng._write_dmx(mover, PROFILE_WITH_SPEED, claim, include_pan_tilt=True)
+
+    # pan-tilt-speed slot = addr + offset = 100 + 4 = 104. Must be absent.
+    channels = fake_eng.universes[1].channels
+    _assert(104 not in channels,
+            f"#877 pan-tilt-speed (offset 4) NEVER touched "
+            f"(channels written = {sorted(channels.keys())})")
+    # And pan/tilt themselves were written via the fixture helper.
+    _assert(len(fake_eng.universes[1].fixture_pt) == 1,
+            f"set_fixture_pan_tilt was called once "
+            f"(got {len(fake_eng.universes[1].fixture_pt)})")
 
 
-def test_no_speed_channel_means_no_speed_write():
-    """Profiles without a pan-tilt-speed channel leave it alone — the
-    smoothing slider has no effect on these fixtures, by design."""
+def test_no_speed_channel_no_extra_writes():
+    """Profile without pan-tilt-speed already produced no extra
+    writes pre-#877; the post-#877 path is the same. Sanity check
+    that the deletion didn't introduce stray writes."""
     fixtures = [{"id": 14, "fixtureType": "dmx",
                  "dmxUniverse": 1, "dmxStartAddr": 100,
                  "profile": "test"}]
@@ -225,7 +222,6 @@ def test_no_speed_channel_means_no_speed_write():
                        lambda _p: PROFILE_NO_SPEED, fixtures)
     claim = MoverClaim(mover_id=14, device_id="test-dev",
                        device_name="test-dev", device_type="gyro")
-    claim.smoothing = 1.0  # would have been the freeze case
     claim.have_pan_tilt = True
     claim.pan_smooth = 0.5
     claim.tilt_smooth = 0.5
@@ -233,58 +229,23 @@ def test_no_speed_channel_means_no_speed_write():
     eng._claims[14] = claim
     mover = fixtures[0]
     eng._write_dmx(mover, PROFILE_NO_SPEED, claim, include_pan_tilt=True)
-    # Without pan-tilt-speed in the channel_map, no extra channel
-    # write should land beyond pan/tilt (handled by
-    # `set_fixture_pan_tilt`, which our fake collects in `fixture_pt`,
-    # not `channels`). The `channels` dict should therefore be empty
-    # of any speed-position writes.
     written = fake_eng.universes[1].channels
-    _assert(104 not in written and len(written) == 0,
-            f"profile without pan-tilt-speed: no extra channel writes "
+    _assert(len(written) == 0,
+            f"no extra channel writes for profile without speed "
             f"(got {written})")
-    _assert(len(fake_eng.universes[1].fixture_pt) == 1,
-            f"pan/tilt write still happens (got "
-            f"{len(fake_eng.universes[1].fixture_pt)})")
-
-
-def test_speed_value_clamps_at_dmx_byte_range():
-    """Even with out-of-range smoothing values (data corruption,
-    legacy import), the DMX speed write stays in [0, 255]."""
-    fixtures = [{"id": 14, "fixtureType": "dmx",
-                 "dmxUniverse": 1, "dmxStartAddr": 100,
-                 "profile": "test"}]
-    fake_eng = FakeEngine()
-    cases = [(-0.5, 0), (1.5, 255), (2.0, 255)]
-    for smoothing, expected_dmx in cases:
-        eng = _make_engine(lambda: fake_eng,
-                           lambda _p: PROFILE_WITH_SPEED, fixtures)
-        claim = MoverClaim(mover_id=14, device_id="test-dev",
-                           device_name="test-dev", device_type="gyro")
-        claim.smoothing = smoothing
-        claim.have_pan_tilt = True
-        claim.pan_smooth = 0.5
-        claim.tilt_smooth = 0.5
-        claim.state = "streaming"
-        eng._claims[14] = claim
-        mover = fixtures[0]
-        eng._write_dmx(mover, PROFILE_WITH_SPEED, claim, include_pan_tilt=True)
-        actual = fake_eng.universes[1].channels.get(104)
-        _assert(actual == expected_dmx,
-                f"smoothing={smoothing} clamped to DMX[104]={actual}, "
-                f"expected {expected_dmx}")
 
 
 ALL = [
-    test_pan_smooth_tracks_ik_directly_no_smoothing,
-    test_smoothing_one_does_not_freeze_software_path,
-    test_smoothing_lands_on_dmx_speed_channel_when_profile_has_one,
-    test_no_speed_channel_means_no_speed_write,
-    test_speed_value_clamps_at_dmx_byte_range,
+    test_pan_tilt_passthrough_tracks_ik_exactly,
+    test_no_smoothing_attribute_on_claim,
+    test_no_set_smoothing_method_on_engine,
+    test_pan_tilt_speed_channel_never_written,
+    test_no_speed_channel_no_extra_writes,
 ]
 
 
 if __name__ == "__main__":
-    print("=== #868 no-software-smoothing contract ===")
+    print("=== #877 pan/tilt pass-through contract ===")
     for t in ALL:
         print(f"\n-- {t.__name__} --")
         try:

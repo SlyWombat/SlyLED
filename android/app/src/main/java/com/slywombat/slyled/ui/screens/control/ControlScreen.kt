@@ -287,9 +287,8 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
             onFlash = { on ->
                 viewModel.setFlash(controllerFix.id, on)
             },
-            onSmoothing = { sm ->
-                viewModel.setSmoothing(controllerFix.id, sm)
-            },
+            // `onSmoothing` removed in #877 — operator-facing slider
+            // deleted across the stack.
             onDismiss = { viewModel.exitControllerMode() }
         )
     }

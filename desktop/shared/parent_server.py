@@ -2029,8 +2029,7 @@ def _handle_gyro_start_packet(ip, data):
         remote_pre.clear_stale()
     dname = _gyro_device_name(ip, gf)
     ok, reason = _mover_engine.claim(target_mover_id, device_id,
-                                     dname, "gyro",
-                                     smoothing=gf.get("smoothing", 0.15))
+                                     dname, "gyro")
     if not ok:
         log.info("GYRO_START from %s nonce=%s — claim DENIED (%s)",
                   ip, start_nonce, reason)
@@ -2910,7 +2909,10 @@ def api_fixtures_create():
             f["gyroChildId"]       = body.get("gyroChildId")       # child record ID of the gyro board
             f["assignedMoverId"]   = body.get("assignedMoverId")   # fixture ID of the DMX mover to control
             f["gyroEnabled"]       = body.get("gyroEnabled", False)
-            f["smoothing"]         = body.get("smoothing", 0.15)   # EMA factor 0-1 (only operator tunable)
+            # `smoothing` removed in #877 — orchestrator no longer
+            # transforms the aim vector. Stale persisted values are
+            # ignored on load; the PUT loop below no longer accepts
+            # the field.
         _fixtures.append(f)
         _nxt_fix += 1
         _save("fixtures", _fixtures)
@@ -3021,7 +3023,7 @@ def api_fixture_update(fid):
               "fovDeg", "fovType", "cameraUrl", "cameraIp", "cameraIdx", "resolutionW", "resolutionH",
               "trackClasses", "trackClassThresholds",
               "trackFps", "trackThreshold", "trackTtl", "trackReidMm",
-              "gyroChildId", "assignedMoverId", "gyroEnabled", "smoothing"):
+              "gyroChildId", "assignedMoverId", "gyroEnabled"):
         if k in body:
             # #Q12 — normalise fovType on write so stored value is always in
             # the whitelist (inputs go through _normalise_fov_type).
@@ -3555,8 +3557,7 @@ def api_gyro_enable(child_id):
         device_id = f"gyro-{ip}"
         c = next((ch for ch in _children if ch["id"] == child_id), None)
         dname = c.get("altName") or c.get("name") or c.get("hostname") or ip if c else ip
-        _mover_engine.claim(gf["assignedMoverId"], device_id, dname, "gyro",
-                            smoothing=gf.get("smoothing", 0.15))
+        _mover_engine.claim(gf["assignedMoverId"], device_id, dname, "gyro")
         # Don't start_stream here — light stays off until user presses
         # START on gyro and first CMD_GYRO_ORIENT arrives
     return jsonify(ok=True)
@@ -11850,7 +11851,10 @@ def api_mover_claim():
     did = body.get("deviceId", "")
     dname = body.get("deviceName", "Unknown")
     dtype = body.get("deviceType", "android")
-    sm = body.get("smoothing", 0.15)
+    # `smoothing` request-body field is ignored as of #877 — the
+    # orchestrator no longer transforms the aim vector. Field stays
+    # accepted by `request.get_json` so old SPA / Android builds don't
+    # 400 on the POST.
     # #762 — optional per-claim OrientConvention override. Accepts the enum
     # string ("bottom_forward" / "flat_pitch_yaw") so an operator/UI can
     # request a non-default grip for this session without changing the
@@ -11870,7 +11874,7 @@ def api_mover_claim():
                      did, remote_pre.stale_reason)
             remote_pre.clear_stale()
     ok, reason = _mover_engine.claim(mid, did, dname, dtype,
-                                     smoothing=sm, convention=conv)
+                                     convention=conv)
     if not ok:
         return jsonify(ok=False, err=reason), 409
     # #492 — when an Android phone claims a mover it supplies its own
@@ -12080,15 +12084,11 @@ def api_mover_color():
 
 @app.post("/api/mover-control/smoothing")
 def api_mover_set_smoothing():
-    """Update EMA smoothing without re-claiming (#481 — Android parity)."""
-    body = request.get_json(silent=True) or {}
-    mid = body.get("moverId")
-    did = body.get("deviceId")
-    sm = body.get("smoothing")
-    if mid is None or not did or sm is None:
-        return jsonify(ok=False, err="moverId + deviceId + smoothing required"), 400
-    ok = _mover_engine.set_smoothing(mid, did, sm)
-    return jsonify(ok=ok)
+    """#877 — endpoint kept for back-compat with older SPA / Android
+    builds but now a no-op. The orchestrator no longer smooths or
+    speed-caps the aim vector; the fixture is responsible for its
+    own motor speed."""
+    return jsonify(ok=True, deprecated=True)
 
 
 @app.post("/api/mover-control/flash")
@@ -12543,7 +12543,13 @@ def api_remote_aim_wizard_by_device():
     if not did:
         return jsonify(ok=False, err="deviceId required"), 400
     poses = _parse_wizard_payload(body)
-    r = _remotes.by_device(did) or _auto_register_remote(did, kind=KIND_PHONE)
+    # #878 — auto-register kind defaults to PHONE for back-compat, but
+    # a `gyro-<ip>` deviceId is unambiguously a gyro, and the
+    # SPA-driven wizard path (gyro controller config page) always uses
+    # that shape. Pick KIND_GYRO when the prefix matches so a fresh
+    # wizard run lands the right kind on the new Remote.
+    auto_kind = KIND_GYRO if did.startswith("gyro-") else KIND_PHONE
+    r = _remotes.by_device(did) or _auto_register_remote(did, kind=auto_kind)
     ok_, resp, status = _apply_aim_wizard_to_remote(r, poses)
     if ok_:
         _remotes.save()
@@ -14723,24 +14729,14 @@ def _evaluate_object_patrols(elapsed):
         obj.setdefault("transform", {})["pos"] = new_pos
 
 def _apply_handover_slew(fid, uni, addr, ch_map, engine):
-    """#763 — cap pan-tilt-speed during the post-release slew window so the
-    fixture's motors ease toward the show's commanded pose instead of
-    snapping from the operator's last pose. Writes the slow DMX value while
-    the window is active and a single 'fast' (0) write the frame after it
-    expires. No-op for fixtures whose profile lacks a pan-tilt-speed channel.
+    """#877 — no-op stub. The pre-fix body capped pan-tilt-speed during
+    a post-release slew window (#763) so the fixture eased between the
+    operator's last pose and the show's commanded pose. Since #877 the
+    orchestrator never writes the pan-tilt-speed channel; the fixture
+    handles its own motor speed. Drain the just-ended flag so it doesn't
+    leak between releases (cheap, idempotent) and return.
     """
-    if not ch_map or "pan-tilt-speed" not in ch_map:
-        # Drain the just-ended flag so it doesn't leak into the next
-        # release window. Cheap, idempotent.
-        _claim_arbiter.pop_handover_just_ended(fid)
-        return
-    pts_offset = ch_map["pan-tilt-speed"]
-    handover = _claim_arbiter.handover_state(fid)
-    if handover:
-        engine.get_universe(uni).set_channel(
-            addr + pts_offset, int(handover["slowDmx"]))
-    elif _claim_arbiter.pop_handover_just_ended(fid):
-        engine.get_universe(uni).set_channel(addr + pts_offset, 0)
+    _claim_arbiter.pop_handover_just_ended(fid)
 
 
 def _evaluate_track_actions(elapsed, engine, dmx_fixtures,

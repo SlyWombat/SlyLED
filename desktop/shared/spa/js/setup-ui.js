@@ -2732,22 +2732,10 @@ function _gyroConfigModalRender(childId, c){
     h+='\u25cb Loading\u2026</div>';
     h+='</div>';
 
-    // ── Smoothing (the only operator-facing preference in the
-    //    stage-space architecture; pan/tilt mapping comes from the
-    //    calibration grid, not tunable multipliers) ────────────────
-    h+='<div style="border-top:1px solid #1e293b;padding-top:.6em;margin-top:.4em">';
-    var curSmooth=f.smoothing!=null?f.smoothing:0.15;
-    h+='<div style="margin-bottom:.4em">';
-    h+='<label style="font-size:.78em;color:#94a3b8;display:block">Smoothing</label>';
-    h+='<div style="display:flex;align-items:center;gap:.5em">';
-    h+='<span style="font-size:.7em;color:#64748b">Smooth</span>';
-    h+='<input id="gcfg-sm" type="range" min="0.05" max="1" step="0.05" value="'+curSmooth+'" style="flex:1">';
-    h+='<span style="font-size:.7em;color:#64748b">Instant</span>';
-    h+='<span id="gcfg-sm-val" style="font-size:.78em;color:#e2e8f0;min-width:2em;text-align:right">'+curSmooth.toFixed(2)+'</span>';
-    h+='</div>';
-    h+='<div style="font-size:.68em;color:#64748b;margin-top:.15em">Low = dampened, smooth movement. High = instant, direct response</div>';
-    h+='</div>';
-    h+='</div>';
+    // Smoothing slider removed in #877. The orchestrator no longer
+    // transforms the aim vector — gyro vector is pass-through to the
+    // fixture, which handles its own motor speed and mechanical
+    // limits. No operator-tunable preference here.
   }
   h+='</div>';
 
@@ -2765,11 +2753,8 @@ function _gyroConfigModalRender(childId, c){
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='block';
 
-  // Wire up smoothing slider live-value display
-  var smEl=document.getElementById('gcfg-sm');
-  if(smEl){
-    smEl.oninput=function(){document.getElementById('gcfg-sm-val').textContent=parseFloat(this.value).toFixed(2);};
-  }
+  // #877 — smoothing slider removed from the modal; the wire-up loop
+  // is gone with it.
 
   // #872 Bug D — Live Status polling: always start the poll while
   // the modal is open. _gyroLivePoll re-reads the fixture state from
@@ -2805,16 +2790,26 @@ function _gyroLoadCalState(childId){
   // the modal's wording matches whatever the operator chose. Empty
   // fallback to hostname if the fixture has no name yet.
   var gyroName=gf.name||'this gyro';
-  var childIp=(_children||[]).reduce(function(a,c){
-    return c.id===gf.gyroChildId?c.ip:a;
-  },null);
-  if(!childIp){
-    el.innerHTML='<span style="color:#64748b">Waiting for child IP…</span>';
-    return;
-  }
-  var deviceId='gyro-'+childIp;
-  ra('GET','/api/remotes',null,function(r){
+  // Fetch children fresh — pre-fix this referenced a bare `_children`
+  // global that's never declared or assigned anywhere in the SPA
+  // (post-module-extraction state isn't on `window` either), causing
+  // a silent ReferenceError that left the Calibration section stuck
+  // on "Loading…". `_gyroConfigModal` already uses this pattern;
+  // mirror it here for the same reason.
+  ra('GET','/api/children',null,function(ch){
     if(!document.getElementById('gcfg-cal'))return;  // modal closed
+    var children=ch||[];
+    var childIp=null;
+    for(var i=0;i<children.length;i++){
+      if(children[i].id===gf.gyroChildId){childIp=children[i].ip;break;}
+    }
+    if(!childIp){
+      el.innerHTML='<span style="color:#64748b">Waiting for child IP…</span>';
+      return;
+    }
+    var deviceId='gyro-'+childIp;
+    ra('GET','/api/remotes',null,function(r){
+      if(!document.getElementById('gcfg-cal'))return;  // modal closed
     var list=(r&&r.remotes)||[];
     var remote=list.find(function(rm){return rm.deviceId===deviceId;});
     if(!remote){
@@ -2825,8 +2820,15 @@ function _gyroLoadCalState(childId){
     }
     if(!remote.calibrated){
       el.innerHTML='<span style="color:#94a3b8">○ Not calibrated.</span>'
-        +' <span style="color:#64748b">Aim '+escapeHtml(gyroName)
-        +' at the moving head and hold Calibrate.</span>';
+        // #878 — Calibrate (aim-wizard) — same button on the uncalibrated
+        // path so the operator can run the wizard without first having
+        // touched the head.
+        +' <button class="btn" onclick="_gyroAimWizardOpen('
+        +remote.id+','+childId+',\''+escapeHtml(deviceId)+'\','
+        +'\''+escapeHtml(gyroName)+'\')"'
+        +' style="background:#0e7490;color:#cffafe;font-size:.7em;margin-left:.4em">Calibrate</button>'
+        +' <span style="color:#64748b;display:block;font-size:.75em;margin-top:.25em">'
+        +'Or aim '+escapeHtml(gyroName)+' at the moving head and hold Calibrate on the gyro.</span>';
       el.style.borderColor='#1e293b';
       return;
     }
@@ -2846,10 +2848,19 @@ function _gyroLoadCalState(childId){
     el.innerHTML=
       '<span style="color:#22c55e">●</span> '
       +'<b>'+escapeHtml(gyroName)+'</b> calibrated'+againstLabel+when
+      // #878 — Calibrate (aim-wizard) runs the empirical 3-pose
+      // wizard. Same math as the Android #826 flow + the gyro UDP
+      // #869 flow — three captures of `last_quat_world` posted to
+      // POST /api/remotes/<id>/aim-wizard.
+      +' <button class="btn" onclick="_gyroAimWizardOpen('
+      +remote.id+','+childId+',\''+escapeHtml(deviceId)+'\','
+      +'\''+escapeHtml(gyroName)+'\')"'
+      +' style="background:#0e7490;color:#cffafe;font-size:.7em;margin-left:.4em">Re-calibrate</button>'
       +' <button class="btn" onclick="_gyroClearCal('+remote.id+','+childId+')"'
       +' style="background:#334155;color:#cbd5e1;font-size:.7em;margin-left:.4em">Clear calibration</button>';
     el.style.borderColor='#059669';
-  });
+    });   // end /api/remotes callback
+  });     // end /api/children callback
 }
 
 
@@ -2866,6 +2877,180 @@ function _gyroClearCal(remoteId,childId){
       var hs=document.getElementById('hs');
       if(hs)hs.textContent='Clear failed: '+(r&&r.err||'unknown');
     }
+  });
+}
+
+
+// #878 — SPA empirical aim-axis wizard. Mirrors the Android #826
+// flow + the gyro-driven #869 flow. Three pose captures (neutral /
+// pitch_forward / yaw_left) → POST /api/remotes/<id>/aim-wizard with
+// the resulting quats → server runs _aim_wizard_compute (same math
+// used by Android) and persists derived forward_local / up_local.
+//
+// Each "Capture" hits /api/remotes/<id>/diagnostic which exposes
+// `rawQuat = remote.last_quat_world`. The gyro must be powered on
+// and streaming orient packets for the snapshot to read a fresh
+// quaternion — the modal shows a warning if `rawQuat` is null.
+
+var _gyroWiz=null;  // active wizard state — null when no wizard open
+
+function _gyroAimWizardOpen(remoteId, childId, deviceId, gyroName){
+  _gyroWiz={
+    remoteId: remoteId,
+    childId: childId,
+    deviceId: deviceId,
+    gyroName: gyroName||'this gyro',
+    step: 0,
+    captures: {},  // {role: [w,x,y,z]}
+  };
+  _gyroAimWizardRender();
+}
+
+function _gyroAimWizardClose(){
+  _gyroWiz=null;
+  // Restore the gyro config modal under the wizard.
+  if(typeof closeModal==='function')closeModal();
+}
+
+function _gyroAimWizardRender(){
+  if(!_gyroWiz)return;
+  var W=_gyroWiz;
+  // Three-step layout. Each step has a role + prompt + Capture button.
+  var STEPS=[
+    {role:'neutral',
+     title:'1 of 3 — Neutral aim',
+     prompt:'Hold '+escapeHtml(W.gyroName)+' in your normal grip, '
+       +'aimed at the moving head\'s current direction.'},
+    {role:'pitch_forward',
+     title:'2 of 3 — Pitch forward (tilt DOWN)',
+     prompt:'From neutral, tip '+escapeHtml(W.gyroName)+' forward '
+       +'toward the floor — the gesture you\'d use to tilt the head DOWN.'},
+    {role:'yaw_left',
+     title:'3 of 3 — Yaw left (pan stage-LEFT)',
+     prompt:'Return to neutral, then yaw '+escapeHtml(W.gyroName)+' '
+       +'to your left — the gesture for stage-left pan.'},
+  ];
+  if(W.step>=STEPS.length){
+    // All captured — submit.
+    _gyroAimWizardSubmit();
+    return;
+  }
+  var s=STEPS[W.step];
+  var capturedRoles=Object.keys(W.captures||{});
+  var capturedList=capturedRoles.length
+    ?'<div style="font-size:.72em;color:#64748b;margin-top:.4em">'
+      +'Captured: '+capturedRoles.join(', ')+'</div>'
+    :'';
+  var h=''
+    +'<div style="margin-bottom:1em">'
+    +'<div style="font-size:.92em;color:#e2e8f0;font-weight:600;margin-bottom:.4em">'
+    +escapeHtml(s.title)+'</div>'
+    +'<div style="font-size:.85em;color:#94a3b8;margin-bottom:.6em">'+s.prompt+'</div>'
+    +'<div id="gwiz-status" style="font-size:.78em;color:#64748b;margin-bottom:.4em">'
+    +'Hold the pose and press Capture.</div>'
+    +capturedList
+    +'</div>'
+    +'<div style="display:flex;gap:.4em">'
+    +'<button class="btn btn-on" onclick="_gyroAimWizardCapture()">Capture</button>';
+  if(W.step>0){
+    h+='<button class="btn" onclick="_gyroAimWizardRetry()" '
+      +'style="background:#334155;color:#cbd5e1">Retry last</button>';
+  }
+  h+='<button class="btn btn-off" onclick="_gyroAimWizardClose()" '
+    +'style="margin-left:auto">Cancel</button>'
+    +'</div>';
+  document.getElementById('modal-title').textContent='Aim wizard: '+W.gyroName;
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='block';
+}
+
+function _gyroAimWizardCapture(){
+  if(!_gyroWiz)return;
+  var W=_gyroWiz;
+  var STEPS=['neutral','pitch_forward','yaw_left'];
+  var role=STEPS[W.step];
+  var status=document.getElementById('gwiz-status');
+  if(status)status.textContent='Capturing…';
+  // Diagnostic endpoint exposes the latest `last_quat_world` for the
+  // remote. We snapshot once on operator click.
+  ra('GET','/api/remotes/'+W.remoteId+'/diagnostic',null,function(d){
+    if(!d){
+      if(status)status.textContent='Capture failed (network).';
+      return;
+    }
+    var q=d.rawQuat;
+    if(!q||q.length!==4){
+      if(status)status.textContent=
+        'No quaternion received. Is '+W.gyroName+' powered on and streaming?';
+      return;
+    }
+    W.captures[role]=q;
+    W.step++;
+    _gyroAimWizardRender();
+  });
+}
+
+function _gyroAimWizardRetry(){
+  if(!_gyroWiz)return;
+  // Step back one. Clear the cached capture for that step so the
+  // re-render asks for it again.
+  _gyroWiz.step=Math.max(0,_gyroWiz.step-1);
+  var STEPS=['neutral','pitch_forward','yaw_left'];
+  var role=STEPS[_gyroWiz.step];
+  if(_gyroWiz.captures)delete _gyroWiz.captures[role];
+  _gyroAimWizardRender();
+}
+
+function _gyroAimWizardSubmit(){
+  if(!_gyroWiz)return;
+  var W=_gyroWiz;
+  var poses=Object.keys(W.captures||{}).map(function(role){
+    return {role: role, quat: W.captures[role]};
+  });
+  // Render submitting-state.
+  var h=''
+    +'<div style="margin-bottom:1em">'
+    +'<div style="font-size:.92em;color:#e2e8f0;font-weight:600">Submitting…</div>'
+    +'<div style="font-size:.85em;color:#94a3b8;margin-top:.4em">'
+    +'Computing forward / up axes from your 3 captures.</div>'
+    +'</div>';
+  document.getElementById('modal-body').innerHTML=h;
+  ra('POST','/api/remotes/'+W.remoteId+'/aim-wizard',
+    {poses: poses}, function(r){
+    if(!r||r.ok===false){
+      var msg=(r&&r.err)||'Server rejected the captures.';
+      var hh=''
+        +'<div style="margin-bottom:1em">'
+        +'<div style="font-size:.92em;color:#fca5a5;font-weight:600">Calibration failed</div>'
+        +'<div style="font-size:.85em;color:#94a3b8;margin-top:.4em">'+escapeHtml(msg)+'</div>'
+        +'</div>'
+        +'<div style="display:flex;gap:.4em">'
+        +'<button class="btn btn-on" onclick="_gyroAimWizardOpen('
+        +W.remoteId+','+W.childId+',\''+escapeHtml(W.deviceId)
+        +'\',\''+escapeHtml(W.gyroName)+'\')">Retry from start</button>'
+        +'<button class="btn btn-off" onclick="_gyroAimWizardClose()" '
+        +'style="margin-left:auto">Close</button>'
+        +'</div>';
+      document.getElementById('modal-body').innerHTML=hh;
+      return;
+    }
+    var fwd=(r.forwardLocal||[]).map(function(v){return v.toFixed(3);}).join(', ');
+    var up=(r.upLocal||[]).map(function(v){return v.toFixed(3);}).join(', ');
+    var hh=''
+      +'<div style="margin-bottom:1em">'
+      +'<div style="font-size:.92em;color:#34d399;font-weight:600">Calibration saved ✓</div>'
+      +'<div style="font-size:.85em;color:#cbd5e1;margin-top:.6em">'
+      +'forward = [<code>'+escapeHtml(fwd)+'</code>]<br>'
+      +'up = [<code>'+escapeHtml(up)+'</code>]</div>'
+      +'<div style="font-size:.78em;color:#64748b;margin-top:.6em">'
+      +'The gyro\'s body axes are now aligned with the stage frame. '
+      +'Press Start on '+escapeHtml(W.gyroName)+' and the head will follow your aim.</div>'
+      +'</div>'
+      +'<div style="display:flex;gap:.4em">'
+      +'<button class="btn btn-on" onclick="_gyroAimWizardClose();_gyroLoadCalState('
+      +W.childId+')">Done</button>'
+      +'</div>';
+    document.getElementById('modal-body').innerHTML=hh;
   });
 }
 
@@ -2900,7 +3085,12 @@ function _gyroLivePoll(childId){
       if(!document.getElementById('gcfg-live'))return;
       var claim=(ds&&ds.claims||[]).find(function(c){return c.moverId===gf.assignedMoverId;});
       // Match the remote by device IP (gyroChildId → child IP → deviceId "gyro-<ip>").
-      var childIp=(_children||[]).reduce(function(a,c){return c.id===gf.gyroChildId?c.ip:a;},null);
+      // `_setupChildren` is the Setup-tab cache (populated by
+      // `_renderSetup` from /api/children). Pre-fix this was `_children`,
+      // an undeclared global that threw ReferenceError every tick and
+      // left Live Status quietly stuck. Same bug class as the
+      // Calibration "Loading…" stuck on the gyro config modal.
+      var childIp=(_setupChildren||[]).reduce(function(a,c){return c.id===gf.gyroChildId?c.ip:a;},null);
       var remote=childIp?(dr&&dr.remotes||[]).find(function(r){return r.deviceId==='gyro-'+childIp;}):null;
 
       var parts=[];
@@ -3041,8 +3231,7 @@ function _gyroConfigSave(childId){
   // re-navigating.
   var activeEl=document.getElementById('gcfg-active');
   var active=!!(activeEl&&activeEl.checked);
-  var smEl=document.getElementById('gcfg-sm');
-  var smoothing=smEl?parseFloat(smEl.value):null;
+  // #877 — smoothing slider removed; no field to read.
 
   if(!gf&&moverId!=null){
     var mover=(_fixtures||[]).find(function(f){return f.id===moverId;});
@@ -3050,7 +3239,6 @@ function _gyroConfigSave(childId){
       name:(name||'Gyro')+' \u2192 '+(mover?mover.name:'Mover'),
       fixtureType:'gyro',type:'point',gyroChildId:childId,
       assignedMoverId:moverId,gyroEnabled:active,
-      smoothing:smoothing!=null?smoothing:0.15,
     },function(r){
       if(r&&r.ok){
         document.getElementById('hs').textContent='Gyro configured';
@@ -3062,7 +3250,7 @@ function _gyroConfigSave(childId){
   }else if(gf){
     var body={gyroEnabled:active};
     if(moverId!==undefined)body.assignedMoverId=moverId;
-    if(smoothing!=null)body.smoothing=smoothing;
+    // #877 — `body.smoothing` no longer sent.
     // Persist the operator's typed name onto the FIXTURE record (not
     // just child.altName). Dashboard / Remote Controllers card / 3D
     // viewport all read fixture.name; without this PUT branch the

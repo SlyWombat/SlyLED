@@ -265,15 +265,10 @@ class SlyLedRepository @Inject constructor(
         return requireApi().moverFlash(body)
     }
 
-    suspend fun moverSmoothing(moverId: Int, smoothing: Float): OkResponse {
-        val id = requireIdentity()
-        val body = buildJsonObject {
-            put("moverId", moverId)
-            put("deviceId", id.deviceId)
-            put("smoothing", smoothing.toDouble())
-        }
-        return requireApi().moverSmoothing(body)
-    }
+    // `moverSmoothing` removed in #877 — operator-facing smoothing
+    // slider was deleted across the stack. The orchestrator-side
+    // POST `/api/mover-control/smoothing` is now a no-op for any
+    // straggler caller; the Android UI no longer exposes the slider.
 
     suspend fun moverColor(moverId: Int, r: Int, g: Int, b: Int, dimmer: Int? = null): OkResponse {
         val id = requireIdentity()

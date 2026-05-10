@@ -89,7 +89,7 @@ class MoverClaim:
         "claimed_at", "last_write_ts", "ttl_s", "state",
         "color_r", "color_g", "color_b", "dimmer", "strobe_active",
         "pan_smooth", "tilt_smooth", "have_pan_tilt",
-        "calibrated_here", "smoothing",
+        "calibrated_here",
         # #762 — convention this claim runs under. Resolved at claim time
         # from (per-claim override > per-fixture orientConvention > engine
         # default > per-kind default). Surfaced via /api/mover-control/
@@ -107,7 +107,9 @@ class MoverClaim:
     )
 
     def __init__(self, mover_id, device_id, device_name, device_type="gyro",
-                 smoothing=0.15, ttl_s=None, convention=None):
+                 ttl_s=None, convention=None, **kwargs):
+        # `**kwargs` swallows the now-removed `smoothing=` arg so any
+        # stale caller that still passes it doesn't crash. #877 deletion.
         self.mover_id = mover_id
         self.device_id = device_id
         self.device_name = device_name
@@ -143,7 +145,6 @@ class MoverClaim:
         # calibrate-end in THIS claim. Fixture holds the seeded
         # layout-forward position until then.
         self.calibrated_here = False
-        self.smoothing = smoothing
         # #762 — convention is resolved by MoverControlEngine.claim() and
         # passed in here. None = leave the Remote on whatever convention
         # it was already running (per-kind default or persisted override).
@@ -293,7 +294,10 @@ class MoverControlEngine:
     # ── Claim / Release ──────────────────────────────────────────────
 
     def claim(self, mover_id, device_id, device_name, device_type="gyro",
-              smoothing=0.15, convention=None):
+              convention=None, **kwargs):
+        # `**kwargs` swallows the now-removed `smoothing=` keyword so
+        # stale callers (Android repository, old SPA build, scripts)
+        # don't crash. #877 deletion.
         # #762 — resolve OrientConvention precedence outside the lock so we
         # can read the fixture / remote without holding it. Order:
         #   per-claim arg > per-fixture > engine default > remote default.
@@ -310,7 +314,6 @@ class MoverControlEngine:
                          mover_id, existing.device_id)
 
             claim = MoverClaim(mover_id, device_id, device_name, device_type,
-                               smoothing=smoothing,
                                ttl_s=self._get_claim_ttl_s(),
                                convention=resolved_conv)
             self._claims[mover_id] = claim
@@ -522,13 +525,12 @@ class MoverControlEngine:
                 claim.dimmer = dimmer
         return True
 
-    def set_smoothing(self, mover_id, device_id, smoothing):
-        with self._lock:
-            claim = self._claims.get(mover_id)
-            if not claim or claim.device_id != device_id:
-                return False
-            claim.smoothing = max(0.01, min(1.0, float(smoothing)))
-        return True
+    # `set_smoothing` deleted in #877. Smoothing was already a no-op
+    # after #868 (the EMA was replaced with pure pass-through and the
+    # value drove the DMX pan-tilt-speed channel). #877 deleted that
+    # speed-channel write entirely: the orchestrator passes the aim
+    # vector straight through to the fixture, which handles its own
+    # motor speed. No state to set, no slider to expose.
 
     def flash(self, mover_id, device_id, on=True):
         with self._lock:
@@ -667,15 +669,15 @@ class MoverControlEngine:
                     # for this tick. Non-pan/tilt state (dimmer, colour)
                     # still flows below.
                     if pan_norm is not None and tilt_norm is not None:
-                        # #868 — no software smoothing. The pan/tilt-
-                        # speed DMX channel (when the profile defines
-                        # one) is the only smoothing mechanism: written
-                        # by `_write_dmx` from `claim.smoothing`.
-                        # Profiles without that channel send unsmoothed
-                        # moves at full IK rate. The legacy EMA caused
-                        # a hard freeze when `claim.smoothing == 1.0`
-                        # because `alpha = 1 - smoothing = 0` and
-                        # `pan_smooth += 0 * delta` is a no-op.
+                        # #877 — pure pass-through. The orchestrator
+                        # never smooths and never writes a speed
+                        # channel; the gyro vector goes straight to
+                        # the fixture, which handles its own motor
+                        # speed and mechanical limits. The legacy
+                        # `pan_smooth` / `tilt_smooth` field names are
+                        # retained because downstream `_write_dmx`
+                        # reads them, but they hold raw `pan_norm` /
+                        # `tilt_norm` with no transform.
                         claim.pan_smooth  = pan_norm
                         claim.tilt_smooth = tilt_norm
                         claim.have_pan_tilt = True
@@ -850,18 +852,13 @@ class MoverControlEngine:
         if include_pan_tilt:
             uni_buf.set_fixture_pan_tilt(addr, claim.pan_smooth,
                                          claim.tilt_smooth, profile)
-            # #868 — pan/tilt motor-speed smoothing is the fixture's
-            # job, not ours. When the profile defines a `pan-tilt-speed`
-            # channel, drive it from `claim.smoothing` (operator-facing
-            # 0=fast..1=slow). Profiles without the channel skip this
-            # block and inherit the engine's unsmoothed IK rate, which
-            # is correct: the operator can't ask for what the fixture
-            # can't accept.
-            ch_map = prof_info.get("channel_map", {})
-            if "pan-tilt-speed" in ch_map:
-                pts_offset = ch_map["pan-tilt-speed"]
-                speed_dmx = max(0, min(255, int(round(claim.smoothing * 255))))
-                uni_buf.set_channel(addr + pts_offset, speed_dmx)
+            # #877 — pan-tilt-speed channel write deleted. The
+            # orchestrator no longer touches that channel; the
+            # fixture handles its own motor speed. The pre-fix block
+            # (added in #868) wrote `claim.smoothing × 255` to the
+            # profile's pan-tilt-speed offset, but the smoothing
+            # slider was operator-confusing and the orchestrator has
+            # no business dictating the fixture's mechanical pacing.
         # #853 — render-time scaling removed; the ArtNet engine's
         # send-time master grand-master gate (`get_data_scaled` with
         # gamma-corrected scaling on intensity-class channels) handles
