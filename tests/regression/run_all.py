@@ -2,9 +2,13 @@
 
 Run: python -X utf8 tests/regression/run_all.py
 
-Live-rig (#682-EE/-FF) suites are gated behind ``--live-rig`` or
-``SLYLED_LIVE_RIG=1``. They probe the orchestrator + camera nodes and
-require a calibrated mover, so CI skips them by default.
+Gating flags:
+- ``--live-rig`` (or ``SLYLED_LIVE_RIG=1``) — adds #682-EE/-FF live-rig
+  suites that probe the orchestrator + camera nodes against a calibrated
+  mover. CI skips by default.
+- ``--weekly`` (or ``SLYLED_WEEKLY=1``) — adds slow Playwright suites
+  whose underlying wiring rarely changes; running them every CI cycle is
+  overkill. Intended for a once-a-week scheduled run.
 """
 import argparse
 import os
@@ -42,22 +46,39 @@ LIVE_RIG_TESTS = [
     ('test_beam_detect_canary.py',  'Beam-Detect Canary (live rig)'),
 ]
 
+# Weekly-only regressions. Slow Playwright suites whose underlying
+# wiring rarely changes — running them every CI cycle is overkill.
+# Gated by `--weekly` or `SLYLED_WEEKLY=1`. Each suite still uses the
+# same one-process-per-test isolation as the always-run TESTS.
+WEEKLY_TESTS = [
+    ('test_3d_vectors_cones.py',
+     '3D vectors + cones toggle (Playwright, all 3 tabs)'),
+]
+
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--live-rig', action='store_true',
                     help='also run #682-EE/-FF live-rig regressions '
                          '(implies SLYLED_LIVE_RIG=1)')
+    ap.add_argument('--weekly', action='store_true',
+                    help='also run slow weekly Playwright regressions '
+                         '(implies SLYLED_WEEKLY=1)')
     args = ap.parse_args()
 
     tests = list(TESTS)
     live_rig_on = args.live_rig or os.environ.get('SLYLED_LIVE_RIG') == '1'
     if live_rig_on:
         tests += LIVE_RIG_TESTS
+    weekly_on = args.weekly or os.environ.get('SLYLED_WEEKLY') == '1'
+    if weekly_on:
+        tests += WEEKLY_TESTS
 
     env = {**os.environ, 'PYTHONIOENCODING': 'utf-8'}
     if args.live_rig:
         env['SLYLED_LIVE_RIG'] = '1'
+    if args.weekly:
+        env['SLYLED_WEEKLY'] = '1'
 
     results = []
     total_passed = 0
