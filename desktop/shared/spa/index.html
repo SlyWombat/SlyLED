@@ -396,11 +396,17 @@
         <div style='display:flex;gap:.5em;align-items:center;margin-bottom:.5em'>
           <label style='flex:0 0 80px;font-size:.82em'>Device</label>
           <select id='lab-device' onchange='_labSave()' style='flex:1'></select>
+          <button type='button' onclick='_labRefreshDevices()' title='Re-query OS for input devices (plug-in / unplug)' style='font-size:.78em;padding:.2em .5em;background:#334155;color:#cbd5e1;border:1px solid #475569;border-radius:4px;cursor:pointer'>↻</button>
         </div>
         <div style='display:flex;gap:.5em;align-items:center;margin-bottom:.4em'>
-          <label style='flex:0 0 80px;font-size:.82em'>Gain</label>
+          <label style='flex:0 0 80px;font-size:.82em' title='Pre-envelope multiplier on raw audio RMS. Higher = louder input drives master harder.'>Gain</label>
           <input id='lab-gain' type='range' min='0' max='10' step='0.1' value='1.5' style='flex:1' onchange='_labSave()' oninput='_labLiveLbl()'>
           <span id='lab-gain-val' style='width:36px;font-size:.78em;text-align:right'>1.50</span>
+        </div>
+        <div style='display:flex;gap:.5em;align-items:center;margin-bottom:.4em'>
+          <label style='flex:0 0 80px;font-size:.82em' title='Input-side noise gate. 100 = no gate (quietest sounds register); 0 = high threshold (only loud sounds reach the floor→ceiling range).'>Sensitivity</label>
+          <input id='lab-sens' type='range' min='0' max='100' value='100' style='flex:1' onchange='_labSave()' oninput='_labLiveLbl()'>
+          <span id='lab-sens-val' style='width:36px;font-size:.78em;text-align:right'>100</span>
         </div>
         <div style='display:flex;gap:.5em;align-items:center;margin-bottom:.4em'>
           <label style='flex:0 0 80px;font-size:.82em'>Floor</label>

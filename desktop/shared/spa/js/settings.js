@@ -1092,6 +1092,20 @@ function resetCalTuning(btn){
 function _labLoad(){
   // Stop any prior poll from a previous visit to the tab.
   if(window._labPoll){clearInterval(window._labPoll);window._labPoll=null;}
+  // Refresh device list on window focus so plugging / unplugging
+  // an external mic or USB audio interface while Settings is open
+  // surfaces immediately without a manual click. Only register once.
+  if(!window._labFocusHooked){
+    window._labFocusHooked=true;
+    window.addEventListener('focus', function(){
+      var t=document.getElementById('t-settings');
+      if(t&&t.style.display!=='none')_labRefreshDevices();
+    });
+  }
+  _labRefreshDevices();
+}
+
+function _labRefreshDevices(){
   ra('GET','/api/local-audio-brightness/devices',null,function(d){
     var sel=document.getElementById('lab-device');
     if(!sel)return;
@@ -1131,12 +1145,15 @@ function _labLoad(){
       var en=document.getElementById('lab-enabled');if(en)en.checked=!!cfg.enabled;
       if(cfg.device==null){sel.value='';}else{sel.value=String(cfg.device);}
       var g=document.getElementById('lab-gain');if(g&&cfg.gain!=null)g.value=cfg.gain;
+      var sn=document.getElementById('lab-sens');if(sn&&cfg.sensitivity!=null)sn.value=cfg.sensitivity;
       var fl=document.getElementById('lab-floor');if(fl&&cfg.floor!=null)fl.value=cfg.floor;
       var ce=document.getElementById('lab-ceil');if(ce&&cfg.ceiling!=null)ce.value=cfg.ceiling;
       var at=document.getElementById('lab-attack');if(at&&cfg.attackMs!=null)at.value=cfg.attackMs;
       var rl=document.getElementById('lab-release');if(rl&&cfg.releaseMs!=null)rl.value=cfg.releaseMs;
       _labLiveLbl();
-      // Start the live VU poll.
+      // Start the live VU poll. Clear any existing handle first so a
+      // focus-refresh or repeat Settings entry doesn't leak intervals.
+      if(window._labPoll)clearInterval(window._labPoll);
       window._labPoll=setInterval(_labPollLive,250);
     });
   });
@@ -1144,11 +1161,13 @@ function _labLoad(){
 
 function _labLiveLbl(){
   var g=document.getElementById('lab-gain');
+  var sn=document.getElementById('lab-sens');
   var fl=document.getElementById('lab-floor');
   var ce=document.getElementById('lab-ceil');
   var at=document.getElementById('lab-attack');
   var rl=document.getElementById('lab-release');
   if(g)document.getElementById('lab-gain-val').textContent=parseFloat(g.value).toFixed(2);
+  if(sn)document.getElementById('lab-sens-val').textContent=sn.value;
   if(fl)document.getElementById('lab-floor-val').textContent=fl.value;
   if(ce)document.getElementById('lab-ceil-val').textContent=ce.value;
   if(at)document.getElementById('lab-attack-val').textContent=at.value+' ms';
@@ -1163,6 +1182,7 @@ function _labSave(){
     enabled: !!(document.getElementById('lab-enabled')||{}).checked,
     device:  deviceVal===''?null:parseInt(deviceVal,10),
     gain:    parseFloat((document.getElementById('lab-gain')||{}).value||1.5),
+    sensitivity: parseInt((document.getElementById('lab-sens')||{}).value||100,10),
     floor:   parseInt((document.getElementById('lab-floor')||{}).value||0,10),
     ceiling: parseInt((document.getElementById('lab-ceil')||{}).value||255,10),
     attackMs:  parseFloat((document.getElementById('lab-attack')||{}).value||5),

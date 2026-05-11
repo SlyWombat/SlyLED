@@ -89,6 +89,11 @@ class LocalAudioBrightness:
             "enabled":     False,
             "device":      None,  # OS device name; None = system default
             "gain":        1.5,   # multiplier on raw RMS
+            "sensitivity": 100,   # input-side noise-gate (0-100 %).
+                                  # 100 = no gate (env passes through);
+                                  # 0   = ~50 % RMS gate (only loud
+                                  # passes). Default 100 preserves
+                                  # legacy pre-sensitivity behaviour.
             "floor":       0,     # min master ∈ [0, 255]
             "ceiling":     255,   # max master ∈ [0, 255]
             "attackMs":    _DEFAULT_ATTACK_MS,
@@ -199,13 +204,15 @@ class LocalAudioBrightness:
         needed. Returns the new effective config."""
         restart = False
         with self._lock:
-            for key in ("enabled", "device", "gain", "floor",
-                        "ceiling", "attackMs", "releaseMs"):
+            for key in ("enabled", "device", "gain", "sensitivity",
+                        "floor", "ceiling", "attackMs", "releaseMs"):
                 if key in cfg:
                     new_val = cfg[key]
                     # Clamp the numeric sliders to sane ranges.
                     if key == "gain":
                         new_val = max(0.0, min(10.0, float(new_val)))
+                    elif key == "sensitivity":
+                        new_val = max(0, min(100, int(new_val)))
                     elif key in ("floor", "ceiling"):
                         new_val = max(0, min(255, int(new_val)))
                     elif key in ("attackMs", "releaseMs"):
@@ -362,10 +369,20 @@ class LocalAudioBrightness:
                 env = self._env_value  # 0..1 (in theory; clip below)
                 floor = self._cfg["floor"]
                 ceiling = self._cfg["ceiling"]
-            # Map envelope (0..1) to master byte through the operator's
-            # floor/ceiling window. Envelope > 1 (over-driven gain) is
-            # clipped at ceiling.
-            env_clipped = max(0.0, min(1.0, env))
+                sensitivity = self._cfg.get("sensitivity", 100)
+            # Sensitivity → input-side noise gate. 100 means no gate
+            # (env passes through); 0 means a ~50 % RMS threshold
+            # below which output collapses to `floor`. Above threshold
+            # the envelope is re-normalised across (threshold..1) so
+            # the operator gets the full floor→ceiling range with the
+            # quieter portion ignored.
+            threshold = (1.0 - sensitivity / 100.0) * 0.5
+            if env <= threshold:
+                env_scaled = 0.0
+            else:
+                span = max(0.01, 1.0 - threshold)
+                env_scaled = (env - threshold) / span
+            env_clipped = max(0.0, min(1.0, env_scaled))
             master = int(round(floor + env_clipped * (ceiling - floor)))
             master = max(0, min(255, master))
             with self._lock:
