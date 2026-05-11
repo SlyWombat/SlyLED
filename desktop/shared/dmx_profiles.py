@@ -867,6 +867,13 @@ class ProfileLibrary:
                     p["channelCount"] = len(p["channels"])
                     self._profiles[p["id"]] = p
                     loaded += 1
+                    # #887 — surface offset-collision and other shape
+                    # issues at load time so the operator notices when a
+                    # profile is internally inconsistent. We DON'T reject
+                    # the load (operator may be mid-edit and a half-broken
+                    # profile is still better than no profile), just warn.
+                    for issue in self.find_profile_issues(p):
+                        log.warning("Profile %s: %s", p["id"], issue)
                 else:
                     log.warning("Profile %s: missing id or channels, skipped", f.name)
             except Exception as e:
@@ -1033,6 +1040,131 @@ class ProfileLibrary:
             self.save_profile(p)
             imported += 1
         return {"imported": imported, "skipped": skipped, "errors": errors}
+
+    def find_profile_issues(self, profile):
+        """Return a list of soft-warning strings about profile shape (#887).
+
+        Where ``validate_profile`` is a strict gate that rejects bad
+        writes, this finder is a *diagnostic* that surfaces shape
+        problems on already-loaded profiles. The motivating case: the
+        350W BeamLight profile shipped by an operator declared a
+        ``pan-fine`` channel at the same offset the hardware actually
+        uses for tilt, plus a ``tilt-fine`` channel at the
+        pan-tilt-speed offset. The orchestrator followed the profile
+        and wrote the LSB into the tilt and pan-tilt-speed slots,
+        causing motor lag (the pan-tilt-speed channel read the LSB
+        byte as a slow-fast speed value). The runtime guard in
+        ``compute_pan_tilt_writes`` only fires when there's NO fine
+        channel mapping; once the operator's profile claimed one
+        existed, the guard was bypassed.
+
+        Issues surfaced (each is a one-line operator-readable string):
+          * duplicate offset (two channels at the same slot)
+          * bits=16 coarse channel whose declared fine sibling lives
+            at a slot occupied by a different type (the #887
+            pattern — diagnostic-only because the orchestrator can't
+            tell which side of the conflict is "right")
+          * orphaned ``*-fine`` channel with no matching coarse
+          * channel ``offset`` < 0
+        """
+        issues = []
+        channels = profile.get("channels") or []
+        if not isinstance(channels, list):
+            return issues
+        # offset -> list of (idx, type)
+        by_offset = {}
+        type_at_offset = {}
+        for i, ch in enumerate(channels):
+            if not isinstance(ch, dict):
+                continue
+            off = ch.get("offset")
+            if not isinstance(off, int):
+                continue
+            if off < 0:
+                issues.append(f"channel {i} ('{ch.get('type', '?')}'): "
+                              f"negative offset {off}")
+                continue
+            by_offset.setdefault(off, []).append((i, ch.get("type")))
+            # `type_at_offset` always holds the LAST type for a slot
+            # (matches channel_map last-write-wins semantics).
+            type_at_offset[off] = ch.get("type")
+
+        for off, hits in by_offset.items():
+            if len(hits) > 1:
+                types = ", ".join(repr(t) for _, t in hits)
+                issues.append(f"duplicate offset {off}: declared as {types}. "
+                              f"Pick one — the last wins in channel_map, "
+                              f"and the orchestrator will write to the "
+                              f"slot via whichever type the consumer "
+                              f"looks up first.")
+
+        # bits=16 coarse vs fine-slot type mismatch.
+        for i, ch in enumerate(channels):
+            if not isinstance(ch, dict):
+                continue
+            t = ch.get("type")
+            off = ch.get("offset")
+            bits = ch.get("bits", 8)
+            if t not in ("pan", "tilt") or bits != 16:
+                continue
+            fine_type = f"{t}-fine"
+            # If the profile carries an explicit fine entry, the
+            # writer uses that offset (via channel_map). Find it.
+            fine_off = None
+            for cc in channels:
+                if isinstance(cc, dict) and cc.get("type") == fine_type:
+                    fine_off = cc.get("offset")
+                    break
+            if fine_off is None:
+                # Implicit fine slot = coarse + 1. Check whether the
+                # slot at coarse + 1 is occupied by something other
+                # than the matching *-fine.
+                neighbour_type = type_at_offset.get(off + 1)
+                if neighbour_type and neighbour_type != fine_type:
+                    issues.append(
+                        f"channel '{t}' at offset {off} declares "
+                        f"bits=16 but the contiguous fallback slot "
+                        f"(offset {off + 1}) is typed "
+                        f"'{neighbour_type}'. The orchestrator will "
+                        f"refuse the LSB write and emit 8-bit "
+                        f"resolution only (#876); to use 16-bit, add "
+                        f"an explicit '{fine_type}' channel at the "
+                        f"correct offset, or set this channel's "
+                        f"bits to 8 if the hardware is 8-bit-only.")
+            else:
+                actual_neighbour = type_at_offset.get(fine_off)
+                if actual_neighbour and actual_neighbour != fine_type:
+                    issues.append(
+                        f"channel '{fine_type}' at offset {fine_off} "
+                        f"collides with channel '{actual_neighbour}' "
+                        f"at the same offset. The orchestrator will "
+                        f"write the LSB of '{t}' to slot {fine_off}, "
+                        f"clobbering the '{actual_neighbour}' channel "
+                        f"on every pan/tilt update. Fix the profile "
+                        f"by removing the spurious '{fine_type}' "
+                        f"entry or moving it to a free slot.")
+
+        # Orphaned *-fine entry (no matching coarse with bits=16).
+        for i, ch in enumerate(channels):
+            if not isinstance(ch, dict):
+                continue
+            t = ch.get("type")
+            if t not in ("pan-fine", "tilt-fine"):
+                continue
+            coarse_type = t.replace("-fine", "")
+            has_coarse = any(
+                isinstance(cc, dict) and cc.get("type") == coarse_type
+                and cc.get("bits", 8) == 16
+                for cc in channels
+            )
+            if not has_coarse:
+                issues.append(
+                    f"channel '{t}' at offset {ch.get('offset')} has no "
+                    f"matching coarse '{coarse_type}' with bits=16. The "
+                    f"LSB will be written but the MSB write expects an "
+                    f"8-bit-only coarse, leaving the channel in an "
+                    f"inconsistent half-written state.")
+        return issues
 
     def validate_profile(self, profile):
         """Validate a profile dict. Returns (ok, error_message)."""

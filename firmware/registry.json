@@ -6,18 +6,18 @@
                          "description":  "WS2812B / WS2811 / APA102 LED strip controller with 14 effects + OTA",
                          "board":  "esp32",
                          "fqbn":  "esp32:esp32:esp32",
-                         "version":  "7.5.17",
-                         "releaseTag":  "esp32-v7.5.17",
+                         "version":  "7.5.18",
+                         "releaseTag":  "esp32-v7.5.18",
                          "file":  "esp32/main.ino.merged.bin",
                          "releaseAsset":  "esp32-firmware-merged.bin",
                          "otaAsset":  "esp32-firmware-app.bin",
-                         "sha256":  "f293391e344b314872b7ca3f1f0b09368ab78cc559aea3d92cf3838fd100debd",
+                         "sha256":  "bfce40508f2d21550905a0af0751ede92925e07d24f9e4df080846ec2fd111d1",
                          "flashMethod":  "esptool",
                          "buildDefines":  [
                                               "BOARD_ESP32"
                                           ],
-                         "sourceHash":  "3ad692289489a302269af2a86e2fb26f60fb05eec216f65b42539cec6ee4ad61",
-                         "otaSha256":  "d4a5850de230c5ba1b90ff0f32c3425356d634208d5dbe69bfa0283214941863"
+                         "sourceHash":  "a6517fcdf44ecc1efd3ffe8b91df728897fd833bd3b8cd11a30402ee59be3938",
+                         "otaSha256":  "aba1acf3f4b4ba28842c84d009a1c97ccb0ecac63cfd9669f7bdddb6e1b12393"
                      },
                      {
                          "id":  "child-led-d1mini",
@@ -25,16 +25,16 @@
                          "description":  "WS2812B / WS2811 / APA102 LED strip controller with 14 effects + OTA",
                          "board":  "d1mini",
                          "fqbn":  "esp8266:esp8266:d1_mini",
-                         "version":  "7.5.16",
-                         "releaseTag":  "d1mini-v7.5.16",
+                         "version":  "7.5.17",
+                         "releaseTag":  "d1mini-v7.5.17",
                          "file":  "d1mini/main.ino.bin",
                          "releaseAsset":  "d1mini-firmware.bin",
-                         "sha256":  "09408ea686651d66093f6e643e470c1d211f3d6566a36acd2a4d2e558744f214",
+                         "sha256":  "9b440881424f98fcf9f7b0a3b498f45fec04ee2ec7b3309134c501e61031efdc",
                          "flashMethod":  "esptool",
                          "buildDefines":  [
                                               "BOARD_D1MINI"
                                           ],
-                         "sourceHash":  "3ad692289489a302269af2a86e2fb26f60fb05eec216f65b42539cec6ee4ad61"
+                         "sourceHash":  "a6517fcdf44ecc1efd3ffe8b91df728897fd833bd3b8cd11a30402ee59be3938"
                      },
                      {
                          "id":  "dmx-bridge-esp32",
@@ -110,19 +110,19 @@
                          "description":  "Waveshare ESP32-S3 1.28inch round LCD â€” orientation controller for DMX moving heads",
                          "board":  "esp32s3",
                          "fqbn":  "esp32:esp32:esp32s3",
-                         "version":  "1.2.13",
-                         "releaseTag":  "gyro-v1.2.13",
+                         "version":  "1.2.14",
+                         "releaseTag":  "gyro-v1.2.14",
                          "file":  "esp32s3/main.ino.merged.bin",
                          "releaseAsset":  "esp32s3-gyro-firmware.bin",
                          "otaAsset":  "esp32s3-gyro-firmware-app.bin",
-                         "sha256":  "ebe05bd99721d018802a854494435d7aae9f729c44826143bec1df98760b03e2",
+                         "sha256":  "ee4349495aaef76b71a14904248ca17985dbd9fa953ad632d298a0a343df7698",
                          "flashMethod":  "esptool",
                          "buildDefines":  [
                                               "GYRO_BOARD"
                                           ],
                          "buildFlags":  "-DGYRO_BOARD",
-                         "sourceHash":  "3ad692289489a302269af2a86e2fb26f60fb05eec216f65b42539cec6ee4ad61",
-                         "otaSha256":  "d251bd5bf928fb2dda731e1cd30355f090bdb0b44c092b00eb701a00713abbab"
+                         "sourceHash":  "a6517fcdf44ecc1efd3ffe8b91df728897fd833bd3b8cd11a30402ee59be3938",
+                         "otaSha256":  "1cce7bb807046e6f9a744b99f003f3544c0ac547d974a2b322bc47e0107e7363"
                      },
                      {
                          "id":  "camera-node",

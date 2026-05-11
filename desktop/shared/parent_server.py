@@ -84,7 +84,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "2.0.2"
+VERSION = "2.0.3"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -11450,6 +11450,22 @@ def api_dmx_profile_get(profile_id):
         return jsonify(err="Not found"), 404
     return jsonify(p)
 
+
+@app.get("/api/dmx-profiles/<profile_id>/issues")
+def api_dmx_profile_issues(profile_id):
+    """#887 — return soft-warning diagnostics for a profile's shape.
+
+    Surfaces problems like duplicate offsets and the bits=16-without-
+    matching-fine-channel pattern that caused the 350W BeamLight motor
+    lag (orchestrator wrote pan/tilt LSBs into the tilt and
+    pan-tilt-speed slots because the profile declared phantom
+    pan-fine / tilt-fine entries at those offsets). Returns a list of
+    operator-readable strings; empty list = profile shape is clean."""
+    p = _profile_lib.get_profile(profile_id)
+    if not p:
+        return jsonify(err="Not found"), 404
+    return jsonify(id=profile_id, issues=_profile_lib.find_profile_issues(p))
+
 @app.put("/api/dmx-profiles/<profile_id>")
 def api_dmx_profile_update(profile_id):
     body = request.get_json(silent=True) or {}
@@ -19604,6 +19620,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
