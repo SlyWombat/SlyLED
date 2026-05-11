@@ -1,7 +1,7 @@
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 7, 125, 0),
-    prodvers=(1, 7, 125, 0),
+    filevers=(1, 7, 126, 0),
+    prodvers=(1, 7, 126, 0),
     mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0,
     date=(0, 0),
   ),
@@ -11,12 +11,12 @@ VSVersionInfo(
         u'040904b0',
         [StringStruct(u'CompanyName', u'Electric RV Corporation'),
          StringStruct(u'FileDescription', u'SlyLED Orchestrator'),
-         StringStruct(u'FileVersion', u'1.7.125.0'),
+         StringStruct(u'FileVersion', u'1.7.126.0'),
          StringStruct(u'InternalName', u'SlyLED'),
          StringStruct(u'LegalCopyright', u'\u00a9 Electric RV Corporation'),
          StringStruct(u'OriginalFilename', u'SlyLED.exe'),
          StringStruct(u'ProductName', u'SlyLED Orchestrator'),
-         StringStruct(u'ProductVersion', u'1.7.125.0')])
+         StringStruct(u'ProductVersion', u'1.7.126.0')])
     ]),
     VarFileInfo([VarStruct(u'Translation', [1033, 1200])])
   ]
