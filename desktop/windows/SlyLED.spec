@@ -1,8 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_data_files
 from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_all
 
 datas = [('D:\\SlyLED\\desktop\\shared\\spa', 'spa'), ('D:\\SlyLED\\desktop\\shared\\parent_server.py', '.'), ('D:\\SlyLED\\desktop\\shared\\firmware_manager.py', '.'), ('D:\\SlyLED\\desktop\\shared\\spatial_engine.py', '.'), ('D:\\SlyLED\\desktop\\shared\\bake_engine.py', '.'), ('D:\\SlyLED\\desktop\\shared\\wled_bridge.py', '.'), ('D:\\SlyLED\\desktop\\shared\\dmx_profiles.py', '.'), ('D:\\SlyLED\\desktop\\shared\\dmx_artnet.py', '.'), ('D:\\SlyLED\\desktop\\shared\\dmx_sacn.py', '.'), ('D:\\SlyLED\\desktop\\shared\\show_generator.py', '.'), ('D:\\SlyLED\\desktop\\shared\\community_client.py', '.'), ('D:\\SlyLED\\desktop\\shared\\mover_control.py', '.'), ('D:\\SlyLED\\desktop\\shared\\space_mapper.py', '.'), ('D:\\SlyLED\\desktop\\shared\\surface_analyzer.py', '.'), ('D:\\SlyLED\\desktop\\shared\\aim', 'aim'), ('D:\\SlyLED\\desktop\\shared\\remote_orientation.py', '.'), ('D:\\SlyLED\\desktop\\shared\\dmx_universe.py', '.'), ('D:\\SlyLED\\desktop\\shared\\depth_runtime.py', '.'), ('D:\\SlyLED\\desktop\\shared\\depth_runner.py', '.'), ('D:\\SlyLED\\desktop\\shared\\camera_settings.py', '.'), ('D:\\SlyLED\\desktop\\shared\\ollama_runtime.py', '.'), ('D:\\SlyLED\\desktop\\shared\\local_audio_brightness.py', '.'), ('D:\\SlyLED\\firmware\\registry.json', 'firmware'), ('D:\\SlyLED\\docs\\help', 'docs/help'), ('D:\\SlyLED\\docs\\USER_MANUAL.md', 'docs'), ('D:\\SlyLED\\docs\\USER_MANUAL_fr.md', 'docs'), ('D:\\SlyLED\\docs\\USER_MANUAL.pdf', 'docs'), ('D:\\SlyLED\\docs\\USER_MANUAL_fr.pdf', 'docs'), ('D:\\SlyLED\\docs\\USER_MANUAL.docx', 'docs'), ('D:\\SlyLED\\docs\\USER_MANUAL_fr.docx', 'docs'), ('D:\\SlyLED\\docs\\schema', 'docs/schema'), ('D:\\SlyLED\\docs\\build', 'docs/build')]
+binaries = []
 hiddenimports = ['pystray', 'paramiko', 'numpy', 'cv2', 'PIL._tkinter_finder', 'sounddevice']
 datas += collect_data_files('esptool')
 hiddenimports += collect_submodules('flask')
@@ -10,12 +12,14 @@ hiddenimports += collect_submodules('werkzeug')
 hiddenimports += collect_submodules('esptool')
 hiddenimports += collect_submodules('numpy')
 hiddenimports += collect_submodules('cv2')
+tmp_ret = collect_all('sounddevice')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
     ['D:\\SlyLED\\desktop\\shared\\main.py'],
     pathex=['D:\\SlyLED\\desktop\\shared'],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

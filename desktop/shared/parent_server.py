@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.123"
+VERSION = "1.7.124"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -12600,10 +12600,16 @@ def api_remotes_live():
             # `_remoteDashColor` consumes hardStale to render the grey
             # LOST chip, mirroring the gyro card vocabulary.
             hard_stale = last_age > 3.0
+            # #879 — disambiguate the local-audio producer from Android
+            # push remotes. Both flow through `_brightness_obs`; the
+            # `remote_ip` key is the differentiator.
+            is_local_audio = (remote_ip == _LOCAL_AUDIO_BRI_SOURCE)
+            display_name = ("Local Audio Brightness" if is_local_audio
+                            else f"Android Auto Brightness ({remote_ip})")
             snap.append({
                 "id": -1000 - hash(remote_ip) % 10000,
                 "kind": "auto-brightness",
-                "name": f"Android Auto Brightness ({remote_ip})",
+                "name": display_name,
                 "deviceId": remote_ip,
                 "pos": [0, 0, 0],
                 "rot": [0, 0, 0],
@@ -19389,6 +19395,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
