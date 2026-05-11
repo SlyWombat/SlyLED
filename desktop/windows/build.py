@@ -143,6 +143,8 @@ args = [
     "--hidden-import=numpy",
     "--hidden-import=cv2",
     "--hidden-import=PIL._tkinter_finder",
+    "--hidden-import=sounddevice",
+    "--add-data", f"{SHARED / 'local_audio_brightness.py'};.",  # #879
     "--collect-submodules=flask",
     "--collect-submodules=werkzeug",
     "--collect-submodules=esptool",
