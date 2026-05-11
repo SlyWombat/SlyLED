@@ -835,19 +835,47 @@
 <!-- ═══════════════════════════════════════════════════ -->
 <h2 id="firmware">15. Firmware &amp; OTA Updates</h2>
 
+<p>The <strong>Firmware</strong> tab is the operator's single window onto every flashable device on the rig: LED performers, the DMX bridge, the Gyro Controller, and the camera nodes. Versions update live from each device's PING/PONG.</p>
+
+<h3>Current production versions (orchestrator v1.7.119)</h3>
+<table>
+  <tr><th>Device</th><th>Current</th><th>Channel</th></tr>
+  <tr><td>Orchestrator (Windows / macOS)</td><td><strong>v1.7.119</strong></td><td><code>SlyLED-Setup.exe</code></td></tr>
+  <tr><td>LED Performer (ESP32)</td><td><strong>v7.5.14</strong></td><td>OTA</td></tr>
+  <tr><td>LED Performer (D1 Mini)</td><td><strong>v7.5.13</strong></td><td>OTA</td></tr>
+  <tr><td>DMX Bridge</td><td><strong>v7.5.20</strong></td><td>OTA</td></tr>
+  <tr><td>Gyro Controller (ESP32-S3)</td><td><strong>v1.2.10</strong></td><td>OTA</td></tr>
+  <tr><td>Camera Node (Linux SBC)</td><td><strong>v1.6.3</strong></td><td>SSH deploy from Firmware tab</td></tr>
+</table>
+
 <h3>USB Flash</h3>
 <ol>
   <li>Go to <strong>Firmware</strong> tab</li>
   <li>Select COM port and firmware binary</li>
-  <li>Click <strong>Flash</strong> — progress shows percentage</li>
+  <li>Click <strong>Flash</strong> — progress shows percentage and verification before reboot</li>
 </ol>
 
 <h3>OTA (Over-the-Air)</h3>
 <ol>
-  <li>Set WiFi credentials on the Firmware tab</li>
-  <li>Click <strong>Check for Updates</strong> — shows per-device version comparison</li>
-  <li>Click <strong>Update</strong> on any outdated performer</li>
+  <li>Set WiFi credentials on the Firmware tab — pushed to every newly-flashed device</li>
+  <li>Click <strong>Check for Updates</strong> — shows per-device reported version vs. registry version</li>
+  <li>Click <strong>Update</strong> on any outdated performer — mid-flash status streams live; the device reboots automatically after verification</li>
 </ol>
+
+<h3>App-only vs merged binaries (v1.7.119, issue #870)</h3>
+<p>ESP32 OTA writes into a ~1.5&nbsp;MB OTA partition. The build pipeline emits two binaries per release: an <strong>app-only</strong> binary (<code>*-app.bin</code>, ≈1&nbsp;MB — what OTA expects) and a <strong>merged</strong> binary (<code>*-merged.bin</code>, 4&nbsp;MB — for USB factory flash). The OTA proxy refuses to serve the merged binary as an OTA payload; previously a misconfigured registry would silently push 4&nbsp;MB and brick the update. Poisoned caches self-heal on the next OTA request.</p>
+
+<h3>SHA-256 verification (v1.7.119, issue #873)</h3>
+<p>Each registry entry carries an <code>otaSha256</code> field — the hash of the exact bytes the OTA partition should receive. Before serving a binary, the orchestrator verifies the file's SHA-256 against the pin and refuses with HTTP 502 on mismatch. Catches corrupted CDN downloads.</p>
+
+<h3>Force Update</h3>
+<p>When the orchestrator's registry says the device is already up to date but you need to re-flash anyway (recovering from a wedged build), click <strong>Force Update</strong> on the device card. The orchestrator skips the version-equality check and pushes the latest binary regardless.</p>
+
+<h3>Registry self-heal (v1.7.111)</h3>
+<p>The firmware registry re-resolves entries against current GitHub release metadata at startup, so a release re-tag doesn't require a manual orchestrator update.</p>
+
+<h3>Installer (v1.7.107–v1.7.109)</h3>
+<p>Run <code>SlyLED-Setup.exe</code> as administrator (required to write Windows Firewall rules). The installer prompts for the SPA port (default <strong>8080</strong>) and refuses ports already in use. Upgrades delete the prior version's firewall rules before adding new ones, so stale entries don't accumulate.</p>
 
 <!-- ═══════════════════════════════════════════════════ -->
 <h2 id="limits">16. System Limits</h2>

@@ -38,12 +38,46 @@ SlyLED est un systeme de controle d'eclairage LED et DMX a trois niveaux :
 - **Performers** (ESP32/D1 Mini) — executer les effets LED sur le materiel
 - **Pont DMX** (Giga R1 WiFi) — transmettre Art-Net/sACN vers les projecteurs DMX
 
+### Installer l'orchestrateur Windows (v1.7.107+)
+
+Lancez `SlyLED-Setup.exe` depuis la release. L'installateur exige
+une **élévation administrateur** — il crée les règles de pare-feu
+Windows pour les ports d'écoute de l'orchestrateur (HTTP pour le
+SPA + UDP 4210 PING/PONG + UDP 4211 Auto-luminosité + Art-Net
+6454) afin qu'une installation fraîche n'exige pas de
+configuration manuelle du pare-feu par l'opérateur.
+
+L'installateur présente une **page de saisie de port** pendant
+l'installation. Le port par défaut est **8080** pour le
+SPA / l'API HTTP. Choisissez un port libre — l'installateur
+refusera d'écrire des règles de pare-feu pour un port utilisé par
+un autre processus. Le port sélectionné est persisté dans le
+lanceur de bureau ; les exécutions ultérieures l'utilisent sans
+nouvelle saisie.
+
+**Mise à niveau.** v1.7.109+ supprime les règles de pare-feu de
+l'installation précédente avant d'ajouter les nouvelles, de sorte
+qu'une mise à niveau en place n'accumule pas d'entrées
+« SlyLED v1.7.x » périmées dans le pare-feu Windows. Si vous
+changez le port entre versions, les règles de l'ancien port sont
+retirées.
+
 ### Demarrage rapide
 1. Lancez l'application de bureau : `powershell -File desktop\windows\run.ps1` (Windows) ou `bash desktop/mac/run.sh` (Mac)
-2. Ouvrez le navigateur a l'adresse `http://localhost:8080`
+2. Ouvrez le navigateur à l'adresse `http://localhost:<port>` (défaut `8080`, défini à l'installation).
 3. Allez dans l'onglet **Configuration**, cliquez sur **Decouvrir** pour trouver les Performers sur votre reseau
 4. Allez dans l'onglet **Mise en page** pour positionner les projecteurs sur la scene
 5. Allez dans l'onglet **Execution**, chargez un **Spectacle predefini**, cliquez sur **Compiler et demarrer**
+
+![En-tête SPA — nom du projet, fichier et bouton d'aide](screenshots/v1.7.119/app-header.png)
+
+La barre supérieure affiche le projet actif (à gauche) et le
+bouton d'aide `?` de l'opérateur (en haut à droite, repositionné en
+v1.7.86 pour ne plus chevaucher le menu Fichier). Le menu Fichier
+porte Nouveau / Ouvrir / Enregistrer / Récents / Exporter /
+Importer. Depuis v1.7.91, l'en-tête lit `Projet • Fichier` afin
+qu'un opérateur exécutant deux installations côte à côte puisse
+les distinguer d'un coup d'œil (#850).
 
 ---
 
@@ -940,7 +974,7 @@ deroulante, definir `min`/`max`, ajouter un libelle et (pour
   vraiment ni dans OFL ni dans la communaute. Quand vous avez
   termine, partagez-le pour que personne d'autre n'ait a le refaire.
 
-### Mise à l'échelle de la luminosité globale (#843)
+### Mise à l'échelle de la luminosité globale (#843, #853, #854)
 
 La luminosité maître atteint les appareils DMX par une passe de
 mise à l'échelle par frame au moment du rendu, et non par le
@@ -964,11 +998,40 @@ Deux cas :
   gradateur (les indices d'emplacement sont catégoriels, pas
   d'intensité).
 
+**Maître appliqué au moment de l'envoi, pas au précalcul (#853).**
+Les versions antérieures précalculaient le maître dans les octets
+de fil de chaque frame ; si l'opérateur faisait glisser le maître
+pendant la lecture, le changement n'était pas perceptible avant le
+prochain précalcul. v1.7.97 a déplacé l'étape de mise à l'échelle
+dans la boucle d'envoi du moteur DMX, de sorte que les changements
+de maître prennent effet immédiatement sans invalider le
+précalcul.
+
+**Dernier-arrivé-l'emporte pour les écrivains concurrents (#854).**
+Quand Auto-luminosité Android envoie à 20 Hz et que l'opérateur
+fait glisser le curseur SPA en même temps, l'orchestrateur prend
+la valeur la plus récente plutôt que de les mélanger. Le changement
+de curseur l'emporte pour un tick, puis le flux Android reprend —
+pas de battement.
+
 L'orchestrateur diffuse `CMD_SET_BRIGHTNESS` à chaque nœud LED à
 chaque changement, et renvoie la valeur courante à un nœud la
 première fois qu'il apparaît dans PONG après un cycle
 d'alimentation, pour qu'un nœud fraîchement démarré n'affiche pas sa
-première frame de spectacle à pleine intensité.
+première frame de spectacle à pleine intensité. Les bandeaux LED
+participent à égalité avec les appareils DMX — un seul réglage
+maître pilote les deux.
+
+**Auto-luminosité Android via UDP (#861).** Avant v1.7.97,
+l'application Android envoyait par POST `/api/brightness` à
+~20 Hz ; le chemin HTTP subissait des retransmissions TCP à cette
+cadence et pouvait devenir silencieux pendant des minutes dans
+des conditions de spectacle en direct. L'implémentation actuelle
+émet un paquet UDP de 3 octets (maître, drapeaux, seq) sur le
+port **4211** — fire-and-forget, sans retransmission, coalescé
+par écrasement à l'orchestrateur. Le chemin lent (glissements
+manuels du curseur SPA, enregistrements de scène) continue
+d'utiliser la route HTTP.
 
 ### Bornage du cône de visée (#803)
 
@@ -1330,20 +1393,22 @@ chaque cycle PING/PONG ; un périphérique périmé apparaît donc comme
 « obsolète » dans les secondes qui suivent le démarrage de
 l'orchestrateur.
 
-### Versions de production courantes (orchestrateur v1.7.83)
+### Versions de production courantes (orchestrateur v1.7.119)
 
 | Périphérique | Piste | Courante | Canal |
 | --- | --- | --- | --- |
-| Orchestrateur (Windows / macOS) | app | **v1.7.83** | installateur (`SlyLED-Setup.exe`) |
+| Orchestrateur (Windows / macOS) | app | **v1.7.119** | installateur (`SlyLED-Setup.exe`) |
 | Application Android opérateur | app | suit la piste de l'orchestrateur | sideload de l'APK depuis `dist/slyled-android.apk` |
-| Nœud exécutant LED (ESP32) | `child-led-esp32` | **v7.5.11** | OTA |
-| Nœud exécutant LED (D1 Mini) | `child-led-d1mini` | **v7.5.10** | OTA |
+| Nœud exécutant LED (ESP32) | `child-led-esp32` | **v7.5.14** | OTA |
+| Nœud exécutant LED (D1 Mini) | `child-led-d1mini` | **v7.5.13** | OTA |
 | Nœud exécutant LED (Giga enfant) | `child-led-giga` | **v7.5.2** | OTA |
 | Pont DMX (ESP32) | `dmx-bridge-esp32` | **v7.5.20** | OTA |
 | Pont DMX (Giga R1) | `dmx-bridge-giga` | **v7.5.20** | OTA |
 | Firmware parent (Giga R1) | `parent-giga` | **v7.5.24** *(en attente — l'orchestrateur de bureau est l'exécution recommandée)* | USB seulement |
-| Contrôleur Gyro (ESP32-S3) | `gyro-esp32s3` | **v1.2.8** | OTA |
+| Contrôleur Gyro (ESP32-S3) | `gyro-esp32s3` | **v1.2.10** | OTA |
 | Nœud caméra (Linux SBC) | `camera-node` | **v1.6.3** | déploiement SSH depuis l'onglet Firmware |
+
+![Onglet Firmware — versions actuelles et boutons Mettre à jour](screenshots/v1.7.119/firmware-tab.png)
 
 L'onglet Firmware interroge `firmware/registry.json` pour connaître
 la version « courante » ; ce tableau est donc régénéré
@@ -1381,11 +1446,49 @@ esptool.
 3. Cliquez sur **Mettre à jour** sur tout exécutant obsolète. Le
    statut en cours de flash revient en direct ; le périphérique
    redémarre automatiquement après vérification.
-4. Nouveau depuis v1.7.83 : lorsqu'un SHA-256 du registre ne
-   correspond pas au binaire sur disque (téléchargement
-   interrompu ou registre édité à la main), l'orchestrateur retombe
-   sur la release GitHub correspondant au `releaseTag` plutôt que
-   de refuser le flash.
+4. L'orchestrateur retombe sur la release GitHub correspondant au
+   `releaseTag` de la carte lorsque le cache local manque ou est
+   périmé, plutôt que de refuser le flash.
+
+#### Binaires app-only vs fusionnés (#870, v1.7.119)
+
+L'OTA ESP32 écrit dans une partition OTA d'environ 1,5 Mo. Le
+pipeline de build émet désormais deux binaires par release ESP32 :
+un binaire **app-only** (`*-app.bin`, ≈1 Mo — ce que l'OTA attend)
+et un binaire **fusionné** (`*-merged.bin`, 4 Mo — pour le flash
+usine USB). Le proxy OTA refuse de servir le binaire fusionné comme
+charge utile OTA ; auparavant, un registre pointant vers le mauvais
+asset poussait silencieusement 4 Mo et abandonnait la mise à jour.
+Si vous voyez « registry entry for `<carte>` lacks otaAsset » dans
+le journal de l'orchestrateur, la release a été publiée sans l'asset
+`*-app.bin` — relancez `build_release.ps1` ou téléversez l'asset
+manquant sur la release GitHub.
+
+L'orchestrateur auto-réparé également les caches déjà empoisonnés :
+à la prochaine requête OTA, un binaire trop volumineux ou au
+mauvais nom de fichier dans `%APPDATA%\SlyLED\firmware\<carte>\`
+est supprimé avant que le téléchargement ne reprenne.
+
+#### Vérification SHA-256 (#873, v1.7.119)
+
+Chaque entrée du registre porte désormais un champ `otaSha256` — le
+hachage des octets exacts que la partition OTA doit recevoir. Avant
+de servir un binaire, l'orchestrateur vérifie le SHA-256 du fichier
+contre l'empreinte pin et refuse avec HTTP 502 en cas de mismatch.
+Cela attrape les téléchargements CDN corrompus et les mélanges de
+cache accidentels que la garde de taille seule ne remarquerait pas.
+
+#### Forcer la mise à jour OTA
+
+Quand le registre de l'orchestrateur dit que le périphérique est
+déjà à jour mais que vous devez tout de même reflasher (par
+exemple, pour récupérer d'une compilation bloquée), ouvrez la carte
+du périphérique sur l'onglet Firmware et cliquez sur **Forcer
+la mise à jour**. L'orchestrateur saute la vérification d'égalité
+de version et pousse le binaire le plus récent peu importe ce que
+le périphérique rapporte.
+
+![Bouton Forcer la mise à jour sur une carte de l'onglet Firmware](screenshots/v1.7.119/firmware-tab.png)
 
 Les builds de diagnostic / développement du gyro
 (`esp32s3-gyro-test-firmware.bin`) sont volontairement masqués de
@@ -1403,10 +1506,15 @@ entrée porte :
 - `version` (semver 3 segments) — ce que doit exécuter le
   périphérique de l'opérateur.
 - `releaseTag` et `releaseAsset` — le tag de release GitHub et le
-  nom de fichier de l'asset à l'intérieur, utilisés par le repli
-  OTA.
-- `sha256` — hachage de vérification que l'orchestrateur valide
-  avant et après flashage.
+  nom de fichier de l'asset à l'intérieur. `releaseAsset` est le
+  binaire fusionné pour le flash usine ; `otaAsset` (nouveau en
+  v1.7.119) est le binaire app-only pour l'OTA — l'OTA ESP32 a
+  besoin d'`otaAsset`, le flash USB peut utiliser l'un ou l'autre.
+- `sha256` — hachage de vérification pour le binaire fusionné
+  (flash usine).
+- `otaSha256` (nouveau en v1.7.119) — hachage de vérification pour
+  le binaire OTA app-only. Vérifié à chaque service OTA ; un
+  mismatch refuse la requête avec un 502.
 
 L'édition manuelle de `registry.json` n'est pas recommandée ;
 `build_release.ps1` le maintient en synchronisation avec les
@@ -1414,6 +1522,12 @@ empreintes des binaires à chaque release. L'onglet Firmware
 rafraîchit le registre depuis GitHub à la demande via le bouton
 **Rafraîchir** ; un installateur fraîchement récupéré voit donc
 immédiatement les versions correspondant à son tag de release.
+
+Le registre **s'auto-répare** également au démarrage (v1.7.111) :
+une entrée référençant un `releaseTag` dont l'asset `*-app.bin` a
+depuis été déplacé ou renommé est re-résolue contre les
+métadonnées GitHub courantes, de sorte qu'un re-tag de release
+n'exige pas de mise à jour manuelle de l'orchestrateur.
 
 ---
 
@@ -2808,17 +2922,23 @@ de revendication par appareil).
 
 <!-- review-status: pending -->
 
-## Annexe E — Télécommande : téléphone Android et palet gyro
+## Annexe E — Télécommande : téléphone Android et Contrôleur Gyro
 
 Deux télécommandes peuvent piloter des projecteurs motorisés en
 direct en parallèle d'un spectacle en cours : un téléphone Android
-exécutant l'application opérateur SlyLED et un palet gyro Waveshare
-ESP32-S3 à écran rond. Tous deux passent par le même arbitre de
-revendication sur l'orchestrateur, suivent le même protocole de
-poignée de main et coopèrent avec la chronologie de spectacle via
-l'arbitre de revendication mover-control. Cette annexe décrit le
-cycle de vie complet, les gestes, et l'interaction entre arbitrage
-de revendication et spectacles préréglés.
+exécutant l'application opérateur SlyLED et un **Contrôleur Gyro**
+Waveshare ESP32-S3 à écran rond, tenu à la main. Tous deux passent
+par le même arbitre de revendication sur l'orchestrateur, suivent le
+même protocole de poignée de main, et coopèrent avec la chronologie
+de spectacle. Cette annexe décrit le cycle de vie complet, les
+gestes, l'assistant empirique d'axe de visée, et l'interaction entre
+arbitrage de revendication et spectacles préréglés.
+
+> **Terminologie.** Les versions antérieures de ce manuel
+> appelaient le matériel tenu à la main le « palet gyro ». Le nom
+> actuel est **Contrôleur Gyro** (ou simplement « gyro »). Les
+> noms de commandes du protocole (`CMD_GYRO_START`,
+> `CMD_GYRO_OFF`, …) conservent l'appellation historique.
 
 ### Cycle de vie d'une revendication
 
@@ -2830,20 +2950,21 @@ l'orchestrateur quand l'un ou l'autre redémarre ou perd un paquet.
 
 ```
 1. IDLE sur la télécommande.
-2. L'opérateur appuie sur Démarrer (palet) ou Revendiquer (Android).
+2. L'opérateur appuie sur Démarrer (gyro) ou Revendiquer (Android).
 3. La télécommande émet CMD_GYRO_START / une requête de
    revendication avec un nouveau nonce 16 bits.
 4. L'orchestrateur alloue un projecteur motorisé, répond par un
    CLAIM_ACK avec le nonce + le moverId assigné. La télécommande
    avance l'UI vers ACTIVE seulement sur un ACK correspondant ;
-   CLAIM_DENIED revient en arrière ; un timeout d'environ 1,5 s
+   CLAIM_DENIED porte désormais un octet de raison (voir
+   « Raisons de refus » ci-dessous) ; un timeout d'environ 1,5 s
    revient avec « PAS DE RÉPONSE ».
 5. La télécommande envoie des quaternions d'orientation à ~50 Hz ;
    l'orchestrateur les convertit en aim-stage et écrit pan / tilt
    sur la tête.
 6. Les deux extrémités échangent des battements de cœur 2 s
-   (HB_REP porte uiState + claimNonce + seq) pour réconcilier les
-   états divergents.
+   (HB_REP porte uiState + claimNonce + seq) pour détecter une
+   télécommande bloquée des deux côtés.
 7. L'opérateur appuie sur Stop / Relâcher ; la télécommande envoie
    le nonce ; l'orchestrateur répond par STOP_ACK et relâche la
    revendication.
@@ -2853,68 +2974,190 @@ La spec complète de la machine d'état vit dans
 `docs/gyro-claim-lifecycle.md` et fait foi pour toute modification
 du protocole.
 
+> **L'appui sur Démarrer est le seul déclencheur de revendication
+> (v1.7.118, #872).** Les versions antérieures reconstruisaient une
+> revendication manquante à partir du trafic de battements de cœur
+> si l'orchestrateur redémarrait pendant qu'un gyro était déjà en
+> ACTIVE. Ce chemin est supprimé — après un redémarrage de
+> l'orchestrateur, le gyro revient à IDLE et l'opérateur doit
+> appuyer à nouveau sur Démarrer. Ce changement élimine une classe
+> de bogues de revendication fantôme où une sauvegarde sur la page
+> Configuration du projecteur pouvait laisser un refus « Mover
+> held by other » au prochain appui sur Démarrer.
+
 #### Ce que voit l'opérateur
 
-- **Appui sur Démarrer sur le palet** — la page avance vers
+- **Appui sur Démarrer sur le gyro** — la page avance vers
   « ACTIVE » en ~150 ms. Si l'orchestrateur ne peut revendiquer
-  aucun projecteur (aucun en ligne, aucun disponible), la page
-  revient à IDLE avec une raison de refus.
-- **Appui sur Stop sur le palet** — la page revient à IDLE ; la
+  aucun projecteur, la page revient à IDLE avec une raison
+  spécifique (voir « Raisons de refus »).
+- **Appui sur Stop sur le gyro** — la page revient à IDLE ; la
   tête revient à ce que pilotait le spectacle (ou se gare si
   aucun spectacle ne joue).
-- **Étalonnage** — maintenez le bouton **Étalonner** (palet ou
-  Android) aussi longtemps que nécessaire ; relâchez pour
-  capturer la nouvelle pose de référence. L'écran avance vers la
-  page sélecteur de couleurs sur le palet ; l'application
-  Android avance vers la page gestes.
+- **Appui sur OFF sur le gyro (v1.7.116, #867)** — éteint la tête
+  revendiquée et relâche la revendication en un seul geste.
+  Distinct de Stop : OFF met immédiatement à zéro les octets de
+  couleur et de gradateur, tandis que Stop rend la tête au
+  spectacle (qui peut ou non être en cours). Utilisez OFF quand
+  vous voulez la tête éteinte ; utilisez Stop pour rendre le
+  contrôle.
+- **Appui sur Étalonner** — maintenez le bouton **Étalonner**
+  aussi longtemps que nécessaire ; relâchez pour capturer la
+  nouvelle pose de référence. L'écran avance vers la page
+  sélecteur de couleurs sur le gyro ; l'application Android avance
+  vers la page gestes.
+- **Couleur par défaut au Démarrage (v1.7.96, #848)** — l'appui
+  sur Démarrer écrit toujours une couleur RVB / open-wheel par
+  défaut sur la tête revendiquée, de sorte que la lampe s'allume
+  même si le spectacle peignait la tête en noir. Avant le
+  correctif, une tête dont le canal de spectacle était à zéro
+  restait éteinte jusqu'à ce que l'opérateur choisisse
+  manuellement une couleur.
 - **Connexion perdue** — les deux télécommandes affichent un
   badge stale-reason si l'orchestrateur cesse d'entendre les
-  battements de cœur. Le palet s'auto-efface quand il reprend
-  l'envoi (#812 / #821 / #823) ; l'opérateur peut aussi forcer
-  l'effacement via `POST /api/remotes/<id>/clear-stale`.
+  battements de cœur. Le gyro s'auto-efface quand il reprend
+  l'envoi ; l'opérateur peut aussi forcer l'effacement via
+  `POST /api/remotes/<id>/clear-stale`.
+
+#### Raisons de refus (v1.7.118, #872)
+
+CLAIM_DENIED n'est plus un paquet header-only — il porte un octet
+de raison pour que l'UI du gyro puisse afficher un message
+spécifique :
+
+| Code | Constante | UI du gyro | Signification |
+| --- | --- | --- | --- |
+| 0 | `GYRO_DENIED_IDLE` | « NONE » | Aucun projecteur n'est actuellement assigné à ce gyro. Utilisez l'onglet Configuration pour en assigner un. |
+| 1 | `GYRO_DENIED_BUSY` | « BUSY » | Une autre télécommande revendique déjà ce projecteur. |
+| 2 | `GYRO_DENIED_OFFLINE` | « OFF » | Le projecteur existe mais `gyroEnabled` est faux sur l'onglet Configuration. |
+| 3 | `GYRO_DENIED_NO_MOVER` | « NONE » | Le projecteur assigné a été supprimé du rig. |
+| 4 | `GYRO_DENIED_ENGINE_UNAVAILABLE` | « DOWN » | Le moteur mover-control n'est pas en cours d'exécution. |
+
+Le firmware plus ancien (sans `payload[0]`) retombe sur le rendu
+« NONE », de sorte que les rigs à versions mixtes continuent de
+fonctionner.
 
 ### Gestes
 
 Une fois actives, les deux télécommandes pilotent la même
 sémantique `aim_stage` — le faisceau de la tête vise un point en
 coordonnées plateau calculé à partir de l'orientation de la
-télécommande.
+télécommande. La correspondance d'axes (où est « haut », où est
+« avant ») est **mesurée par périphérique** via l'assistant d'axe
+de visée (ci-dessous), pas codée en dur.
 
 #### Téléphone (Android)
 
 - **Pitch** (incliner le téléphone vers l'avant / arrière) — le
   faisceau monte / descend sur la tête.
-- **Roll** (incliner le téléphone gauche / droite) — le faisceau
-  pan à travers le plateau.
-- **Yaw** (tourner le téléphone autour de la verticale) — le
-  faisceau pan à travers le plateau.
+- **Yaw** (tourner le téléphone autour de son axe vertical de
+  corps) — le faisceau pan à travers le plateau.
 - **Boutons de volume** — gradateur fin haut / bas (configurable
   dans l'app opérateur Android).
-- **Auto-luminosité** (chapitre Luminosité) — l'app peut piloter
-  la luminosité maître de l'orchestrateur depuis l'enveloppe du
-  micro local à ~20 Hz, avec mise à l'échelle gamma sur le rig
-  (#820, #843).
+- **Auto-luminosité** — l'app pilote la luminosité maître de
+  l'orchestrateur depuis l'enveloppe du micro local à ~20 Hz via
+  UDP (port 4211) — avec mise à l'échelle gamma sur le rig
+  (#820, #843, #861).
 
-L'axe yaw spécifique au téléphone est inversé par rapport au palet
-(#824) parce que l'orientation portrait naturelle du téléphone
-place la « gauche » de l'opérateur à 90 ° du repère du palet.
-L'opérateur n'a jamais à y penser ; le `_apply_quat` de
-l'orchestrateur pour `KIND_PHONE` gère la négation.
+#### Contrôleur Gyro
 
-#### Palet gyro
-
-- **Pitch** (incliner le palet vers l'avant / arrière) — le
+- **Pitch** (incliner le gyro vers l'avant / arrière) — le
   faisceau monte / descend.
-- **Yaw** (tourner autour de l'axe vertical du palet) — le
-  faisceau pan.
+- **Yaw** (tourner autour de l'axe vertical du corps du gyro) —
+  le faisceau pan.
 - **Roll** (incliner gauche / droite) — sélection d'emplacement
   de roue de couleurs sur les préréglages avec roue ; ignoré sur
   les préréglages RVB seuls.
 - **Appui sur Démarrer** — revendiquer un projecteur motorisé et
   démarrer l'envoi.
-- **Appui sur Stop** — relâcher la revendication.
+- **Appui sur Stop** — relâcher la revendication, rendre la tête
+  au spectacle.
+- **Appui sur OFF (v1.7.116)** — éteindre la tête et relâcher la
+  revendication.
 - **Appui sur Étalonner** — capturer une nouvelle pose de
   référence.
+
+### Assistant d'axe de visée (#826 Android, #869 Gyro)
+
+Les axes du repère de corps de la télécommande — où est « avant »
+et « haut » du point de vue du gyro / téléphone — varient selon la
+révision matérielle, l'algorithme de fusion capteur et (pour les
+téléphones) la prise de l'opérateur. Plutôt que de deviner la
+convention à partir des métadonnées du périphérique, les deux
+télécommandes embarquent un **assistant empirique en trois poses**
+qui mesure les axes à partir des gestes de l'opérateur.
+
+Exécutez l'assistant une fois par périphérique. Les axes
+`forward_local` et `up_local` dérivés sont stockés côté serveur et
+appliqués à chaque revendication subséquente depuis ce
+périphérique.
+
+**Trois captures (même flux pour Android et Gyro) :**
+
+1. **Neutre.** « Tenez la télécommande dans votre prise normale,
+   visée vers la direction actuelle de la tête. » Appuyez sur
+   Capturer → `Q_neutral`.
+2. **Pitch avant.** « Depuis le neutre, inclinez la télécommande
+   vers l'avant en direction du sol — le geste que vous utiliseriez
+   pour incliner la tête VERS LE BAS. » Appuyez sur Capturer →
+   `Q_pitch_fwd`.
+3. **Yaw gauche.** « Revenez au neutre. Puis effectuez un yaw vers
+   votre gauche — le geste pour paner vers la gauche du plateau. »
+   Appuyez sur Capturer → `Q_yaw_left`.
+4. *(contrôle de cohérence optionnel.)* Faites un roll horaire de
+   la télécommande comme pour tourner une poignée de porte → `Q_roll_cw`.
+
+Le serveur dérive :
+
+```
+ΔQ_pitch_body = conj(Q_neutral) · Q_pitch_fwd
+ΔQ_yaw_body   = conj(Q_neutral) · Q_yaw_left
+pitch_axis_body = axis(ΔQ_pitch_body)
+yaw_axis_body   = axis(ΔQ_yaw_body)
+
+up_local      = yaw_axis_body
+forward_local = cross(yaw_axis_body, pitch_axis_body)
+```
+
+La couche mathématique ne raisonne jamais sur « quel repère ce
+périphérique utilise » — elle fait pivoter les axes mesurés par le
+quaternion en direct et fait confiance au résultat.
+
+**Où vit l'assistant :**
+
+- **Android** — Paramètres → Étalonnage d'axe de visée (#826).
+  Invites en trois poses sur le téléphone ; le résultat persiste
+  sur l'orchestrateur et s'applique à chaque revendication Android
+  depuis ce téléphone.
+- **Contrôleur Gyro** — piloté depuis l'UI à écran rond du gyro
+  (#869, `CMD_GYRO_AIM_WIZARD` = `0x6F`). Le mode assistant est
+  sélectionné depuis le menu du gyro ; les trois poses sont
+  capturées via le bouton du gyro. Le résultat persiste sur
+  l'orchestrateur et s'applique à chaque revendication depuis ce
+  gyro physique.
+
+**Validation.** Le serveur rejette les charges utiles d'assistant
+dégénérées avec une raison spécifique afin que l'UI puisse inviter
+à recommencer :
+
+- Axes yaw et pitch trop parallèles → « ces gestes se ressemblent,
+  réessayez. »
+- Magnitude de quaternion hors de `[0,95, 1,05]` → « capteur
+  instable. »
+- Moins de 10 ° de rotation entre captures → « bougez davantage. »
+- (Si la capture roll optionnelle est fournie) axe roll non
+  orthogonal à forward → « repère non orthogonal. »
+
+**Quand recommencer.** Les axes persistés survivent aux mises à
+jour de firmware et aux redémarrages de l'orchestrateur.
+Recommencez uniquement quand :
+
+- Vous changez d'opérateur (prise d'une autre personne).
+- Un nouveau périphérique physique (révision firmware ou capteur
+  différents).
+- La fin d'étalonnage déplace systématiquement la tête alors que
+  le gyro et la tête sont déjà alignés (suggère que la convention
+  est fausse).
 
 ### Arbitrage de revendication avec les spectacles (#763)
 
@@ -2959,10 +3202,10 @@ Une revendication ne reprend pas la couleur ni le gradateur :
 Les battements de cœur du protocole incluent l'état des deux
 extrémités, les combinaisons divergentes sont donc réconciliées :
 
-| UI palet | Orchestrateur | Comportement |
+| UI gyro | Orchestrateur | Comportement |
 | --- | --- | --- |
 | ACTIVE | revendication tenue | Normal — les battements de cœur gardent le TTL en vie. |
-| ACTIVE | aucune revendication | L'orchestrateur reconstruit la revendication (chemin de bootstrap après redémarrage de l'orchestrateur). |
+| ACTIVE | aucune revendication | Le gyro revient à IDLE au prochain battement de cœur. L'opérateur doit appuyer à nouveau sur Démarrer. (Changé en v1.7.118 / #872 — l'orchestrateur ne reconstruit plus de revendications depuis le trafic de battements de cœur.) |
 | IDLE | revendication tenue | Revendication orpheline — l'orchestrateur la relâche. |
 | IDLE | aucune revendication | Repos normal. |
 

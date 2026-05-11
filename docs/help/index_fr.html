@@ -657,7 +657,7 @@ deroulante, definir <code>min</code>/<code>max</code>, ajouter un libelle et (po
 </table>
 <hr />
 <h2 id="13-calibration-des-projecteurs-motorises">13. Calibration des projecteurs motorises</h2>
-<p><strong>But.</strong> La calibration apprend a SlyLED la realite mecanique de chaque projecteur motorise DMX : comment son support est oriente dans l'espace, ou se trouvent ses axes pan/tilt, et dans quel sens un DMX croissant entraine chaque axe. Une fois calibre, toute visee en coordonnees de scene (depuis une timeline, un puck gyro ou un telephone Android) atteint la bonne combinaison pan/tilt — sans essais-erreurs par projecteur.</p>
+<p><strong>But.</strong> La calibration apprend a SlyLED la realite mecanique de chaque projecteur motorise DMX : comment son support est oriente dans l'espace, ou se trouvent ses axes pan/tilt, et dans quel sens un DMX croissant entraine chaque axe. Une fois calibre, toute visee en coordonnees de scene (depuis une timeline, un Contrôleur Gyro ou un téléphone Android) atteint la bonne combinaison pan/tilt — sans essais-erreurs par projecteur.</p>
 <h3 id="avant-de-calibrer">Avant de calibrer</h3>
 <ul>
 <li><strong>Positionnez le projecteur</strong> dans la fenetre 3D (X, Y, Z en mm) et activez <code>mountedInverted</code> s'il est suspendu.</li>
@@ -695,7 +695,7 @@ deroulante, definir <code>min</code>/<code>max</code>, ajouter un libelle et (po
 <h3 id="position-de-repos-493">Position de repos (#493)</h3>
 <p>Le vecteur de visee au repos (la sphere rouge en 3D) est maintenant la <strong>position a l'allumage</strong>. Au demarrage du moteur Art-Net, chaque projecteur amorce pan/tilt via <code>model.inverse(repos)</code> — les projecteurs s'allument pointes sur quelque chose d'utile, pas ecrases au minimum mecanique.</p>
 <h3 id="verrou-de-calibration-511">Verrou de calibration (#511)</h3>
-<p>Pendant une calibration, le projecteur est verrouille : timelines, pucks gyro, telephones Android et le panneau de test DMX sont tous bloques. Un retour HTTP 423 <em>Locked</em> est renvoye. Le verrou se libere automatiquement en fin, annulation ou erreur, et ne peut jamais fuiter entre redemarrages du serveur.</p>
+<p>Pendant une calibration, le projecteur est verrouille : timelines, Contrôleurs Gyro, téléphones Android et le panneau de test DMX sont tous bloques. Un retour HTTP 423 <em>Locked</em> est renvoye. Le verrou se libere automatiquement en fin, annulation ou erreur, et ne peut jamais fuiter entre redemarrages du serveur.</p>
 <h3 id="depannage">Depannage</h3>
 <ul>
 <li><strong>"Beam not found"</strong> — reorientez le projecteur vers la zone visible de la camera au sol et relancez.</li>
@@ -704,22 +704,48 @@ deroulante, definir <code>min</code>/<code>max</code>, ajouter un libelle et (po
 <li><strong>Badge POOR</strong> — verifiez <code>mountedInverted</code>, serrez la mecanique (un etrier lache ajoute une erreur aleatoire), relancez avec chauffage active.</li>
 </ul>
 <hr />
-<h2 id="14-firmware-et-mises-a-jour-ota">14. Firmware et mises a jour OTA</h2>
+<h2 id="14-firmware-et-mises-a-jour-ota">14. Firmware et mises à jour OTA</h2>
+
+<p>L'onglet <strong>Firmware</strong> est la fenêtre unique de l'opérateur sur chaque périphérique flashable du rig : nœuds LED, pont DMX, Contrôleur Gyro et nœuds caméra. Les versions se mettent à jour en direct depuis le PING/PONG de chaque périphérique.</p>
+
+<h3>Versions de production courantes (orchestrateur v1.7.119)</h3>
+<table>
+<tr><th>Périphérique</th><th>Courante</th><th>Canal</th></tr>
+<tr><td>Orchestrateur (Windows / macOS)</td><td><strong>v1.7.119</strong></td><td><code>SlyLED-Setup.exe</code></td></tr>
+<tr><td>Nœud LED (ESP32)</td><td><strong>v7.5.14</strong></td><td>OTA</td></tr>
+<tr><td>Nœud LED (D1 Mini)</td><td><strong>v7.5.13</strong></td><td>OTA</td></tr>
+<tr><td>Pont DMX</td><td><strong>v7.5.20</strong></td><td>OTA</td></tr>
+<tr><td>Contrôleur Gyro (ESP32-S3)</td><td><strong>v1.2.10</strong></td><td>OTA</td></tr>
+<tr><td>Nœud caméra (Linux SBC)</td><td><strong>v1.6.3</strong></td><td>déploiement SSH depuis l'onglet Firmware</td></tr>
+</table>
+
 <h3 id="flash-usb">Flash USB</h3>
 <ol>
 <li>Allez dans l'onglet <strong>Firmware</strong></li>
-<li>Selectionnez le port COM et le binaire du firmware</li>
-<li>Cliquez sur <strong>Flasher</strong> — la progression affiche le pourcentage</li>
+<li>Sélectionnez le port COM et le binaire du firmware</li>
+<li>Cliquez sur <strong>Flasher</strong> — la progression affiche le pourcentage et une vérification finale avant le redémarrage</li>
 </ol>
-<h3 id="ota-mise-a-jour-sans-fil">OTA (mise a jour sans fil)</h3>
+<h3 id="ota-mise-a-jour-sans-fil">OTA (mise à jour sans fil)</h3>
 <ol>
-<li>Definissez les identifiants WiFi dans l'onglet Firmware</li>
-<li>Cliquez sur <strong>Verifier les mises a jour</strong> — affiche la comparaison de version par appareil</li>
-<li>Cliquez sur <strong>Mettre a jour</strong> sur tout Performer obsolete</li>
-<li>L'appareil redemarre automatiquement apres le flash</li>
+<li>Définissez les identifiants WiFi dans l'onglet Firmware — poussés à chaque nouveau périphérique flashé</li>
+<li>Cliquez sur <strong>Vérifier les mises à jour</strong> — affiche la comparaison version remontée vs version du registre par périphérique</li>
+<li>Cliquez sur <strong>Mettre à jour</strong> sur tout Performer obsolète — le statut en cours de flash revient en direct ; l'appareil redémarre automatiquement après vérification</li>
 </ol>
-<h3 id="registre-du-firmware">Registre du firmware</h3>
-<p><code>firmware/registry.json</code> liste les binaires disponibles avec le type de carte et la version. Le systeme OTA compare la version du registre avec le firmware signale par chaque Performer.</p>
+
+<h3>Binaires app-only vs fusionnés (v1.7.119, #870)</h3>
+<p>L'OTA ESP32 écrit dans une partition d'environ 1,5&nbsp;Mo. Le pipeline émet deux binaires par release : un <strong>app-only</strong> (<code>*-app.bin</code>, ≈1&nbsp;Mo — ce que l'OTA attend) et un <strong>fusionné</strong> (<code>*-merged.bin</code>, 4&nbsp;Mo — pour le flash usine USB). Le proxy OTA refuse de servir le binaire fusionné comme charge OTA ; auparavant un registre mal configuré poussait silencieusement 4&nbsp;Mo et bloquait la mise à jour. Les caches empoisonnés s'auto-réparent à la prochaine requête.</p>
+
+<h3>Vérification SHA-256 (v1.7.119, #873)</h3>
+<p>Chaque entrée du registre porte un champ <code>otaSha256</code> — le hachage des octets exacts que la partition OTA doit recevoir. Avant de servir un binaire, l'orchestrateur vérifie le SHA-256 du fichier contre l'empreinte et refuse avec HTTP 502 en cas de mismatch. Cela attrape les téléchargements CDN corrompus.</p>
+
+<h3>Forcer la mise à jour</h3>
+<p>Quand le registre dit que le périphérique est déjà à jour mais que vous devez tout de même reflasher (récupération d'une compilation bloquée), cliquez sur <strong>Forcer la mise à jour</strong> sur la carte du périphérique. L'orchestrateur saute la vérification d'égalité de version et pousse le binaire le plus récent.</p>
+
+<h3 id="registre-du-firmware">Auto-réparation du registre (v1.7.111)</h3>
+<p><code>firmware/registry.json</code> liste les binaires disponibles avec le type de carte et la version. Le système OTA compare la version du registre avec le firmware signalé par chaque Performer. Au démarrage, le registre re-résout ses entrées contre les métadonnées GitHub courantes, de sorte qu'un re-tag de release n'exige pas de mise à jour manuelle de l'orchestrateur.</p>
+
+<h3>Installateur (v1.7.107–v1.7.109)</h3>
+<p>Lancez <code>SlyLED-Setup.exe</code> en tant qu'administrateur (requis pour écrire les règles de pare-feu Windows). L'installateur demande le port du SPA (défaut <strong>8080</strong>) et refuse les ports déjà utilisés. Les mises à niveau suppriment les règles de pare-feu de la version précédente avant d'ajouter les nouvelles, pour ne pas accumuler d'entrées périmées.</p>
 <hr />
 <h2 id="15-limites-du-systeme">15. Limites du systeme</h2>
 <table>

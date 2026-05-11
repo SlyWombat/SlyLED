@@ -38,12 +38,49 @@ SlyLED is a three-tier LED and DMX lighting control system:
 - **Performers** (ESP32/D1 Mini) — run LED effects on hardware
 - **DMX Bridge** (Giga R1 WiFi) — output Art-Net/sACN to DMX fixtures
 
+### Installing the Windows orchestrator (v1.7.107+)
+
+Run `SlyLED-Setup.exe` from the release. The installer requires
+**administrator elevation** — it creates Windows Firewall rules for
+the orchestrator's listening ports (HTTP for the SPA + UDP 4210
+PING/PONG + UDP 4211 Auto Brightness + Art-Net 6454) so a fresh
+install doesn't require operator firewall configuration.
+
+The installer presents a **port-prompt page** during setup. Default
+is **8080** for the SPA / HTTP API. Pick a free port — the installer
+will refuse to write firewall rules for a port that's in use by
+another process. The selected port is persisted to the desktop
+launcher; subsequent launches use it without prompting.
+
+**Upgrading.** v1.7.109+ deletes the previous installation's
+firewall rules before adding the new ones, so an upgrade-in-place
+doesn't accumulate stale "SlyLED v1.7.x" entries in Windows
+Firewall. If you change the port between versions, the old port's
+rules are removed.
+
 ### Quick Start
 1. Launch the desktop app: `powershell -File desktop\windows\run.ps1` (Windows) or `bash desktop/mac/run.sh` (Mac)
-2. Open the browser at `http://localhost:8080`
+2. Open the browser at `http://localhost:<port>` (default `8080`, set during install).
 3. Go to **Setup** tab, click **Discover** to find performers on your network
 4. Go to **Layout** tab to position fixtures on the stage
 5. Go to **Runtime** tab, load a **Preset Show**, click **Bake & Start**
+
+![SPA header — project name, filename, and help button](screenshots/v1.7.119/app-header.png)
+
+The top bar shows the active project (left) and the operator's `?`
+help button (top-right, repositioned in v1.7.86 to no longer overlap
+the File menu). The File menu carries New / Open / Save / Recent /
+Export / Import. As of v1.7.91 the header reads
+`Project • Filename` so an operator running two installs side-by-side
+can tell them apart at a glance (#850).
+
+![File menu open — project + recent files](screenshots/v1.7.119/file-menu-open.png)
+
+The `?` button opens a contextual help sidebar — the content
+adapts to the active tab. The bottom of the panel links to this
+full manual (#671).
+
+![Help panel open — context-sensitive guidance](screenshots/v1.7.119/help-panel-open.png)
 
 ---
 
@@ -313,6 +350,14 @@ To reload: Settings → Project → **Import** → select the `.slyshow` file.
 
 ![Project saved — all state bundled in .slyshow file](screenshots/walkthrough-533/12-saved.png)
 
+> **Import semantics (v1.7.88, #838).** Importing a `.slyshow` does
+> a **merge-by-content** rather than a wholesale replace: fixtures,
+> objects, actions, and timelines are matched by name + content and
+> only added if they're not already present. Earlier versions
+> replaced the entire project on import, which destroyed any
+> uncommitted work the operator had on the canvas. Use Settings →
+> Project → **New Project** if you actually want a clean slate.
+
 ---
 
 ### Walkthrough Troubleshooting
@@ -333,10 +378,25 @@ To reload: Settings → Project → **Import** → select the `.slyshow` file.
 ## 3. Platform Guide
 
 ### Windows Desktop (SPA)
-The primary design and control interface. Full-featured 7-tab SPA with 2D/3D layout, timeline editor, spatial effects, DMX profiles, and firmware management.
+The primary design and control interface. Full-featured SPA with 2D/3D layout, timeline editor, spatial effects, DMX profiles, and firmware management.
 
 **Launch:** `powershell -File desktop\windows\run.ps1` or run `SlyLED.exe`
 **Install:** Run `SlyLED-Setup.exe` (includes system tray icon)
+
+**Tabs (v1.7.119):**
+
+| Tab | What lives here |
+| --- | --- |
+| **Dashboard** | Live preview, performer status table, Auto Brightness card, mover-control / claim status. |
+| **Setup** | Add / edit fixtures (LED, DMX, Gyro, camera), DMX node discovery, DMX engine configuration. |
+| **Layout** | 2D canvas + 3D viewport for placing and aiming fixtures. |
+| **Actions** | Action library — colour, fade, sparkle, fire, track, etc. Track actions with Advanced expander (#811). |
+| **Shows** | Timeline editor + Bake + Sync + Start. Loading a preset show lands here. |
+| **Runtime** | Live emulator canvas + global brightness + show controls during playback. |
+| **Settings** | Project (new / open / save / import / export), stage dimensions, DMX profiles library, auto-start show. |
+| **Firmware** | OTA updates, USB flash, registry status, WiFi credentials. |
+
+> The manual's chapter headings sometimes refer to "Bake" and "Timeline" as if they were separate top-level tabs — they aren't in v1.7.119. Both live inside the **Shows** tab. The screenshots in this manual label them by their conceptual section, not the URL.
 
 ### Android App
 Live operator tool for running shows from your phone. Connects to the desktop server over WiFi.
@@ -357,6 +417,8 @@ Live operator tool for running shows from your phone. Connects to the desktop se
 
 **Pointer Mode:** Select a DMX moving head on the Control tab and tap its name under Pointer Mode. Hold your phone and point where you want the light — the fixture's pan/tilt follows your phone orientation in real-time at 20 Hz. Tap Recenter to calibrate, X to exit.
 
+**Aim-axis calibration (v1.7.94, #826).** The first time an operator uses Pointer Mode on a new phone, run Settings → **Aim Axis Calibration** to measure the phone's body-frame axes empirically (three captures: neutral, pitch-forward, yaw-left). Pre-v1.7.94, the app guessed the axis convention from the display rotation and grip, which led to "tilt does not work" symptoms on certain phones. Full wizard documentation is in Appendix E.
+
 ### Firmware Config (ESP32/D1 Mini)
 Each performer serves a 3-tab config page at `http://<device-ip>/config`:
 - **Dashboard** — hostname, firmware version, active action status
@@ -366,6 +428,8 @@ Each performer serves a 3-tab config page at `http://<device-ip>/config`:
 ---
 
 ## 4. Fixture Setup
+
+![Fixtures tab — list of every fixture on the rig](screenshots/v1.7.119/fixtures-tab.png)
 
 ### What Are Fixtures?
 A fixture is the primary entity on the stage. It wraps physical hardware and adds stage-level attributes:
@@ -382,6 +446,14 @@ Click **+ DMX Fixture** on the Setup tab to launch the 3-step wizard:
 1. **Choose Fixture**: Search the Open Fixture Library (700+ fixtures) or create a custom fixture
 2. **Set Address**: Universe, start address, and name — with real-time conflict detection
 3. **Confirm**: Review all settings, click "Create Fixture"
+
+![Add Fixture modal — choose type + library search](screenshots/v1.7.119/fixture-add-modal.png)
+
+After creation, double-click any fixture row to open the edit
+modal: universe / address / aim point / profile and capability
+test sliders all live here.
+
+![Fixture-edit modal for a DMX moving head](screenshots/v1.7.119/fixture-edit-dmx.png)
 
 ### DMX Monitor
 Settings → DMX → **DMX Monitor** opens a real-time 512-channel grid per universe. Click any cell to set a value. Color-coded by intensity.
@@ -402,6 +474,38 @@ On the Setup tab, click **Details** on any DMX fixture to open the channel test 
 | **Linear** | LED strip. Pixels along a path. |
 | **Point** | DMX light source with beam cone. |
 | **Group** | Collection of fixtures targeted as one. |
+| **Gyro** | Hand-held Gyro Controller (ESP32-S3, round-LCD). Drives a moving head's pan/tilt in real time. See Appendix E. |
+
+### Gyro Controller fixture
+
+A Gyro Controller is added like any other fixture: **Setup → Add
+Fixture → type "Gyro"**. The fixture-edit panel exposes:
+
+![Gyro fixture-edit panel — Setup tab](screenshots/v1.7.119/fixture-edit-gyro.png)
+
+- **Assigned Mover** — which moving head this gyro drives when the
+  operator presses Start. Pick from the drop-down of available
+  moving-head fixtures.
+- **Gyro Enabled** — toggle that arms the fixture. When off, Start
+  on the gyro is denied with reason "OFF" (see Appendix E denied
+  reasons).
+- **Gyro Child** — the physical gyro device (one of the discovered
+  `gyro-esp32s3` children). Multiple gyros can be paired with
+  different moving heads.
+- **Smoothing** — *(v1.7.119; slated for removal — see #877)* slider
+  that maps to the DMX `pan-tilt-speed` channel on profiles that
+  define one. Default 0.15. The slider exists in the v1.7.119 UI but
+  is being removed in a future release because motor-speed shaping
+  is the fixture's responsibility, not the orchestrator's. Leave at
+  default unless you have a specific reason.
+
+The on-rig lifecycle — Start / Calibrate / Stop / OFF, plus the
+empirical aim-axis wizard — is documented in **Appendix E**.
+
+> **Rename works in v1.7.119+ (#7fb72cc).** Editing the gyro
+> fixture's name on the Setup tab now persists to the fixture and
+> propagates to the Dashboard's gyro card. Pre-fix the name change
+> appeared in the modal but didn't save.
 
 ---
 
@@ -409,6 +513,8 @@ On the Setup tab, click **Details** on any DMX fixture to open the channel test 
 
 ### 2D Canvas
 The Layout tab shows a 2D front view of the stage. Stage dimensions (width × height) are set in Settings.
+
+![Layout tab — 2D canvas with fixtures placed](screenshots/v1.7.119/layout-tab.png)
 
 The layout toolbar provides: Save, 2D/3D mode toggle (shows current mode as text), Recenter, Top view, Front view, Auto-arrange DMX, Show/hide LED strings. Active toggles highlight in green.
 
@@ -438,6 +544,8 @@ Toggle to 3D mode for an interactive Three.js scene:
 - Beam cones as 3D geometry
 - Draggable aim spheres for DMX fixtures
 - Object planes/boxes with transparency
+
+![Layout tab — 3D viewport with beam cones](screenshots/v1.7.119/layout-tab-3d.png)
 
 ### Move / Rotate Mode
 
@@ -606,6 +714,8 @@ Navigate to **Actions** tab → **+ New Spatial Effect**.
 
 ## 8. Track Action
 
+![Actions tab — Track action editor](screenshots/v1.7.119/actions-tab.png)
+
 The Track action (type 18) is the bridge between the Objects tab
 (chapter 6) and the moving-head rig: while a clip with a Track action
 is playing, every assigned moving head computes its pan / tilt aim
@@ -697,6 +807,8 @@ Track actions are full citizens of the show timeline:
 
 ## 9. Building a Timeline
 
+![Timeline tab — clip placement on per-fixture tracks](screenshots/v1.7.119/timeline-tab.png)
+
 1. Go to **Runtime** tab → **+ New Timeline**
 2. Set name and duration
 3. **+ Add Track** for each fixture (or "All Performers")
@@ -713,10 +825,29 @@ Compiles a timeline into minimal action instructions per performer:
 2. Click **Sync** to push instructions to performers via UDP
 3. Click **Start** for synchronized NTP-timed playback
 
+![Bake tab](screenshots/v1.7.119/bake-tab.png)
+
 ### Output
 - **Action segments**: Sequences of the 19 action types (14 classic + 5 DMX/spatial)
 - **LSQ files**: Raw per-pixel RGB data at 40Hz (downloadable as ZIP)
 - **Preview data**: 1 color per string per second for emulator
+
+### Effect-type parameter routing (v1.7.118, #871)
+
+Pre-v1.7.118, the bake collapsed every effect's parameters through a
+single `_act_params` chain that short-circuited on zero-valued
+fields. The symptom: a Fire effect baked with `cooling=0` /
+`sparking=0` because the chain treated the first zero-valued key it
+found as the operator's value. Solid colour and Fade were the only
+effect types unaffected.
+
+v1.7.118 dispatches parameters by effect type — Fire reads
+`cooling`, `sparking`, `density`; Comet reads its own set; Twinkle
+its own; etc. Every effect type now bakes the parameters its
+firmware actually consumes. If you have old bakes that produced
+dark output for non-trivial effects (Sparkle, Chase, Comet,
+Twinkle, Strobe, Wipe, Scanner), re-bake — they will now render
+correctly on the rig.
 
 ---
 
@@ -727,6 +858,16 @@ Both desktop and Android include a real-time show preview:
 ### Dashboard Preview
 When a show is running, the Dashboard tab shows a live stage preview canvas alongside the performer status table and playback progress bar.
 
+![Dashboard tab — live preview + status + Auto Brightness card](screenshots/v1.7.119/dashboard-tab.png)
+
+**Auto Brightness card (v1.7.97, #849 Part 2).** The Dashboard
+shows a live Auto Brightness card whenever an Android client is
+streaming master brightness over UDP. The card animates with the
+audio envelope — current value, hop rate, source IP — so the
+operator can see at a glance whether the phone's mic feed is alive.
+
+![Auto Brightness card on Dashboard](screenshots/v1.7.119/auto-brightness-card.png)
+
 ### Desktop SPA
 The emulator canvas appears on the Runtime tab below the timeline. Shows:
 - **LED fixtures**: Colored dots along string paths with glow effects
@@ -734,6 +875,13 @@ The emulator canvas appears on the Runtime tab below the timeline. Shows:
 - **Aim dots**: Red circles at aim points
 - **Fixture labels**: Names below each node
 - **Time counter**: MM:SS elapsed / total
+
+**Per-string rotation in 3D viewports (v1.7.117, #866).** Multi-string
+fixtures (vertical bars, LED matrices, etc.) honour the per-string
+rotation metadata both in the Dashboard preview and the Runtime
+emulator. Pre-v1.7.117, a tilted bar fixture would draw straight
+even though its strings physically pointed at an angle; viewports
+now match the rig.
 
 ### Android App
 The `ShowEmulatorCanvas` card shows:
@@ -755,6 +903,8 @@ The emulator correctly renders DMX-only setups (no LED performers). Static purpl
 ---
 
 ## 12. DMX Fixture Profiles
+
+![DMX Profiles tab — local, community, OFL libraries](screenshots/v1.7.119/profiles-tab.png)
 
 ### Built-in Profiles
 | Profile | Channels | Features |
@@ -899,7 +1049,7 @@ colour hex swatch.
   OFL and not in the community. When you're done, share it so nobody
   else has to.
 
-### Global brightness scaling (#843)
+### Global brightness scaling (#843, #853, #854)
 
 Master brightness reaches DMX fixtures through a per-frame scaling
 pass at render time, not through the bake. That keeps bakes valid
@@ -919,11 +1069,34 @@ Two cases:
   triple is gamma-scaled instead. Wheel-only fixtures fall back to
   scaling the dimmer (slot indices are categorical, not intensity).
 
+**Master applied at send-time, not bake-time (#853).** Earlier
+versions baked the master into each frame's wire bytes; if the
+operator dragged the master during playback the change would not be
+heard until the next bake. v1.7.97 moved the scaling step into the
+DMX engine's send loop, so master changes take effect immediately
+without invalidating the bake.
+
+**Latest-wins for concurrent writers (#854).** When Android Auto
+Brightness is streaming at 20 Hz and the operator drags the SPA
+slider at the same time, the orchestrator takes the most recent
+value rather than mixing them. The slider change wins for one tick,
+then the Android stream resumes — no flapping.
+
 The orchestrator broadcasts `CMD_SET_BRIGHTNESS` to every LED child
 on every change, and re-sends the current value to a child the
 first time it appears in PONG after a power cycle, so a freshly
 booted child doesn't display its first show frame at full
-intensity.
+intensity. LED strips participate equally with DMX fixtures — a
+single master setting drives both.
+
+**Android Auto Brightness over UDP (#861).** Pre-v1.7.97 the
+Android app POSTed to `/api/brightness` at ~20 Hz; the HTTP path
+suffered TCP retransmit churn at that cadence and could go silent
+for minutes under live-set conditions. The current implementation
+fires a 3-byte UDP packet (master, flags, seq) on port **4211** —
+fire-and-forget, no retransmits, coalesces by overwrite at the
+orchestrator. The slow path (manual SPA slider drags, scene saves)
+still uses the HTTP route.
 
 ### Aim cone clamping (#803)
 
@@ -1008,6 +1181,18 @@ Track action.
 | **Figure Eight** | Crossing orbs — heads trace X paths | Track action — heads chase crossing patrol props |
 | **Thunderstorm** | Lightning strikes from the rig top-down | Strobe-style stage-coord bolts (Z-down, #837) |
 | **Dance Floor** | Fast orbiting spots | Stage-coord chase, no tracking |
+| **Vertical Bar Array** *(new in v1.7.103, #864/#865)* | Coordinated chase across multiple vertical bar fixtures — every bar drives every catalog clip with per-string positioning. | Bars only, no movers |
+
+### Multi-string positioning (v1.7.102, #864)
+
+Fixtures composed of multiple LED strings (vertical bar arrays, LED
+matrices, custom rigs) carry **per-string positions** rather than a
+single fixture-level position. Each string declares its own start /
+end / rotation, so the Vertical Bar Array template and any multi-string
+spatial effect render each string at the correct stage location.
+Pre-v1.7.102, a multi-string fixture would render as if all its
+strings sat at the fixture's origin — visible only as a smudge in
+the 3D viewport and a single coloured cluster on stage.
 
 ### Track-action vs sweep
 
@@ -1206,20 +1391,22 @@ the camera nodes. Every flashable device reports its current firmware
 version up to the orchestrator on each PING/PONG cycle, so a stale
 device shows as "outdated" within seconds of the orchestrator booting.
 
-### Current production versions (orchestrator v1.7.83)
+### Current production versions (orchestrator v1.7.119)
 
 | Device | Track | Current | Channel |
 | --- | --- | --- | --- |
-| Orchestrator (Windows / macOS) | app | **v1.7.83** | installer (`SlyLED-Setup.exe`) |
+| Orchestrator (Windows / macOS) | app | **v1.7.119** | installer (`SlyLED-Setup.exe`) |
 | Android operator app | app | matches orchestrator track | sideload APK from `dist/slyled-android.apk` |
-| LED Performer (ESP32) | `child-led-esp32` | **v7.5.11** | OTA |
-| LED Performer (D1 Mini) | `child-led-d1mini` | **v7.5.10** | OTA |
+| LED Performer (ESP32) | `child-led-esp32` | **v7.5.14** | OTA |
+| LED Performer (D1 Mini) | `child-led-d1mini` | **v7.5.13** | OTA |
 | LED Performer (Giga child) | `child-led-giga` | **v7.5.2** | OTA |
 | DMX Bridge (ESP32) | `dmx-bridge-esp32` | **v7.5.20** | OTA |
 | DMX Bridge (Giga R1) | `dmx-bridge-giga` | **v7.5.20** | OTA |
 | Parent firmware (Giga R1) | `parent-giga` | **v7.5.24** *(on hold — desktop orchestrator is the recommended runtime)* | USB only |
-| Gyro Controller (ESP32-S3) | `gyro-esp32s3` | **v1.2.8** | OTA |
+| Gyro Controller (ESP32-S3) | `gyro-esp32s3` | **v1.2.10** | OTA |
 | Camera node (Linux SBC) | `camera-node` | **v1.6.3** | SSH deploy from Firmware tab |
+
+![Firmware tab showing current versions + Update buttons](screenshots/v1.7.119/firmware-tab.png)
 
 The Firmware tab queries `firmware/registry.json` to know what the
 "current" version is, so this table is regenerated automatically every
@@ -1251,10 +1438,46 @@ recovery path.
    anything outdated.
 3. Click **Update** on any outdated performer. Mid-flash status comes
    back live; the device reboots automatically after verification.
-4. New since v1.7.83: when a registry SHA-256 mismatches the on-disk
-   binary (a download mid-update or a hand-edited registry), the
-   orchestrator falls back to the GitHub release for that board's
-   `releaseTag` rather than refusing the flash.
+4. The orchestrator falls back to the GitHub release for that board's
+   `releaseTag` when the local cache is missing or stale, rather than
+   refusing the flash.
+
+#### App-only vs merged binaries (#870, v1.7.119)
+
+ESP32 OTA writes into a ~1.5 MB OTA partition. The build pipeline now
+emits two binaries per ESP32 release: an **app-only** binary
+(`*-app.bin`, ≈1 MB — what OTA expects) and a **merged** binary
+(`*-merged.bin`, 4 MB — for USB factory flash). The OTA proxy refuses
+to serve the merged binary as an OTA payload; previously a registry
+that pinned the wrong asset would silently push 4 MB and brick the
+update. If you see "registry entry for `<board>` lacks otaAsset" in
+the orchestrator log, the release was published without the `*-app.bin`
+asset — re-run `build_release.ps1` or upload the missing asset to the
+GitHub release.
+
+The orchestrator also self-heals already-poisoned caches: on the next
+OTA request, a too-large or wrong-filename binary in
+`%APPDATA%\SlyLED\firmware\<board>\` is deleted before the fetch
+retries.
+
+#### SHA-256 verification (#873, v1.7.119)
+
+Each registry entry now carries an `otaSha256` field — the hash of the
+exact bytes the OTA partition should receive. Before serving a
+binary, the orchestrator verifies the file's SHA-256 against the pin
+and refuses with HTTP 502 on mismatch. This catches corrupted CDN
+downloads and accidental cache mixes that the size guard alone
+wouldn't notice.
+
+#### Force OTA
+
+When the orchestrator's registry says the device is already up to
+date but you need to re-flash anyway (e.g. recovering from a wedged
+build), open the device card on the Firmware tab and click **Force
+Update**. The orchestrator skips the version-equality check and
+pushes the latest binary regardless of what the device reports.
+
+![Force-update button on a Firmware tab device card](screenshots/v1.7.119/firmware-tab.png)
 
 The diagnostic / development gyro builds (`esp32s3-gyro-test-firmware.bin`)
 are deliberately hidden from the operator OTA UI — the Firmware tab only
@@ -1270,15 +1493,25 @@ the orchestrator believes ships with each release. Each entry carries:
 - `version` (3-part semver) — what the operator's device should be
   running.
 - `releaseTag` and `releaseAsset` — the GitHub release tag and the
-  asset filename inside it, used by the OTA fallback.
-- `sha256` — verification hash that the orchestrator checks before and
-  after flashing.
+  asset filename inside it. `releaseAsset` is the merged factory-flash
+  binary; `otaAsset` (new in v1.7.119) is the app-only OTA binary —
+  ESP32 OTA needs `otaAsset`, USB factory flash can use either.
+- `sha256` — verification hash for the merged binary (factory flash).
+- `otaSha256` (new in v1.7.119) — verification hash for the app-only
+  OTA binary. Checked on every OTA serve; mismatch refuses the
+  request with 502.
 
 Editing `registry.json` by hand is not recommended; `build_release.ps1`
 keeps it in sync with the actual binary hashes on every release. The
 Firmware tab refreshes the registry from GitHub on demand from the
 **Refresh** button so a freshly-pulled installer immediately sees the
 versions corresponding to its release tag.
+
+The registry also **self-heals** at startup (v1.7.111): an entry that
+references a `releaseTag` whose `*-app.bin` asset has since moved or
+been renamed gets re-resolved against the current GitHub release
+metadata, so a release retag doesn't require a manual orchestrator
+update.
 
 ---
 
@@ -1396,7 +1629,12 @@ whether to update or work around.
 | **3D viz cone disagrees with the physical head** | Cone in the viz points stage-left but the moving head is aimed stage-right. | Fixed in v1.7.52 (#806/#809): the canonical aim vector is the source of truth and the physical IK derives from it. If you still see the disagreement on v1.7.52+, re-save the fixture's Home and Secondary in the Set Home wizard. |
 | **Calibrate-end pan jump** | Pressing release on calibrate snaps the head to a different pose than the puck was reporting. | Fixed in v1.7.52 (#805). Pre-fix the legacy IK fallback was capturing the wrong aim vector at release time. Operators on v1.7.52+ who still see a jump should report it with the gyro-puck firmware version (must be ≥ v1.2.4). |
 | **Press Start blinks back to "start" on the puck** | Operator presses Start after a WiFi gap, the puck UI flashes claim-acknowledge for a frame, then reverts to IDLE while the orchestrator holds an orphan claim. | Fixed in v1.7.83 (#812 / #813 / #825). Press-Start now uses a 16-bit nonce + CLAIM_ACK, with HB_REP heartbeats to reconcile divergent state. If you see the symptom on v1.7.83+, check that the puck firmware is ≥ v1.2.7 (registry will warn). |
-| **Auto Brightness has no effect on the lights** | The Android Auto Brightness UI shows the master sliding with the music, but DMX heads and LED strips don't dim. | Fixed in v1.7.83 (#843). The fast-path POST now broadcasts `CMD_SET_BRIGHTNESS` to LED children and gamma-scales DMX dimmer / RGB at render time. Operators on older builds can fall back to the manual Settings → Global Brightness slider until they update. |
+| **Auto Brightness has no effect on the lights** | The Android Auto Brightness UI shows the master sliding with the music, but DMX heads and LED strips don't dim. | Fixed across v1.7.83 (#843) and v1.7.97 (#861). The wire path now broadcasts `CMD_SET_BRIGHTNESS` to LED children and gamma-scales DMX dimmer / RGB at render time. v1.7.97 moved the Android-side fast path from HTTP `POST /api/brightness` (silent TCP wedging under live-set conditions) to a UDP push on port 4211. Operators on older builds can fall back to the manual Settings → Global Brightness slider until they update. |
+| **Auto Brightness card on Dashboard shows stale value** | The card displays a `cur` value that doesn't change even while the master clearly moves with the music. | Fixed in v1.7.97 (#862). The card's `current_value` now updates on every hop instead of only when a rate-limited log entry fires. |
+| **Press Start fails with "Mover held by other" on a fresh gyro** | A newly-assigned gyro fixture refuses press-Start with "BUSY" / "held by other" even though no claim exists. | Fixed in v1.7.118 (#872). Press-Start is now the sole claim trigger; saving the fixture's Setup page no longer leaks phantom claim state. The CLAIM_DENIED reason byte now distinguishes "OFF" (gyroEnabled false), "NONE" (no fixture assigned), and "BUSY" (another remote claiming) so the gyro UI shows the actual problem. |
+| **OTA push doesn't update ESP32** | The orchestrator says "update started" but the child stays on its prior firmware version. | Fixed in v1.7.119 (#870 / #873). The OTA proxy now refuses to serve the 4 MB merged binary as an OTA payload (would overflow the ~1.5 MB OTA partition) and verifies `otaSha256` from the registry against the served bytes. If the registry lacks an `otaAsset` field, the proxy returns HTTP 502 rather than silently pushing the wrong binary. Caches poisoned by earlier builds self-heal on the next OTA request. |
+| **Manual cache cleanup needed after OTA SHA mismatch** | The OTA proxy logs "SHA mismatch" and refuses serve; subsequent requests also 502 until the operator deletes `%APPDATA%\SlyLED\firmware\<board>\`. | Tracked as #875 (open). The size-guard from #870 auto-deletes; the SHA-guard from #873 does not. Workaround: clear the cache directory manually, then retry the OTA. |
+| **No DMX motion from gyro despite calibrate** | Press-Start works, Calibrate snaps the head once, but subsequent gyro motion has no visible effect on the moving head. | Tracked as #876 (DMX 16-bit pan/tilt write clobbers neighbouring channels on profiles with `bits=16` declared but no `pan-fine` / `tilt-fine`) and #878 (SPA Calibrate / aim-axis wizard for the gyro). Workaround: run the Android aim-axis wizard (#826) on a phone instead, or wait for the SPA Calibrate button to ship. |
 | **Looping playlist blacks out between iterations** | A single-item or multi-item playlist set to **Loop All** flashes everything to zero for one frame at every wrap. | Fixed in v1.7.83 (#840). Single-item loops route through the modulo-wrap playback path; multi-item loops pass `is_final=False` to suppress the natural-end blackout sweep until the playlist actually stops. |
 | **Track action blacks out movers in unrelated timelines** | A timeline that doesn't reference a particular Track action still has its movers go dark whenever that action exists in the action library. | Fixed in v1.7.83 (#835). Track actions now only evaluate on timelines that reference them; orphan actions stay dormant. |
 | **Show preset says "moving heads track / follow / chase X" but they don't** | A theme description promises tracking, but the rig just sweeps. | Fixed in v1.7.83 (#837). Theme descriptions now match the actual implementation: only Figure Eight and Spotlight Follow Person emit a Track action; the others sweep. |
@@ -2737,16 +2975,21 @@ state per fixture).
 
 ---
 
-## Appendix E — Remote Control: Android Phone & Gyro Puck
+## Appendix E — Remote Control: Android Phone & Gyro Controller
 
 Two remote controllers can drive moving heads in real time alongside
 a running show: an Android phone running the SlyLED operator app and
-a Waveshare ESP32-S3 round-LCD gyro puck. Both go through the same
-claim arbiter on the orchestrator, both follow the same handshake
-protocol, and both cooperate with the show timeline through the
-mover-control claim arbiter. This appendix describes the full
-lifecycle, the gestures, and how claim arbitration interacts with
+a Waveshare ESP32-S3 round-LCD **Gyro Controller** (hand-held). Both
+go through the same claim arbiter on the orchestrator, both follow the
+same handshake protocol, and both cooperate with the show timeline.
+This appendix describes the full lifecycle, the gestures, the
+empirical aim-axis wizard, and how claim arbitration interacts with
 preset shows.
+
+> **Terminology.** Prior versions of this manual called the hand-held
+> hardware the "gyro puck." The current name is **Gyro Controller**
+> (or just "gyro"). The protocol command names (`CMD_GYRO_START`,
+> `CMD_GYRO_OFF`, …) keep the historical naming.
 
 ### Claim lifecycle
 
@@ -2757,16 +3000,18 @@ arbiter state when one of them reboots or drops a packet.
 
 ```
 1. IDLE on remote.
-2. Operator presses Start (puck) or Claim (Android).
+2. Operator presses Start (gyro) or Claim (Android).
 3. Remote ships CMD_GYRO_START / claim request with a fresh 16-bit nonce.
 4. Orchestrator allocates a mover, replies CLAIM_ACK with the
    nonce + assigned moverId. The remote advances UI to ACTIVE
-   only on a matching ACK; CLAIM_DENIED reverts; ~1.5 s overall
-   timeout reverts with "NO RESPONSE".
+   only on a matching ACK; CLAIM_DENIED carries a reason byte
+   (see "Denied reasons" below); ~1.5 s overall timeout reverts
+   with "NO RESPONSE".
 5. Remote streams orient quaternions at ~50 Hz; orchestrator
    converts to aim-stage and writes pan / tilt to the head.
 6. Both ends exchange 2 s heartbeats (HB_REP carries uiState +
-   claimNonce + seq) so divergent state is reconciled.
+   claimNonce + seq) so a wedged remote can be detected from either
+   end.
 7. Operator presses Stop / Release; remote ships nonce; orchestrator
    replies STOP_ACK and releases the claim.
 ```
@@ -2774,57 +3019,158 @@ arbiter state when one of them reboots or drops a packet.
 The full state-machine spec lives in `docs/gyro-claim-lifecycle.md`
 and is the source of truth for any change to the protocol.
 
+> **Press-Start is the sole claim trigger (v1.7.118, #872).** Prior
+> versions reconstructed a missing claim from heartbeat traffic if the
+> orchestrator restarted while a gyro was already in ACTIVE. That
+> path is removed — after an orchestrator restart, the gyro reverts
+> to IDLE and the operator must press Start again. The change
+> eliminates a class of phantom-claim bugs where a save on the
+> fixture's Setup page could leave a "Mover held by other" denial on
+> the next press-Start.
+
 #### What the operator sees
 
-- **Press Start on the puck** — page advances to "ACTIVE" within
-  ~150 ms. If the orchestrator can't claim a mover (none online,
-  none available), the page reverts to IDLE with a denial reason.
-- **Press Stop on the puck** — page returns to IDLE; the head
+- **Press Start on the gyro** — page advances to "ACTIVE" within
+  ~150 ms. If the orchestrator can't claim a mover, the page reverts
+  to IDLE with a specific reason (see "Denied reasons").
+- **Press Stop on the gyro** — page returns to IDLE; the head
   returns to whatever the show was driving (or parks if no show is
   running).
-- **Calibrate** — hold the **Calibrate** button (puck or Android)
-  for as long as you need; release to capture the new reference
-  pose. The screen advances to the colour picker page on the puck;
-  the Android app advances to the gesture page.
+- **Press OFF on the gyro (v1.7.116, #867)** — blackout the claimed
+  head and release the claim in one gesture. Distinct from Stop: OFF
+  zeros the colour and dimmer wire bytes immediately, while Stop
+  hands the head back to the show (which may or may not be playing).
+  Use OFF when you want the head dark; use Stop to hand control back.
+- **Press Calibrate** — hold the **Calibrate** button for as long as
+  you need; release to capture the new reference pose. The screen
+  advances to the colour picker page on the gyro; the Android app
+  advances to the gesture page.
+- **Default colour on Start (v1.7.96, #848)** — pressing Start
+  always writes a default RGB / open-wheel colour to the claimed
+  head, so the lamp lights even if the show was painting it dark.
+  Pre-fix, a head whose show channel was at zero would remain dark
+  until the operator manually picked a colour.
 - **Connection lost** — both remotes show a stale-reason badge if
-  the orchestrator stops hearing heartbeats. The puck self-clears
-  when it resumes streaming (#812 / #821 / #823); operator can also
-  force-clear via `POST /api/remotes/<id>/clear-stale`.
+  the orchestrator stops hearing heartbeats. The gyro self-clears
+  when it resumes streaming; operator can also force-clear via
+  `POST /api/remotes/<id>/clear-stale`.
+
+#### Denied reasons (v1.7.118, #872)
+
+CLAIM_DENIED is no longer a header-only packet — it carries a 1-byte
+reason so the gyro UI can render a specific message:
+
+| Code | Constant | Gyro UI | Meaning |
+| --- | --- | --- | --- |
+| 0 | `GYRO_DENIED_IDLE` | "NONE" | No fixture is currently assigned to this gyro. Use the Setup tab to assign one. |
+| 1 | `GYRO_DENIED_BUSY` | "BUSY" | Another remote is already claiming this mover. |
+| 2 | `GYRO_DENIED_OFFLINE` | "OFF" | The fixture exists but `gyroEnabled` is false on the Setup tab. |
+| 3 | `GYRO_DENIED_NO_MOVER` | "NONE" | The assigned mover has been deleted from the rig. |
+| 4 | `GYRO_DENIED_ENGINE_UNAVAILABLE` | "DOWN" | The mover-control engine isn't running. |
+
+Older firmware (no `payload[0]`) falls back to rendering "NONE", so
+mixed-version rigs keep working.
 
 ### Gestures
 
 Once active, both remotes drive the same `aim_stage` semantic — the
 head's beam aims at a stage-coordinate point computed from the
-remote's orientation.
+remote's orientation. The axis mapping (which way is "up", which way
+is "forward") is **measured per device** via the aim-axis wizard
+(below), not hard-coded.
 
 #### Phone (Android)
 
 - **Pitch** (tip phone forward / back) — beam pitches up / down on
   the head.
-- **Roll** (tilt phone left / right) — beam pans across the stage.
-- **Yaw** (rotate phone around vertical) — beam pans across the
-  stage.
+- **Yaw** (rotate phone around its body-vertical) — beam pans across
+  the stage.
 - **Volume buttons** — fine dimmer up / down (Android operator app
   configurable).
-- **Auto Brightness** (chapter on Brightness) — the app can drive
-  the orchestrator's master brightness from the local mic envelope
-  at ~20 Hz, gamma-scaled to the rig (#820, #843).
+- **Auto Brightness** — the app drives the orchestrator's master
+  brightness from the local mic envelope at ~20 Hz via UDP (port
+  4211) — gamma-scaled to the rig (#820, #843, #861).
 
-The phone-specific yaw axis is mirrored relative to the puck (#824)
-because the phone's natural-portrait orientation puts the operator's
-"left" 90 ° offset from the puck's body frame. The operator never
-needs to think about this; the orchestrator's `_apply_quat` for
-`KIND_PHONE` handles the negation.
+#### Gyro Controller
 
-#### Gyro puck
-
-- **Pitch** (tip puck forward / back) — beam pitches up / down.
-- **Yaw** (rotate around the puck's vertical axis) — beam pans.
+- **Pitch** (tip gyro forward / back) — beam pitches up / down.
+- **Yaw** (rotate around the gyro's body-vertical) — beam pans.
 - **Roll** (tilt left / right) — colour-wheel selection on profiles
   with a colour wheel; ignored on RGB-only profiles.
 - **Press Start** — claim mover and start streaming.
-- **Press Stop** — release claim.
+- **Press Stop** — release claim, hand head back to show.
+- **Press OFF (v1.7.116)** — blackout the head and release the claim.
 - **Press Calibrate** — capture new reference pose.
+
+### Aim-axis wizard (#826 Android, #869 Gyro)
+
+The remote's body-frame axes — which way is "forward" and "up" from
+the gyro / phone's perspective — vary by hardware revision, sensor
+fusion algorithm, and (for phones) operator grip. Rather than guess
+the convention from device metadata, both remotes ship an **empirical
+three-pose wizard** that measures the axes from operator gestures.
+
+Run the wizard once per device. The derived `forward_local` and
+`up_local` axes are stored server-side and applied to every
+subsequent claim from that device.
+
+**Three captures (same flow for both Android and Gyro):**
+
+1. **Neutral.** "Hold the remote in your normal grip aimed at the
+   head's current direction." Press Capture → `Q_neutral`.
+2. **Pitch forward.** "From neutral, tip the remote forward toward
+   the floor — the gesture you'd use to tilt the head DOWN." Press
+   Capture → `Q_pitch_fwd`.
+3. **Yaw left.** "Return to neutral. Then yaw to your left — the
+   gesture you'd use to pan stage-left." Press Capture →
+   `Q_yaw_left`.
+4. *(optional sanity check.)* Roll the remote clockwise like turning
+   a doorknob → `Q_roll_cw`.
+
+The server derives:
+
+```
+ΔQ_pitch_body = conj(Q_neutral) · Q_pitch_fwd
+ΔQ_yaw_body   = conj(Q_neutral) · Q_yaw_left
+pitch_axis_body = axis(ΔQ_pitch_body)
+yaw_axis_body   = axis(ΔQ_yaw_body)
+
+up_local      = yaw_axis_body
+forward_local = cross(yaw_axis_body, pitch_axis_body)
+```
+
+The math layer never reasons about "what frame does this device use"
+— it rotates the measured axes by the live quaternion and trusts the
+result.
+
+**Where the wizard lives:**
+
+- **Android** — Settings → Aim Axis Calibration (#826). Three-pose
+  prompts on the phone; result persists on the orchestrator and
+  applies to every Android claim from that phone.
+- **Gyro Controller** — driven from the gyro's round-LCD UI (#869,
+  `CMD_GYRO_AIM_WIZARD` = `0x6F`). Wizard mode is selected from the
+  gyro's menu; the three poses are captured via the gyro's button.
+  Result persists on the orchestrator and applies to every claim
+  from that physical gyro.
+
+**Validation.** The server rejects degenerate wizard payloads with a
+specific reason so the UI can prompt for retry:
+
+- Yaw and pitch axes too parallel → "those gestures looked the same,
+  please retry."
+- Quaternion magnitude outside `[0.95, 1.05]` → "sensor not stable."
+- Less than 10° rotation between captures → "please move further."
+- (If optional roll capture supplied) roll axis not orthogonal to
+  forward → "frame non-orthogonal."
+
+**When to re-run.** The persisted axes survive across firmware
+updates and orchestrator restarts. Re-run only when:
+
+- Changing the operator (a different person's grip).
+- A new physical device (different firmware revision or sensor).
+- Calibrate-end consistently shifts the head when puck and head are
+  already aligned (suggests the convention is wrong).
 
 ### Claim arbitration with shows (#763)
 
@@ -2861,10 +3207,10 @@ A claim doesn't take over colour or dimmer:
 The handshake's heartbeats include both ends' state, so divergent
 combinations are reconciled:
 
-| Puck UI | Orchestrator | What happens |
+| Gyro UI | Orchestrator | What happens |
 | --- | --- | --- |
 | ACTIVE | claim held | Normal — heartbeats keep TTL alive. |
-| ACTIVE | no claim | Orchestrator reconstructs the claim (orchestrator-restart bootstrap). |
+| ACTIVE | no claim | Gyro reverts to IDLE on the next heartbeat. Operator must press Start again. (Changed in v1.7.118 / #872 — orchestrator no longer reconstructs claims from heartbeat traffic.) |
 | IDLE | claim held | Orphan claim — orchestrator releases it. |
 | IDLE | no claim | Normal idle. |
 
