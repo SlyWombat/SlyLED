@@ -36,7 +36,7 @@ from remote_math import (  # noqa: E402
 )
 from remote_orientation import (  # noqa: E402
     KIND_PHONE,
-    KIND_PUCK,
+    KIND_GYRO,
     OrientConvention,
     Remote,
 )
@@ -95,7 +95,7 @@ def _phone_landscape(target_aim_stage=(0.0, 1.0, 0.0)):
 
 def _gyro(target_aim_stage=(0.0, 1.0, 0.0)):
     """Gyro gyro, LCD-up, default convention (FLAT_PITCH_YAW post-#777)."""
-    r = Remote(id=97, kind=KIND_PUCK)  # default forward=(1,0,0), up=(0,0,1)
+    r = Remote(id=97, kind=KIND_GYRO)  # default forward=(1,0,0), up=(0,0,1)
     r.convention = OrientConvention.FLAT_PITCH_YAW
     r.calibrate(target_aim_stage=target_aim_stage,
                 quat=(1.0, 0.0, 0.0, 0.0))
@@ -831,6 +831,101 @@ def test_wizard_orthonormal_axes():
             f"oblique-axes wizard → forward ⊥ up (dot={dot:.4f})")
 
 
+def test_wizard_gyro_deviceid_auto_registers_with_KIND_GYRO():
+    """#883 regression — deviceId-keyed `/api/remotes/aim-wizard` route
+    auto-registers an unknown remote on first POST. When the deviceId
+    starts with ``gyro-`` the auto_kind branch references KIND_GYRO,
+    which was not imported pre-fix → NameError → HTTP 500.
+
+    Post-fix: the route returns 200, the new Remote is keyed by the
+    deviceId, kind = ``"gyro"``, and the derived forward_local /
+    up_local persist on the registry."""
+    import os as _os, sys as _sys
+    _sys.path.insert(
+        0, _os.path.join(_os.path.dirname(__file__),
+                          "..", "desktop", "shared"))
+    import parent_server as _ps
+    fresh_did = "gyro-192.168.10.250"
+    qn = (1.0, 0.0, 0.0, 0.0)
+    qp = quat_from_axis_angle((1.0, 0.0, 0.0), -math.radians(30))
+    qy = quat_from_axis_angle((0.0, 0.0, 1.0), -math.radians(30))
+    with _ps.app.test_client() as c:
+        c.post("/api/reset", headers={"X-SlyLED-Confirm": "true"})
+        # Confirm the remote is NOT pre-registered.
+        _assert(_ps._remotes.by_device(fresh_did) is None,
+                "test setup: gyro deviceId must not already be in the "
+                "registry")
+        r = c.post("/api/remotes/aim-wizard", json={
+            "deviceId": fresh_did,
+            "poses": [
+                {"role": "neutral",       "quat": list(qn)},
+                {"role": "pitch_forward", "quat": list(qp)},
+                {"role": "yaw_left",      "quat": list(qy)},
+            ],
+        })
+        body = r.get_json() or {}
+        _assert(r.status_code == 200,
+                f"gyro-* deviceId → 200 (got {r.status_code}, body={body})")
+        _assert(body.get("ok") is True,
+                f"gyro-* deviceId response ok=True (got {body})")
+        _assert(isinstance(body.get("forwardLocal"), list) and
+                isinstance(body.get("upLocal"), list),
+                f"gyro-* deviceId returns derived axes (got {body})")
+        # Remote landed on the registry under the original deviceId
+        # with kind = "gyro" (not the phone default).
+        new_remote = _ps._remotes.by_device(fresh_did)
+        _assert(new_remote is not None,
+                "auto-registered remote findable by deviceId after POST")
+        _assert(new_remote.kind == KIND_GYRO,
+                f"auto_kind = KIND_GYRO ('{KIND_GYRO}') for gyro-* "
+                f"prefix; got kind={new_remote.kind!r}")
+        # Axes persisted on the Remote object match the response body.
+        _assert(tuple(round(v, 4) for v in new_remote.forward_local) ==
+                tuple(round(v, 4) for v in body["forwardLocal"]),
+                "persisted forward_local matches response payload")
+        _assert(tuple(round(v, 4) for v in new_remote.up_local) ==
+                tuple(round(v, 4) for v in body["upLocal"]),
+                "persisted up_local matches response payload")
+
+
+def test_wizard_phone_deviceid_auto_registers_with_KIND_PHONE():
+    """Companion to the #883 regression: a deviceId that does NOT match
+    the ``gyro-`` prefix still auto-registers as KIND_PHONE (the
+    pre-#883 default). This pins the back-compat half of the branch
+    so a future cleanup doesn't accidentally promote everything to
+    KIND_GYRO."""
+    import os as _os, sys as _sys
+    _sys.path.insert(
+        0, _os.path.join(_os.path.dirname(__file__),
+                          "..", "desktop", "shared"))
+    import parent_server as _ps
+    fresh_did = "phone-abc-123"
+    qn = (1.0, 0.0, 0.0, 0.0)
+    qp = quat_from_axis_angle((1.0, 0.0, 0.0), -math.radians(30))
+    qy = quat_from_axis_angle((0.0, 0.0, 1.0), -math.radians(30))
+    with _ps.app.test_client() as c:
+        c.post("/api/reset", headers={"X-SlyLED-Confirm": "true"})
+        _assert(_ps._remotes.by_device(fresh_did) is None,
+                "test setup: phone deviceId must not already be in the "
+                "registry")
+        r = c.post("/api/remotes/aim-wizard", json={
+            "deviceId": fresh_did,
+            "poses": [
+                {"role": "neutral",       "quat": list(qn)},
+                {"role": "pitch_forward", "quat": list(qp)},
+                {"role": "yaw_left",      "quat": list(qy)},
+            ],
+        })
+        _assert(r.status_code == 200,
+                f"phone deviceId → 200 (got {r.status_code})")
+        new_remote = _ps._remotes.by_device(fresh_did)
+        _assert(new_remote is not None,
+                "auto-registered remote findable after POST")
+        _assert(new_remote.kind == KIND_PHONE,
+                f"auto_kind = KIND_PHONE for non-gyro prefix; got "
+                f"kind={new_remote.kind!r}")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 ALL = [
@@ -867,6 +962,9 @@ ALL = [
     test_wizard_neutral_replay_lands_at_calibrate_target,
     test_wizard_landscape_grip_round_trip,
     test_wizard_orthonormal_axes,
+    # #883 — deviceId-keyed wizard auto-register branches
+    test_wizard_gyro_deviceid_auto_registers_with_KIND_GYRO,
+    test_wizard_phone_deviceid_auto_registers_with_KIND_PHONE,
 ]
 
 

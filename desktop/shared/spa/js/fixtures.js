@@ -103,6 +103,9 @@ function editFixture(id){
     return;
   }
   var ft=f.fixtureType||'led';
+  // #881 — granular help: dmx / led / camera / group edit modals each
+  // get their own help fragment under setup.edit-fixture.<type>.
+  if(typeof _helpModalSet==='function')_helpModalSet('setup.edit-fixture.'+ft);
   var h='<label>Name</label><input id="fx-name" value="'+escapeHtml(f.name)+'" style="width:100%">';
   h+='<label>Geometry</label><select id="fx-type"><option value="linear"'+(f.type==='linear'?' selected':'')+'>Linear</option><option value="point"'+(f.type==='point'?' selected':'')+'>Point</option><option value="group"'+(f.type==='group'?' selected':'')+'>Group</option></select>';
   if(ft==='dmx'){

@@ -6,6 +6,7 @@ function showFixtureWizard(){
   _wizStep1();
 }
 function _wizStep1(){
+  _helpModalSet('setup.add-fixture.step-1-choose');
   var h='<div style="display:flex;gap:.3em;margin-bottom:.8em">';
   h+='<div style="flex:1;text-align:center;padding:.3em;border-radius:4px;font-size:.78em;background:#14532d;color:#86efac;font-weight:bold">1. Choose Fixture</div>';
   h+='<div style="flex:1;text-align:center;padding:.3em;border-radius:4px;font-size:.78em;background:#1e293b;color:#64748b">2. Address</div>';
@@ -94,6 +95,7 @@ function _wizSelectOfl(mfr,fix){
 }
 function _wizCustom(){window._wiz.profId='';window._wiz.name='Custom Fixture';window._wiz.channels=3;_wizStep2();}
 function _wizStep2(){
+  _helpModalSet('setup.add-fixture.step-2-address');
   var w=window._wiz;
   var h='<div style="display:flex;gap:.3em;margin-bottom:.8em">';
   h+='<div style="flex:1;text-align:center;padding:.3em;border-radius:4px;font-size:.78em;background:#1e293b;color:#4ade80">1. Choose</div>';
@@ -136,6 +138,7 @@ function _wizStep2(){
   checkConflict();
 }
 function _wizStep3(){
+  _helpModalSet('setup.add-fixture.step-3-confirm');
   var w=window._wiz;
   w.name=document.getElementById('wiz-name').value.trim()||w.name;
   w.uni=parseInt(document.getElementById('wiz-uni').value)||1;

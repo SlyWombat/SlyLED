@@ -105,8 +105,8 @@ def test_aim_wizard_auto_registers_gyro():
     body = _wizard_handler_body()
     _assert("_auto_register_remote" in body,
             "AIM_WIZARD handler auto-registers a gyro Remote if not present")
-    _assert("KIND_PUCK" in body,
-            "auto-register uses KIND_PUCK (matches the orient handler)")
+    _assert("KIND_GYRO" in body,
+            "auto-register uses KIND_GYRO (matches the orient handler)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -138,8 +138,8 @@ def test_aim_wizard_end_to_end_persists_axes():
         "yaw_left":      qfe(eu[6], eu[7], eu[8]),
     }
     # Rope a fresh in-process Remote in the right shape.
-    from remote_orientation import Remote, KIND_PUCK
-    r = Remote(id=999, kind=KIND_PUCK, device_id="test-869")
+    from remote_orientation import Remote, KIND_GYRO
+    r = Remote(id=999, kind=KIND_GYRO, device_id="test-869")
     ok_, resp, status = parent_server._apply_aim_wizard_to_remote(r, poses)
     _assert(ok_, f"wizard math accepted synthetic inputs (resp={resp})")
     if not ok_:

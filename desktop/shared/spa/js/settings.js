@@ -837,6 +837,8 @@ function dmxBlackoutAll(){
 var _dmxMonTimer=null;
 function showDmxMonitor(){
   _modalStack=[];
+  // #881 — DMX Monitor opens as a modal; pin its dedicated help fragment.
+  if(typeof _helpModalSet==='function')_helpModalSet('settings.dmx-monitor');
   var h='<div style="display:flex;gap:.5em;align-items:center;margin-bottom:.5em">';
   h+='<label style="font-size:.82em">Universe:</label><select id="mon-uni" onchange="_dmxMonRefresh()" style="font-size:.85em">';
   for(var i=1;i<=4;i++)h+='<option value="'+i+'">Universe '+i+'</option>';
@@ -889,6 +891,8 @@ function _dmxMonSet(uni,addr,cell){
 // ── #145: Fixture Group Control ──────────────────────────────────────────
 function showGroupControl(){
   _modalStack=[];
+  // #881 — Group Control modal gets a dedicated help fragment.
+  if(typeof _helpModalSet==='function')_helpModalSet('settings.group-control');
   ra('GET','/api/fixtures',null,function(fixtures){
     var groups=(fixtures||[]).filter(function(f){return f.type==='group';});
     var h='';

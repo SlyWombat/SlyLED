@@ -332,7 +332,7 @@ def test_auto_register_from_udp_path():
     """
     _clear_remotes()
     rem = parent_server._auto_register_remote("gyro-192.0.2.77",
-                                              kind=parent_server.KIND_PUCK)
+                                              kind=parent_server.KIND_GYRO)
     _assert(rem is not None, "auto-register creates remote")
     _assert(rem.device_id == "gyro-192.0.2.77", "device_id matches")
     # Second call returns the same one

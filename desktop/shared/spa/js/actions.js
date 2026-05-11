@@ -120,6 +120,12 @@ function editAction(id){var a=null;_acts.forEach(function(x){if(x.id===id)a=x;})
 function _showActModal(a){
   var isNew=!a;
   var t=a?a.type:1;
+  // #881 — granular help: Track action edits map to a dedicated fragment
+  // (action type 18 = Track). Other action types fall through to the
+  // Spatial Effects chapter via the hierarchy.
+  if(typeof _helpModalSet==='function'){
+    _helpModalSet(t===18?'actions.track-editor':'actions');
+  }
   var sc=a?a.scope||'performer':'performer';
   var selIds=a&&a.targetIds?a.targetIds:[];
   var h='<label>Name</label><input id="ae-nm" value="'+escapeHtml(a?a.name:'')+'" style="width:240px" placeholder="e.g. Red Wipe">';
@@ -274,6 +280,21 @@ function _showActModal(a){
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='block';
   _aePerfIds=selIds.slice();
+  // #881 — track Advanced expander state so the help key shifts to the
+  // advanced sub-fragment when the operator opens that section.
+  if(t===18){
+    var adv=document.getElementById('ae-trk-adv');
+    if(adv){
+      adv.addEventListener('toggle',function(){
+        if(typeof _helpModalSet==='function'){
+          _helpModalSet(adv.open?'actions.track-editor.advanced':'actions.track-editor');
+        }
+      });
+      if(adv.open && typeof _helpModalSet==='function'){
+        _helpModalSet('actions.track-editor.advanced');
+      }
+    }
+  }
   if(sc==='performer-selected')_loadPerfPicker();
   // Refresh objects + fetch temporals for Track action target list
   if(t===18){

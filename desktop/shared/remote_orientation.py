@@ -170,8 +170,11 @@ CONNECTION_STATES = ("idle", "armed", "streaming", "stale")
 KIND_GYRO  = "gyro"
 KIND_PHONE = "phone"
 VALID_KINDS = {KIND_GYRO, KIND_PHONE}
-# Back-compat alias so older imports continue to resolve.
-KIND_PUCK  = KIND_GYRO
+# `LEGACY_KIND_PUCK_VALUE` is a data-migration constant — not a symbol
+# alias. JSON files persisted before the puck→gyro rename carry the
+# literal string ``"gyro-puck"``; ``Remote.from_dict`` rewrites those
+# to ``KIND_GYRO`` on load. The old symbol alias was removed in #883;
+# every internal caller now uses ``KIND_GYRO`` directly.
 LEGACY_KIND_PUCK_VALUE = "gyro-puck"
 
 
@@ -195,7 +198,7 @@ class Remote:
         "forward_local", "up_local",
     )
 
-    def __init__(self, id, name="", kind=KIND_PUCK, device_id=None,
+    def __init__(self, id, name="", kind=KIND_GYRO, device_id=None,
                  pos=None, rot=None, convention=None,
                  forward_local=None, up_local=None):
         self.id = int(id)
@@ -667,7 +670,7 @@ class RemoteRegistry:
 
     # CRUD ─────────────────────────────────────────────────────────────
 
-    def add(self, name="", kind=KIND_PUCK, device_id=None, pos=None, rot=None):
+    def add(self, name="", kind=KIND_GYRO, device_id=None, pos=None, rot=None):
         with self._lock:
             r = Remote(
                 id=self._next_id,

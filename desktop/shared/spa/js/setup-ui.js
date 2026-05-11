@@ -2659,6 +2659,8 @@ function _gyroConfigModal(childId){
 }
 
 function _gyroConfigModalRender(childId, c){
+  // #881 — gyro controller fixture edit gets its own help fragment.
+  if(typeof _helpModalSet==='function')_helpModalSet('setup.edit-fixture.gyro');
   var gyroFixtures=(_fixtures||[]).filter(function(f){return f.fixtureType==='gyro';});
   var dmxFixtures=(_fixtures||[]).filter(function(f){return f.fixtureType==='dmx';});
   var gf=gyroFixtures.find(function(gfx){return gfx.gyroChildId===childId;});
@@ -3014,6 +3016,84 @@ function _gyroAimWizardRetry(){
   _gyroAimWizardRender();
 }
 
+function _gyroAimWizardFmtQuat(q){
+  if(!q||!q.length||q.length<4)return '<span style="color:#64748b">—</span>';
+  return q.map(function(v){
+    var n=(typeof v==='number')?v:parseFloat(v);
+    if(isNaN(n))return '?';
+    return (n>=0?' ':'')+n.toFixed(4);
+  }).join(', ');
+}
+
+function _gyroAimWizardFmtVec3(v){
+  if(!v||!v.length||v.length<3)return '<span style="color:#64748b">—</span>';
+  return v.map(function(c){
+    var n=(typeof c==='number')?c:parseFloat(c);
+    if(isNaN(n))return '?';
+    return (n>=0?' ':'')+n.toFixed(3);
+  }).join(', ');
+}
+
+function _gyroAimWizardDebugBlock(W, r){
+  // Render the three captured quats (from the SPA's own buffer — the
+  // server may not echo them) plus the server's diagnostics block.
+  // Operator can copy these straight out of the modal for support.
+  var d=(r&&r.diagnostics)||{};
+  var captures=(W&&W.captures)||{};
+  var roles=['neutral','pitch_forward','yaw_left'];
+  var rowStyle='font-family:monospace;font-size:.78em;color:#cbd5e1;'
+               +'padding:.15em 0;border-bottom:1px solid #1e293b';
+  var keyStyle='display:inline-block;min-width:120px;color:#94a3b8';
+  var h=''
+    +'<details style="margin-bottom:.8em;border:1px solid #334;'
+    +'border-radius:6px;padding:.4em .7em" open>'
+    +'<summary style="cursor:pointer;font-size:.85em;color:#e2e8f0;'
+    +'font-weight:600">Captured values</summary>'
+    +'<div style="margin-top:.5em">'
+    +'<div style="font-size:.78em;color:#64748b;margin-bottom:.25em">'
+    +'Quats sent by the SPA (w, x, y, z):</div>';
+  roles.forEach(function(role){
+    var q=captures[role];
+    h+='<div style="'+rowStyle+'"><span style="'+keyStyle+'">'
+       +role+'</span>'+_gyroAimWizardFmtQuat(q)+'</div>';
+  });
+  if(d.normalizedQuats||d.deltaQuats||d.pitchAngleDeg!=null){
+    h+='<div style="font-size:.78em;color:#64748b;margin:.7em 0 .25em">'
+       +'Server-computed math:</div>';
+    if(d.pitchAngleDeg!=null){
+      h+='<div style="'+rowStyle+'"><span style="'+keyStyle+'">'
+         +'pitch angle</span>'+d.pitchAngleDeg.toFixed(2)+'°</div>';
+    }
+    if(d.yawAngleDeg!=null){
+      h+='<div style="'+rowStyle+'"><span style="'+keyStyle+'">'
+         +'yaw angle</span>'+d.yawAngleDeg.toFixed(2)+'°</div>';
+    }
+    if(d.pitchAxis){
+      h+='<div style="'+rowStyle+'"><span style="'+keyStyle+'">'
+         +'pitch axis</span>'+_gyroAimWizardFmtVec3(d.pitchAxis)+'</div>';
+    }
+    if(d.yawAxis){
+      h+='<div style="'+rowStyle+'"><span style="'+keyStyle+'">'
+         +'yaw axis</span>'+_gyroAimWizardFmtVec3(d.yawAxis)+'</div>';
+    }
+    if(d.crossMagnitude!=null){
+      h+='<div style="'+rowStyle+'"><span style="'+keyStyle+'">'
+         +'cross magnitude</span>'+d.crossMagnitude.toFixed(4)
+         +' <span style="color:#64748b">(need ≥ 0.70)</span></div>';
+    }
+    if(d.forwardLocal){
+      h+='<div style="'+rowStyle+'"><span style="'+keyStyle+'">'
+         +'forward_local</span>'+_gyroAimWizardFmtVec3(d.forwardLocal)+'</div>';
+    }
+    if(d.upLocal){
+      h+='<div style="'+rowStyle+'"><span style="'+keyStyle+'">'
+         +'up_local</span>'+_gyroAimWizardFmtVec3(d.upLocal)+'</div>';
+    }
+  }
+  h+='</div></details>';
+  return h;
+}
+
 function _gyroAimWizardSubmit(){
   if(!_gyroWiz)return;
   var W=_gyroWiz;
@@ -3031,12 +3111,21 @@ function _gyroAimWizardSubmit(){
   ra('POST','/api/remotes/'+W.remoteId+'/aim-wizard',
     {poses: poses}, function(r){
     if(!r||r.ok===false){
-      var msg=(r&&r.err)||'Server rejected the captures.';
+      // #885 — operator-friendly `detail` (a full sentence) wins over
+      // the machine-readable `err` code so the operator sees "Gyro is
+      // idle — press Start first" rather than "gyro_not_streaming".
+      var msg=(r&&r.detail)||(r&&r.err)||'Server rejected the captures.';
+      // #885 follow-up — surface every captured quat + the math
+      // intermediates the server computed so the operator (or a dev
+      // looking over their shoulder) can see exactly which pose was
+      // bad. Pre-fix the error renderer dropped the captures entirely,
+      // so "cross magnitude 0.37" was unactionable.
       var hh=''
         +'<div style="margin-bottom:1em">'
         +'<div style="font-size:.92em;color:#fca5a5;font-weight:600">Calibration failed</div>'
         +'<div style="font-size:.85em;color:#94a3b8;margin-top:.4em">'+escapeHtml(msg)+'</div>'
         +'</div>'
+        +_gyroAimWizardDebugBlock(W, r)
         +'<div style="display:flex;gap:.4em">'
         +'<button class="btn btn-on" onclick="_gyroAimWizardOpen('
         +W.remoteId+','+W.childId+',\''+escapeHtml(W.deviceId)

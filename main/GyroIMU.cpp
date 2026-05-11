@@ -149,7 +149,20 @@ bool gyroIMURead(float* roll, float* pitch, float* yaw) {
     if (dt <= 0.0f || dt > 0.5f) dt = 0.01f;
 
     // Accelerometer-derived roll and pitch (stable long-term, noisy short-term)
-    float accelRoll  = atan2f(ay, az) * IMU_RAD2DEG;
+    //
+    // #886 — body-Z is mounted pointing INTO the board on the Waveshare
+    // round-LCD ESP32-S3 hardware, so screen-facing-up reads `az = -1 g`
+    // (gravity pulling the chip toward the floor, against +Z). The
+    // textbook `atan2f(ay, az)` then returns ±180° for the natural
+    // neutral pose, the complementary filter accepts that as
+    // steady-state, and the orient stream encodes a 177° offset from
+    // identity. SPA Calibrate's `forward_local`/`up_local` only align
+    // one axis pair, not the full firmware-world ↔ stage offset, so
+    // aim_stage was visibly mis-pointing. Inverting `az` here makes
+    // screen-up = roll 0°, screen-down = ±180°, and 90° side-roll
+    // matches operator expectation. Pitch is symmetric in az sign
+    // (the `sqrt(ay² + az²)` is always positive) so it stays as-is.
+    float accelRoll  = atan2f(ay, -az) * IMU_RAD2DEG;
     float accelPitch = atan2f(-ax, sqrtf(ay * ay + az * az)) * IMU_RAD2DEG;
 
     // Complementary filter: 98% gyro integration + 2% accelerometer correction

@@ -19,7 +19,7 @@ from remote_math import norm3, quat_from_euler_zyx_deg, quat_rotate_vec  # noqa:
 from remote_orientation import (  # noqa: E402
     REMOTE_FORWARD_LOCAL, REMOTE_UP_LOCAL, STALE_AGE_SECS, STALE_COMMS_SECS,
     STALE_SOFT_SECS, STALE_HARD_SECS,
-    Remote, RemoteRegistry, KIND_PUCK, KIND_PHONE,
+    Remote, RemoteRegistry, KIND_GYRO, KIND_PHONE,
     OrientConvention,
 )
 
@@ -85,7 +85,7 @@ def test_remote_defaults():
     r = Remote(id=1)
     _eq(r.id, 1, msg="id")
     _true(r.name.startswith("Remote"), "default name")
-    _eq(r.kind, KIND_PUCK, msg="default kind")
+    _eq(r.kind, KIND_GYRO, msg="default kind")
     _true(r.pos == [0.0, 0.0, 1600.0], "default pos head-height")
     _eq(r.calibrated, False, msg="uncalibrated")
     _eq(r.stale_reason, None, msg="no stale reason")
@@ -95,7 +95,7 @@ def test_remote_defaults():
 
 def test_remote_invalid_kind_falls_back():
     r = Remote(id=2, kind="bogus")
-    _eq(r.kind, KIND_PUCK, msg="unknown kind → gyro")
+    _eq(r.kind, KIND_GYRO, msg="unknown kind → gyro")
 
 
 def test_remote_update_without_calibration():
@@ -564,7 +564,7 @@ def test_remote_persist_roundtrip():
 
 def test_registry_add_get_list_remove():
     reg = RemoteRegistry(data_path=None)
-    a = reg.add(name="A", kind=KIND_PUCK, device_id="a")
+    a = reg.add(name="A", kind=KIND_GYRO, device_id="a")
     b = reg.add(name="B", kind=KIND_PHONE, device_id="b")
     _eq(a.id, 1, msg="first id = 1")
     _eq(b.id, 2, msg="second id = 2")
@@ -591,7 +591,7 @@ def test_registry_persistence():
     try:
         path = os.path.join(tmpdir, "remotes.json")
         reg = RemoteRegistry(data_path=path)
-        a = reg.add(name="Persist me", kind=KIND_PUCK, device_id="d1",
+        a = reg.add(name="Persist me", kind=KIND_GYRO, device_id="d1",
                     pos=[100, 200, 300])
         a.update_from_euler_deg(0, 0, 0)
         a.calibrate(target_aim_stage=(0, 1, 0))
@@ -675,7 +675,7 @@ def test_762_gyro_default_convention_is_flat_pitch_yaw():
     Euler) per docs/imu-axis-test-2026-05-01.md. Tests of
     BOTTOM_FORWARD-specific behaviour pass `convention=` explicitly
     on the Remote constructor."""
-    r = Remote(id=200, kind=KIND_PUCK)
+    r = Remote(id=200, kind=KIND_GYRO)
     _eq(r.convention, OrientConvention.FLAT_PITCH_YAW,
         msg="gyro default convention (post-#777)")
 
@@ -692,7 +692,7 @@ def test_762_bottom_forward_drops_yaw_in_orient():
     quaternion under BOTTOM_FORWARD_ROLL_PITCH — drift is a no-op."""
     # #777 / #856 — gyro default switched to FLAT_PITCH_YAW. Pin
     # BOTTOM_FORWARD explicitly here to test that path's yaw-drop.
-    r = Remote(id=202, kind=KIND_PUCK,
+    r = Remote(id=202, kind=KIND_GYRO,
                convention=OrientConvention.BOTTOM_FORWARD_ROLL_PITCH)
     r.update_from_euler_deg(0, 0, 0)
     r.calibrate(target_aim_stage=(0, 1, 0))
@@ -728,7 +728,7 @@ def test_762_bottom_forward_calibrate_pitch_anchors_pose():
     streams stay aligned. Repeating the same orient should reproduce the
     target aim."""
     # #777 / #856 — pin BOTTOM_FORWARD; default switched to FLAT_PITCH_YAW.
-    r = Remote(id=204, kind=KIND_PUCK,
+    r = Remote(id=204, kind=KIND_GYRO,
                convention=OrientConvention.BOTTOM_FORWARD_ROLL_PITCH)
     # Operator's phone happened to have a wildly drifted yaw at calibrate.
     r.calibrate(target_aim_stage=(1, 0, 0), roll=10.0, pitch=5.0, yaw=137.0)
@@ -759,11 +759,11 @@ def test_762_persist_roundtrip_default_omitted_override_kept():
     later propagates to old records). An explicit override IS persisted."""
     # #777 / #856 — gyro default is now FLAT_PITCH_YAW; the override
     # we test for non-default persistence must be the OTHER value.
-    r1 = Remote(id=206, kind=KIND_PUCK)  # default = FLAT_PITCH_YAW
+    r1 = Remote(id=206, kind=KIND_GYRO)  # default = FLAT_PITCH_YAW
     d1 = r1.to_persisted_dict()
     _eq(d1["orientConvention"], None,
         msg="default convention not pinned in persisted dict")
-    r2 = Remote(id=207, kind=KIND_PUCK,
+    r2 = Remote(id=207, kind=KIND_GYRO,
                 convention=OrientConvention.BOTTOM_FORWARD_ROLL_PITCH)
     d2 = r2.to_persisted_dict()
     _eq(d2["orientConvention"], "bottom_forward",
@@ -777,7 +777,7 @@ def test_762_persist_roundtrip_default_omitted_override_kept():
 def test_762_live_dict_exposes_convention():
     """Dashboard / status panel needs to render which convention is active."""
     # #777 / #856 — default gyro convention is now flat_pitch_yaw.
-    r = Remote(id=208, kind=KIND_PUCK)
+    r = Remote(id=208, kind=KIND_GYRO)
     d = r.live_dict()
     _eq(d["orientConvention"], "flat_pitch_yaw",
         msg="live_dict surfaces active convention (post-#777)")

@@ -339,6 +339,9 @@ function showTab(t){
   // Only detach if going to a non-live tab (layout, setup, etc.)
   if(!liveTab&&_emu3d.activeTab){_emu3dDetach();}
   _clearTabTimers();
+  // #881 — leaving any tab clears any modal-pinned help key (modals
+  // belong to specific tab flows).
+  _helpModalKey=null;
   // Stop layout render loop if leaving layout
   if(ctab==='layout'&&t!=='layout'&&_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
   ctab=t;
@@ -508,7 +511,9 @@ function _pushModal(){
   if(!m||m.style.display==='none')return;
   var title=document.getElementById('modal-title').textContent;
   var body=document.getElementById('modal-body').innerHTML;
-  _modalStack.push({title:title,body:body});
+  // #881 — save the parent's helpkey alongside its body so the help
+  // panel restores the parent context when the sub-dialog closes.
+  _modalStack.push({title:title,body:body,helpKey:_helpModalKey});
 }
 function _popModal(){
   // Restore parent modal state
@@ -516,6 +521,7 @@ function _popModal(){
     var prev=_modalStack.pop();
     document.getElementById('modal-title').textContent=prev.title;
     document.getElementById('modal-body').innerHTML=prev.body;
+    _helpModalKey=prev.helpKey||null;
     return true;
   }
   return false;
@@ -544,6 +550,8 @@ function closeModal(){
   if(window._bakePoll){clearInterval(window._bakePoll);window._bakePoll=null;}
   if(window._gcfgPoll){clearInterval(window._gcfgPoll);window._gcfgPoll=null;}
   document.getElementById('modal').style.display='none';
+  // #881 — modal helpkey lives only while the modal is open.
+  _helpModalKey=null;
 }
 
 function showDetails(id){
@@ -602,11 +610,68 @@ var _HELP_DEEP_LINKS = {
   cameras: 'cameras'
 };
 
-function _helpSectionForTab(){
-  var s = ctab;
-  if (s === 'actions') s = 'spatial-effects';
-  if (s === 'runtime') s = 'timeline';
-  return s;
+// #881 — granular help context detection. The previous tab-level
+// resolver only knew which top-level SPA tab was active; this one walks
+// the live SPA state (settings sub-section, modal stack, layout
+// tool/view, wizard step) to produce a dotted helpkey the backend can
+// resolve hierarchically. Modal flows push their own key via
+// _helpModalSet(); _pushModal()/_popModal() save and restore it
+// alongside the modal title+body.
+var _helpModalKey = null;        // top of the modal helpkey stack
+var _helpHoverKey = null;        // pinned by hover on data-help-key elements
+function _helpModalSet(key){ _helpModalKey = key || null; }
+
+// Document-level delegation: any element with data-help-key pins the
+// helpkey while the operator hovers it (e.g. the Firmware tab's Force
+// Update button). Click ? while hovering → granular fragment;
+// otherwise the tab/modal default still applies.
+document.addEventListener('mouseover', function(e){
+  var t = e.target && e.target.closest ? e.target.closest('[data-help-key]') : null;
+  if (t) _helpHoverKey = t.getAttribute('data-help-key');
+});
+document.addEventListener('mouseout', function(e){
+  var t = e.target && e.target.closest ? e.target.closest('[data-help-key]') : null;
+  if (t) _helpHoverKey = null;
+});
+
+function _helpContextKey(){
+  // Hover-pinned key (data-help-key on an element) takes precedence so
+  // operators can reach specific feature fragments without opening a
+  // modal.
+  if (_helpHoverKey) return _helpHoverKey;
+  // An open modal's authored key wins — wizard flows, edit-fixture
+  // modal, DMX Monitor, Group Control etc. all push a key when they
+  // render.
+  var modal = document.getElementById('modal');
+  if (modal && modal.style.display !== 'none' && _helpModalKey){
+    return _helpModalKey;
+  }
+  switch (ctab){
+    case 'dash': {
+      // #881 — Auto Brightness card lives inside the Remote Controllers
+      // panel and is tagged with data-remote-kind="auto-brightness"
+      // (dashboard.js). When it's on screen, prefer the dedicated
+      // fragment; otherwise the generic Dashboard chapter.
+      var ab = document.querySelector('#t-dash [data-remote-kind="auto-brightness"]');
+      return ab ? 'dash.auto-brightness' : 'dash';
+    }
+    case 'setup':    return 'setup';
+    case 'actions':  return 'spatial-effects';  // legacy mapping retained
+    case 'shows':    return 'shows';
+    case 'runtime':  return 'runtime';
+    case 'firmware': return 'firmware';
+    case 'layout': {
+      var view2d = (_layView === 'front' || _layView === 'top' || _layView === 'side');
+      var dim = view2d ? '2d' : '3d';
+      var tool = (_layTool === 'rotate') ? 'rotate' : 'move';
+      return 'layout.' + dim + '.' + tool;
+    }
+    case 'settings': {
+      var sec = (typeof _curSetSection !== 'undefined' && _curSetSection) || 'general';
+      return 'settings.' + sec;
+    }
+    default: return ctab || 'dash';
+  }
 }
 
 function toggleHelp(){
@@ -619,7 +684,7 @@ function toggleHelp(){
   }
   panel.style.display = 'block';
   document.body.classList.add('help-open');
-  ra('GET', '/api/help/' + _helpSectionForTab(), null, function(d){
+  ra('GET', '/api/help/' + encodeURIComponent(_helpContextKey()), null, function(d){
     var body = document.getElementById('help-body');
     var raw = d && d.html ? d.html : '<p style="color:#888">Help content not available.</p>';
     raw = raw.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');

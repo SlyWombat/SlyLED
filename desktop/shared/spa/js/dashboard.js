@@ -165,7 +165,8 @@ function _refreshRemotesDash(){
         +'title="Remove this remote from the registry" '
         +'style="margin-left:.3em;background:transparent;border:none;color:#64748b;cursor:pointer;font-size:.95em;padding:0 .25em;line-height:1" '
         +'onmouseover="this.style.color=\'#f87171\'" onmouseout="this.style.color=\'#64748b\'">\u00d7</button>');
-      h+='<div style="background:#0f172a;border:1px solid '+c.border+';border-radius:6px;padding:.5em .8em;min-width:220px">'
+      h+='<div data-remote-kind="'+(isAutoBri?'auto-brightness':(r.kind==='phone'?'phone':'gyro'))+'" '
+        +'style="background:#0f172a;border:1px solid '+c.border+';border-radius:6px;padding:.5em .8em;min-width:220px">'
         +'<div style="display:flex;align-items:center;gap:.4em;margin-bottom:.2em">'
         +'<span style="color:'+c.dot+';font-size:1.1em">\u25cf</span>'
         +'<span style="font-weight:bold;color:#e2e8f0;font-size:.82em;flex:1">'+escapeHtml(displayName)+'</span>'

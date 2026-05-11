@@ -87,7 +87,7 @@ function _renderOtaTable(d){
       // can recover the board without USB-flashing it.
       st='<span class="badge boff">Offline</span>';
       if(c.ip){
-        act='<button class="btn" onclick="otaSingleUpdate('+c.id+',true)" style="background:#7c2d12;color:#fdba74" title="Force OTA via HTTP — bypasses the UDP-derived online check. Board must be HTTP-reachable on its IP.">Force Update</button>';
+        act='<button class="btn" data-help-key="firmware.force-update" onclick="otaSingleUpdate('+c.id+',true)" style="background:#7c2d12;color:#fdba74" title="Force OTA via HTTP — bypasses the UDP-derived online check. Board must be HTTP-reachable on its IP.">Force Update</button>';
       }else{
         act='<span style="color:#666">—</span>';
       }

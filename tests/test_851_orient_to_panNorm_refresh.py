@@ -25,7 +25,7 @@ import os, sys, time, threading
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "desktop", "shared"))
 
 from mover_control import MoverControlEngine, MoverClaim
-from remote_orientation import Remote, KIND_PUCK
+from remote_orientation import Remote, KIND_GYRO
 
 
 # Synthetic profile + fixture matching the live slymovehead-shaped rig:
@@ -83,7 +83,7 @@ def _seed_streaming_claim(eng, remote):
 def test_851_three_distinct_orients_advance_panNorm():
     """Acceptance per #851: three distinct orient tuples → three
     distinct panNorm values on the claim."""
-    remote = Remote(id=1, name="gyro", kind=KIND_PUCK, device_id="gyro-test")
+    remote = Remote(id=1, name="gyro", kind=KIND_GYRO, device_id="gyro-test")
     # Calibrate against an arbitrary in-cone target so R_world_to_stage
     # is set and `aim_stage` derives from `last_quat_world`.
     remote.update_from_euler_deg(0, 0, 0)
@@ -124,7 +124,7 @@ def test_851_three_distinct_orients_advance_panNorm():
 def test_851_identical_orients_produce_stable_panNorm():
     """No-jitter check: feeding the same orient twice in a row produces
     a stable panNorm (smoothing converges to the same value)."""
-    remote = Remote(id=2, name="puck2", kind=KIND_PUCK, device_id="gyro-test2")
+    remote = Remote(id=2, name="puck2", kind=KIND_GYRO, device_id="gyro-test2")
     remote.update_from_euler_deg(0, 0, 0)
     remote.calibrate(target_aim_stage=(0.0, 1.0, 0.0))
 
@@ -153,7 +153,7 @@ def test_851_first_tick_sets_have_pan_tilt():
     """The first tick post-calibrate must flip claim.have_pan_tilt to
     True and seed pan_smooth/tilt_smooth from the IK output (no
     smoothing yet — direct assignment per mover_control.py:670-673)."""
-    remote = Remote(id=3, name="puck3", kind=KIND_PUCK, device_id="gyro-test3")
+    remote = Remote(id=3, name="puck3", kind=KIND_GYRO, device_id="gyro-test3")
     remote.update_from_euler_deg(0, 0, 0)
     remote.calibrate(target_aim_stage=(0.0, 1.0, 0.0))
 

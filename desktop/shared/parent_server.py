@@ -15,6 +15,7 @@ import atexit
 import json
 import math
 import os
+import re
 try:
     import numpy as np
 except ImportError:
@@ -83,7 +84,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.126"
+VERSION = "2.0.2"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1562,7 +1563,7 @@ def _udp_listener():
             # in steady state; orient is the high-frequency liveness
             # signal.
             _touch_child_seen(ip)
-            remote = _auto_register_remote(device_id, kind=KIND_PUCK)
+            remote = _auto_register_remote(device_id, kind=KIND_GYRO)
             remote.update_from_euler_deg(
                 roll100/100.0, pitch100/100.0, yaw100/100.0,
             )
@@ -1728,7 +1729,7 @@ def _udp_listener():
                 _gyro_touch_remote(did_wiz)
                 r = _remotes.by_device(did_wiz)
                 if r is None:
-                    r = _auto_register_remote(did_wiz, kind=KIND_PUCK)
+                    r = _auto_register_remote(did_wiz, kind=KIND_GYRO)
                 ok_, resp, status = _apply_aim_wizard_to_remote(r, poses)
                 if ok_:
                     _remotes.save()
@@ -1793,7 +1794,7 @@ def _udp_listener():
                     # Primitive computes R_world_to_stage against the mover's
                     # current stage aim; engine resumes streaming.
                     mover = _mover_fixture(target_mover_id)
-                    remote = _remotes.by_device(did) or _auto_register_remote(did, kind=KIND_PUCK)
+                    remote = _remotes.by_device(did) or _auto_register_remote(did, kind=KIND_GYRO)
                     if mover is not None:
                         aim_stage = _mover_current_aim_stage(mover)
                         if aim_stage is None:
@@ -2194,7 +2195,7 @@ def _gyro_touch_remote(device_id):
     """
     try:
         remote = _remotes.by_device(device_id) or _auto_register_remote(
-            device_id, kind=KIND_PUCK)
+            device_id, kind=KIND_GYRO)
         if remote is not None:
             remote.last_data = time.time()
             if remote.stale_reason == "connection-lost":
@@ -11681,7 +11682,7 @@ def _set_fixture_blackout(engine, uni, addr, prof_info):
 # ── Remote-orientation primitive (#484) — initialised first so the
 #    mover-follow engine below can read it. ────────────────────────────────
 
-from remote_orientation import RemoteRegistry, KIND_PUCK, KIND_PHONE
+from remote_orientation import RemoteRegistry, KIND_GYRO, KIND_PHONE
 
 _remotes = RemoteRegistry(data_path=str(DATA / "remotes.json"))
 _remotes.load()
@@ -11893,7 +11894,7 @@ def api_mover_claim():
     if did:
         remote = _remotes.by_device(did)
         if remote is None:
-            kind = KIND_PHONE if dtype == "android" else KIND_PUCK
+            kind = KIND_PHONE if dtype == "android" else KIND_GYRO
             remote = _remotes.add(device_id=did, kind=kind, name=dname or did)
         else:
             if dname and dname != "Unknown" and remote.name != dname:
@@ -12188,7 +12189,7 @@ def _mover_current_aim_stage(mover):
     return None
 
 
-def _auto_register_remote(device_id, kind=KIND_PUCK):
+def _auto_register_remote(device_id, kind=KIND_GYRO):
     """Return an existing remote for this device or create a fresh one.
 
     The first time we see a sensor stream from a device we haven't stored
@@ -12203,7 +12204,7 @@ def _auto_register_remote(device_id, kind=KIND_PUCK):
     stage_w_mm = float(_stage.get("w", 3.0)) * 1000.0
     stage_d_mm = float(_stage.get("d", 1.5)) * 1000.0
     pos = [stage_w_mm / 2.0, stage_d_mm * 0.7, 1600.0]
-    name = f"Gyro {device_id.split('-', 1)[-1]}" if kind == KIND_PUCK else f"Phone {device_id.split('-', 1)[-1]}"
+    name = f"Gyro {device_id.split('-', 1)[-1]}" if kind == KIND_GYRO else f"Phone {device_id.split('-', 1)[-1]}"
     return _remotes.add(name=name, kind=kind, device_id=device_id, pos=pos)
 
 
@@ -12217,8 +12218,8 @@ def api_remotes_list():
 @app.post("/api/remotes")
 def api_remotes_create():
     body = request.get_json(silent=True) or {}
-    kind = body.get("kind", KIND_PUCK)
-    if kind not in (KIND_PUCK, KIND_PHONE):
+    kind = body.get("kind", KIND_GYRO)
+    if kind not in (KIND_GYRO, KIND_PHONE):
         return jsonify(ok=False, err="invalid kind"), 400
     r = _remotes.add(
         name=body.get("name", ""),
@@ -12334,26 +12335,52 @@ def _aim_wizard_compute(poses):
     roles: ``neutral``, ``pitch_forward``, ``yaw_left``. Optional:
     ``roll_cw`` (sanity check only).
 
-    Returns ``(forward_local, up_local, None)`` on success, or
-    ``(None, None, error_dict)`` on validation failure where
-    ``error_dict`` matches the issue's error contract: ``{err: <code>,
-    detail: <human message>}``.
+    Returns ``(forward_local, up_local, err_dict, diag)``. On success
+    ``err_dict`` is ``None`` and ``diag`` carries every math
+    intermediate the operator (or developer) might want to inspect.
+    On failure ``forward_local`` / ``up_local`` are ``None`` and
+    ``err_dict`` carries ``{err, detail}``; ``diag`` still carries
+    whatever was computed up to the rejection point so the SPA can
+    show the operator EXACTLY what their gestures delivered to the
+    server. This is what was missing from the pre-#885-followup
+    error renderer — operators saw "cross magnitude 0.37" but no way
+    to know which capture went wrong.
 
     Math (issue spec):
     1. ΔQ_pitch_body = conj(Q_neutral) · Q_pitch_fwd  (rotation expressed in body frame)
     2. ΔQ_yaw_body   = conj(Q_neutral) · Q_yaw_left
     3. axis-angle of each Δ → unit pitch/yaw axes (body-frame)
-    4. up_local      = yaw_axis_body
-    5. forward_local = cross(yaw_axis_body, pitch_axis_body)  (right-hand rule)
+    4. forward_local = cross(yaw_axis_body, pitch_axis_body)  (right-hand rule)
+    5. up_local      = cross(forward_local, pitch_axis_body)   (chirality-locked)
 
     Sign is locked by the gesture instructions ("tilt DOWN", "yaw
     LEFT") — no hand-waving about which way is positive.
     """
+    diag = {
+        "inputQuats":       {},
+        "normalizedQuats":  {},
+        "deltaQuats":       {},
+        "pitchAngleDeg":    None,
+        "yawAngleDeg":      None,
+        "pitchAxis":        None,
+        "yawAxis":          None,
+        "crossMagnitude":   None,
+        "forwardLocal":     None,
+        "upLocal":          None,
+    }
+    # Snapshot the raw caller-supplied quats so the SPA can show what
+    # actually arrived at the server.
+    for role, q in poses.items():
+        try:
+            diag["inputQuats"][role] = [float(c) for c in q]
+        except (TypeError, ValueError):
+            diag["inputQuats"][role] = list(q) if q else None
+
     needed = ("neutral", "pitch_forward", "yaw_left")
     for role in needed:
         if role not in poses:
             return None, None, {"err": "missing_pose",
-                                "detail": f"Pose '{role}' is required."}
+                                "detail": f"Pose '{role}' is required."}, diag
 
     def _normq(q):
         w, x, y, z = q
@@ -12400,49 +12427,61 @@ def _aim_wizard_compute(poses):
     for role in ("neutral", "pitch_forward", "yaw_left"):
         nq, m = _normq(poses[role])
         if nq is None:
-            return None, None, {"err": "bad_quaternion",
-                                "detail": f"Pose '{role}' quaternion magnitude "
-                                          f"{m:.3f} outside [0.95, 1.05] — "
-                                          "the sensor wasn't stable. Hold "
-                                          "still and retry."}
+            return None, None, {
+                "err": "bad_quaternion",
+                "detail": f"Pose '{role}' quaternion magnitude "
+                          f"{m:.3f} outside [0.95, 1.05] — "
+                          "the sensor wasn't stable. Hold "
+                          "still and retry."}, diag
         quats[role] = nq
+        diag["normalizedQuats"][role] = list(nq)
 
     # Body-frame delta rotations from neutral.
     dq_pitch = _qmul(_conj(quats["neutral"]), quats["pitch_forward"])
     dq_yaw   = _qmul(_conj(quats["neutral"]), quats["yaw_left"])
+    diag["deltaQuats"]["pitch"] = list(dq_pitch)
+    diag["deltaQuats"]["yaw"]   = list(dq_yaw)
 
     pitch_axis, pitch_angle = _axis_angle(dq_pitch)
     yaw_axis,   yaw_angle   = _axis_angle(dq_yaw)
+    diag["pitchAxis"]     = list(pitch_axis)
+    diag["yawAxis"]       = list(yaw_axis)
+    diag["pitchAngleDeg"] = round(math.degrees(pitch_angle), 3)
+    diag["yawAngleDeg"]   = round(math.degrees(yaw_angle), 3)
 
     # Reject if either gesture rotated < 10° — operator didn't move enough.
     MIN_ANGLE_RAD = math.radians(10)
     if pitch_angle < MIN_ANGLE_RAD:
-        return None, None, {"err": "insufficient_pitch",
-                            "detail": f"Pitch gesture rotated only "
-                                      f"{math.degrees(pitch_angle):.1f}° from "
-                                      "neutral. Tilt the phone further "
-                                      "forward and retry."}
+        return None, None, {
+            "err": "insufficient_pitch",
+            "detail": f"Pitch gesture rotated only "
+                      f"{math.degrees(pitch_angle):.1f}° from "
+                      "neutral. Tilt the phone further "
+                      "forward and retry."}, diag
     if yaw_angle < MIN_ANGLE_RAD:
-        return None, None, {"err": "insufficient_yaw",
-                            "detail": f"Yaw gesture rotated only "
-                                      f"{math.degrees(yaw_angle):.1f}° from "
-                                      "neutral. Yaw the phone further left "
-                                      "and retry."}
+        return None, None, {
+            "err": "insufficient_yaw",
+            "detail": f"Yaw gesture rotated only "
+                      f"{math.degrees(yaw_angle):.1f}° from "
+                      "neutral. Yaw the phone further left "
+                      "and retry."}, diag
 
     # Reject near-parallel pitch/yaw axes (cross magnitude < 0.7
     # implies the operator did similar gestures or sensor noise
     # dominated). Both axes are unit vectors so |cross| ≤ 1.
     fwd = _cross(yaw_axis, pitch_axis)
     fwd_mag = _norm(fwd)
+    diag["crossMagnitude"] = round(fwd_mag, 4)
     if fwd_mag < 0.7:
         return None, None, {
             "err": "degenerate_axes",
             "detail": (f"Pitch and yaw gestures rotated around nearly-"
                        f"parallel axes (cross magnitude {fwd_mag:.2f}). "
                        "Please retry yaw — turn further from neutral, "
-                       "and make sure pitch and yaw are perpendicular.")}
+                       "and make sure pitch and yaw are perpendicular.")}, diag
 
     forward_local = (fwd[0] / fwd_mag, fwd[1] / fwd_mag, fwd[2] / fwd_mag)
+    diag["forwardLocal"] = list(forward_local)
     # #826 — `up_local` was previously `yaw_axis`, but yaw_axis has
     # ambiguous sign: when the operator yaws CW vs CCW for "stage-LEFT"
     # the extracted positive-sense axis flips, and a `up_local` anti-
@@ -12464,8 +12503,9 @@ def _aim_wizard_compute(poses):
         return None, None, {
             "err": "degenerate_axes",
             "detail": ("Wizard math produced parallel forward and "
-                       "pitch axes — please retry the wizard.")}
+                       "pitch axes — please retry the wizard.")}, diag
     up_local = (up_raw[0] / up_mag, up_raw[1] / up_mag, up_raw[2] / up_mag)
+    diag["upLocal"] = list(up_local)
 
     # Optional roll sanity check: roll axis should be ~co-linear with
     # forward_local. |dot| > 0.85 → frame is orthogonal as expected.
@@ -12475,34 +12515,46 @@ def _aim_wizard_compute(poses):
             dq_roll = _qmul(_conj(quats["neutral"]), nq_roll)
             roll_axis, _ra = _axis_angle(dq_roll)
             dot = sum(roll_axis[i] * forward_local[i] for i in range(3))
+            diag["rollAxis"] = list(roll_axis)
+            diag["rollDotForward"] = round(dot, 4)
             if abs(dot) < 0.85:
                 return None, None, {
                     "err": "non_orthogonal_frame",
                     "detail": (f"Roll-axis dot product with derived forward "
                                f"is {dot:+.2f}; expected close to ±1. The "
                                "captured frame isn't orthogonal — please "
-                               "retry the wizard.")}
+                               "retry the wizard.")}, diag
 
-    return forward_local, up_local, None
+    return forward_local, up_local, None, diag
 
 
 def _apply_aim_wizard_to_remote(remote, poses):
     """Run the wizard math against `poses` and apply the result to
-    `remote`. Returns ``(ok, response_dict, http_status)``."""
-    fwd, up, err = _aim_wizard_compute(poses)
+    `remote`. Returns ``(ok, response_dict, http_status)``.
+
+    The response dict always carries a ``diagnostics`` block (#885
+    follow-up) so a failure renderer can show the operator the exact
+    quats the server saw and the math intermediates that drove the
+    rejection. Pre-fix the SPA rendered only the human-readable
+    `detail` string; operators hit ``degenerate_axes`` ("cross
+    magnitude 0.37") with no way to know which capture went wrong.
+    """
+    fwd, up, err, diag = _aim_wizard_compute(poses)
     if err is not None:
-        return False, {"ok": False, **err}, 400
+        return False, {"ok": False, "diagnostics": diag, **err}, 400
     try:
         remote.set_grip(forward_local=fwd, up_local=up)
     except (TypeError, ValueError) as e:
         return False, {"ok": False, "err": "set_grip_failed",
-                       "detail": str(e)}, 400
+                       "detail": str(e),
+                       "diagnostics": diag}, 400
     # #826 — invalidating the existing R_world_to_stage matches the
     # `set_grip` semantics (axis change → cal stale). Operator must
     # re-anchor against a known target after wizard runs.
     return True, {"ok": True,
                   "forwardLocal": list(fwd),
-                  "upLocal": list(up)}, 200
+                  "upLocal": list(up),
+                  "diagnostics": diag}, 200
 
 
 def _parse_wizard_payload(body):
@@ -12525,12 +12577,43 @@ def _parse_wizard_payload(body):
     return out
 
 
+# #885 — stale-remote guard for the aim-wizard routes. When a Remote
+# is stale (the orient session ended, the puck/phone left the network,
+# etc.), `last_quat_world` is the *cached* last reading, not a live
+# value. Pre-#885 the SPA's Capture flow polled the diagnostic
+# endpoint, got the same cached quat three times in a row, and the
+# server math correctly rejected with `insufficient_pitch` because
+# Q_neutral == Q_pitch_forward == Q_yaw_left. The operator's actual
+# wrist motion couldn't be honoured because no orient packets were
+# flowing to refresh the cache.
+#
+# Reject server-side with a specific `gyro_not_streaming` code so
+# both routes (and any external caller, not just the SPA) get the
+# truthful diagnosis. The SPA's #878 error renderer already surfaces
+# `detail` strings via the existing `r.err`/`r.detail` plumbing.
+_STALE_WIZARD_MSG = ("Gyro is idle — press Start first, then re-run "
+                     "Calibrate.")
+
+
+def _reject_if_stale(r):
+    """Return a (resp, status) tuple to send back when the Remote can't
+    drive a fresh wizard run, or ``None`` if the Remote is live."""
+    if r.stale_reason is not None:
+        return ({"ok": False, "err": "gyro_not_streaming",
+                 "detail": _STALE_WIZARD_MSG,
+                 "staleReason": r.stale_reason}, 400)
+    return None
+
+
 @app.post("/api/remotes/<int:remote_id>/aim-wizard")
 def api_remote_aim_wizard(remote_id):
     """#826 — empirical aim-axis wizard, by remote-row id."""
     r = _remotes.get(remote_id)
     if r is None:
         return jsonify(ok=False, err="not_found"), 404
+    stale = _reject_if_stale(r)
+    if stale is not None:
+        return jsonify(stale[0]), stale[1]
     body = request.get_json(silent=True) or {}
     poses = _parse_wizard_payload(body)
     ok_, resp, status = _apply_aim_wizard_to_remote(r, poses)
@@ -12557,7 +12640,17 @@ def api_remote_aim_wizard_by_device():
     # that shape. Pick KIND_GYRO when the prefix matches so a fresh
     # wizard run lands the right kind on the new Remote.
     auto_kind = KIND_GYRO if did.startswith("gyro-") else KIND_PHONE
-    r = _remotes.by_device(did) or _auto_register_remote(did, kind=auto_kind)
+    existing = _remotes.by_device(did)
+    # #885 — only enforce the stale-guard against an existing Remote.
+    # A first-time auto-register has no orient history yet and the
+    # wizard math itself will reject with `bad_quaternion` if the
+    # caller didn't supply real quats; we don't want to refuse the
+    # very first call before the Remote even exists.
+    if existing is not None:
+        stale = _reject_if_stale(existing)
+        if stale is not None:
+            return jsonify(stale[0]), stale[1]
+    r = existing or _auto_register_remote(did, kind=auto_kind)
     ok_, resp, status = _apply_aim_wizard_to_remote(r, poses)
     if ok_:
         _remotes.save()
@@ -12699,13 +12792,27 @@ def api_remote_diagnostic(remote_id):
     # the trace.
     from remote_math import quat_rotate_vec
     q = r.last_quat_world
-    body_fwd_world = list(quat_rotate_vec(q, r.forward_local)) if q else None
-    body_up_world  = list(quat_rotate_vec(q, r.up_local))      if q else None
+    # #885 — when the Remote is stale (session ended, lost, etc.) the
+    # cached last_quat_world is no longer a live reading; surfacing it
+    # as `rawQuat` lets the SPA aim-wizard capture the same poisoned
+    # value three times and reject with `insufficient_pitch` even
+    # though the operator visibly moved the device. Hide the cache
+    # when stale so the SPA's existing null-check fires and the
+    # operator sees "No quaternion received from the gyro yet"
+    # instead. Server-side wizard guard (Option 3 below) still
+    # rejects with `gyro_not_streaming` so non-SPA callers get the
+    # same protection.
+    is_stale = r.stale_reason is not None
+    live_q = None if is_stale else q
+    body_fwd_world = (list(quat_rotate_vec(live_q, r.forward_local))
+                      if live_q else None)
+    body_up_world  = (list(quat_rotate_vec(live_q, r.up_local))
+                      if live_q else None)
     return jsonify({
         "id":                 r.id,
         "deviceId":           r.device_id,
         "kind":               r.kind,
-        "rawQuat":            list(q) if q else None,
+        "rawQuat":            list(live_q) if live_q else None,
         "bodyForwardLocal":   list(r.forward_local),
         "bodyUpLocal":        list(r.up_local),
         "bodyForwardInWorld": body_fwd_world,
@@ -18774,39 +18881,101 @@ def serve_help_image(filename):
         return "", 404
 
 
+# #881 — granular help keys. The SPA passes a dotted hierarchical key
+# like ``setup.add-fixture.step-2-address`` or ``settings.dmx-monitor``;
+# the resolver walks up the hierarchy until it finds a fragment that
+# exists on disk, so an authored ``setup.add-fixture.html`` covers all
+# wizard steps until per-step fragments ship.
+_HELP_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9.\-]*$")
+
+
+def _resolve_help_fragment(key, lang):
+    """Walk a dotted help key up its hierarchy until a fragment exists.
+
+    Given ``setup.add-fixture.step-2-address`` and only
+    ``setup.add-fixture.html`` on disk, returns the path to the
+    add-fixture fragment. Falls through to the legacy ``_HELP_SLUGS``
+    map (which translates ``settings`` → ``12-dmx-profiles`` etc.)
+    when no dotted variant matches, then to ``None`` so the caller
+    can serve a stub.
+
+    Refuses path traversal: any key with ``..`` / ``/`` / ``\\`` is
+    treated as if the fragment doesn't exist. The HTML output of the
+    pandoc build is plain dotted slugs so the constraint is invisible
+    to the legitimate caller.
+    """
+    help_dir = DOCS_ROOT / "build" / lang / "help"
+    if not key or not _HELP_KEY_RE.match(key):
+        return None
+    parts = key.split(".")
+    while parts:
+        slug = ".".join(parts)
+        path = help_dir / f"{slug}.html"
+        # Path traversal guard — resolve relative to help_dir and verify
+        # we stayed inside it. Cheap belt-and-braces over the regex.
+        try:
+            resolved = path.resolve()
+            help_resolved = help_dir.resolve()
+            if help_resolved in resolved.parents and resolved.is_file():
+                return resolved
+        except (OSError, ValueError):
+            pass
+        parts.pop()
+    # Legacy fallback: the top-level segment may match an entry in the
+    # tab → chapter slug map. ``settings.dmx-monitor`` with no fragment
+    # falls to ``settings`` → ``12-dmx-profiles.html``.
+    top = key.split(".", 1)[0]
+    legacy_slug = _HELP_SLUGS.get(top)
+    if legacy_slug:
+        path = help_dir / f"{legacy_slug}.html"
+        if path.is_file():
+            return path
+    return None
+
+
 @app.get("/api/help/<section>")
 def api_help(section):
-    """Return help content for a given SPA tab or section slug.
+    """Return help content for a given SPA tab or granular helpkey.
 
-    Resolution order (#670):
-    1. If a pre-built fragment exists at
-       ``docs/build/{lang}/help/{slug}.html`` (produced by
-       ``tools/docs/build.py --format help``), return it verbatim — it
-       already has Pandoc-rendered tables, code blocks, and glossary
-       ``<abbr>`` markers the SPA hover layer consumes.
-    2. Fall back to the legacy USER_MANUAL.md heading scanner for
-       installs that haven't shipped the per-section build output yet.
+    Resolution order (#670, #881):
+    1. Exact match: ``docs/build/{lang}/help/{key}.html``.
+    2. Walk up the dotted hierarchy: drop the trailing segment and retry
+       until a fragment is found, so authored sub-keys override
+       coarser chapter fragments and missing keys fall back naturally.
+    3. Legacy ``_HELP_SLUGS`` chapter-level map (``settings`` →
+       ``12-dmx-profiles``).
+    4. Legacy USER_MANUAL.md heading scanner for installs whose docs
+       build hasn't run yet.
+    5. A 200-with-stub fragment so the SPA never has to handle a 404 —
+       the side panel always has something to render.
     """
     lang = _resolve_lang()
     slug = _HELP_SLUGS.get(section, section)
-    fragment = DOCS_ROOT / "build" / lang / "help" / f"{slug}.html"
-    if fragment.exists():
+    fragment = _resolve_help_fragment(section, lang)
+    if fragment is not None:
         try:
             return jsonify(html=fragment.read_text(encoding="utf-8"),
-                           lang=lang, slug=slug, source="fragment")
+                           lang=lang, slug=fragment.stem, source="fragment")
         except Exception as e:
             log.warning("help fragment read failed %s: %s", fragment, e)
 
     # ── Legacy fallback: scan USER_MANUAL.md for the anchor heading ──
+    # #881 — when the key is dotted (``settings.dmx-monitor``), the
+    # heading map only has the top-level segment, so scan against that.
+    top_segment = section.split(".", 1)[0]
     manual_path = DOCS_ROOT / ("USER_MANUAL_fr.md" if lang == "fr"
                                 else "USER_MANUAL.md")
     if not manual_path.exists():
         manual_path = DOCS_ROOT / "USER_MANUAL.md"
     if not manual_path.exists():
-        return jsonify(html="<p>User manual not found.</p>", lang=lang)
+        return jsonify(html=_help_stub_html(section), lang=lang,
+                       slug=slug, source="stub")
     try:
         text = manual_path.read_text(encoding="utf-8")
-        anchor = _HELP_SECTIONS.get(section, section)
+        anchor = _HELP_SECTIONS.get(top_segment) or _HELP_SECTIONS.get(section)
+        if not anchor:
+            return jsonify(html=_help_stub_html(section), lang=lang,
+                           slug=slug, source="stub")
         lines = text.split("\n")
         collecting = False
         result = []
@@ -18820,8 +18989,8 @@ def api_help(section):
             if collecting:
                 result.append(line)
         if not result:
-            return jsonify(html=f"<p>No help found for '{section}'.</p>",
-                           lang=lang)
+            return jsonify(html=_help_stub_html(section), lang=lang,
+                           slug=slug, source="stub")
         html = ""
         for line in result:
             if line.startswith("### "):
@@ -18837,6 +19006,25 @@ def api_help(section):
         return jsonify(html=html, lang=lang, slug=slug, source="legacy-scan")
     except Exception as e:
         return jsonify(html=f"<p>Error loading help: {e}</p>", lang=lang)
+
+
+def _help_stub_html(key):
+    """#881 — fallback body when no fragment / chapter matches.
+
+    The UI expects every ``/api/help/*`` response to have renderable
+    HTML; a 404 would leave the side panel empty and confuse the
+    operator. The stub points back to the full manual so the operator
+    has a recovery path.
+    """
+    safe = (key or "").replace("<", "&lt;").replace(">", "&gt;")
+    return (
+        f"<h3 style='color:#22d3ee;margin:0 0 .6em'>Help</h3>"
+        f"<p style='color:#cbd5e1;margin:.3em 0'>No targeted help fragment "
+        f"is available for <code>{safe}</code> yet.</p>"
+        f"<p style='margin:.5em 0'>Try the "
+        f"<a href='/help' target='_blank' style='color:#22d3ee'>full user "
+        f"manual</a> for complete documentation.</p>"
+    )
 
 
 @app.get("/api/glossary")
@@ -19416,6 +19604,10 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
+
+
 
 
 

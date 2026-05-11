@@ -236,7 +236,7 @@ def test_860_slymovehead_geometry_orient_to_pan_smooth():
     rig.
     """
     print("\n-- test_860_slymovehead_geometry_orient_to_pan_smooth --")
-    from remote_orientation import KIND_PUCK as _KP_860
+    from remote_orientation import KIND_GYRO as _KP_860
     with parent_server.app.test_client() as c:
         c.post("/api/reset", headers={"X-SlyLED-Confirm": "true"})
         c.post("/api/dmx/start", json={"protocol": "artnet"})

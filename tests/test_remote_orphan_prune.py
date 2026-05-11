@@ -38,7 +38,7 @@ def section(s):
 
 section('Remote.registered_at')
 before = time.time()
-r = ro.Remote(id=1, name='Gyro 1', kind=ro.KIND_PUCK)
+r = ro.Remote(id=1, name='Gyro 1', kind=ro.KIND_GYRO)
 after = time.time()
 ok(before <= r.registered_at <= after,
    f'registered_at within construction window (got {r.registered_at})')
@@ -100,9 +100,9 @@ with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as f:
     path = f.name
 try:
     reg = ro.RemoteRegistry(data_path=path)
-    fresh = reg.add(name='Fresh Gyro', kind=ro.KIND_PUCK,
+    fresh = reg.add(name='Fresh Gyro', kind=ro.KIND_GYRO,
                      device_id='gyro-1.2.3.4')
-    orphan = reg.add(name='Orphan Gyro', kind=ro.KIND_PUCK,
+    orphan = reg.add(name='Orphan Gyro', kind=ro.KIND_GYRO,
                      device_id='gyro-9.9.9.9')
     # Backdate the orphan's registered_at past the hard cutoff.
     orphan.registered_at = time.time() - (ro.STALE_NEVER_HARD_SECS + 10)

@@ -127,7 +127,7 @@ en:
   fragment: docs/build/en/help/appendix-d-idle-behaviour.html
 - slug: appendix-e-remote-control
   file: docs/src/en/appendix-e-remote-control.md
-  title: 'Appendix E — Remote Control: Android Phone & Gyro Puck'
+  title: 'Appendix E — Remote Control: Android Phone & Gyro Gyro'
   lang: en
   fragment: docs/build/en/help/appendix-e-remote-control.html
 fr:

@@ -134,11 +134,26 @@ def build_help_fragments(lang: str) -> Path:
     """Split the assembled markdown into per-section HTML fragments.
 
     Output: ``docs/build/{lang}/help/<section-slug>.html``. These feed the
-    SPA's ``/api/help/<section>`` endpoint (#670 wires the runtime).
+    SPA's ``/api/help/<section>`` endpoint (#670 wires the runtime; #881
+    adds granular sub-keys for sub-sections / modals / modes).
+
+    Sources:
+    1. ``docs/src/{lang}/*.md`` — chapter-level fragments named by file
+       stem (``04-fixture-setup.md`` → ``04-fixture-setup.html``).
+    2. ``docs/src/{lang}/help-fragments/*.md`` — granular helpkey
+       fragments (``setup.edit-fixture.gyro.md`` →
+       ``setup.edit-fixture.gyro.html``). The dotted filename is the
+       exact key the SPA resolves against (#881).
     """
     out_dir = BUILD / lang / 'help'
     out_dir.mkdir(parents=True, exist_ok=True)
-    for src in section_files(lang):
+
+    sources = list(section_files(lang))
+    granular_dir = SRC / lang / 'help-fragments'
+    if granular_dir.is_dir():
+        sources.extend(sorted(granular_dir.glob('*.md')))
+
+    for src in sources:
         slug = src.stem
         out = out_dir / f'{slug}.html'
         if _have('pandoc'):
@@ -153,7 +168,7 @@ def build_help_fragments(lang: str) -> Path:
                                                     errors='replace') + '</pre>',
                             encoding='utf-8')
     log.info('help [%s]: %d fragments → %s',
-             lang, len(section_files(lang)), out_dir.relative_to(ROOT))
+             lang, len(sources), out_dir.relative_to(ROOT))
     return out_dir
 
 

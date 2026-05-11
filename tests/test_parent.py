@@ -3373,10 +3373,10 @@ def run():
 
         # Path A — gyro with R_world_to_stage set against this mover →
         # claim should be calibrated immediately.
-        from remote_orientation import KIND_PUCK as _KIND_PUCK_847
+        from remote_orientation import KIND_GYRO as _KIND_GYRO_847
         cal_dev_id = '#847-cross-session-gyro'
         cal_remote = _ps_pb._remotes.add(
-            name='Cross-session gyro', kind=_KIND_PUCK_847,
+            name='Cross-session gyro', kind=_KIND_GYRO_847,
             device_id=cal_dev_id)
         cal_remote.R_world_to_stage = (1.0, 0.0, 0.0, 0.0)  # identity quat
         cal_remote.calibrated_against = {'kind': 'mover',
@@ -3407,7 +3407,7 @@ def run():
         # cross-session cal → claim should NOT be calibrated.
         neg_dev_id = '#847-uncalibrated-gyro'
         neg_remote = _ps_pb._remotes.add(
-            name='Uncalibrated gyro', kind=_KIND_PUCK_847,
+            name='Uncalibrated gyro', kind=_KIND_GYRO_847,
             device_id=neg_dev_id)
         neg_remote.R_world_to_stage = None  # explicit: no cal
         neg_remote.calibrated_against = None
@@ -3431,7 +3431,7 @@ def run():
         # Should NOT trust the cal for this mover.
         other_dev_id = '#847-other-mover-gyro'
         other_remote = _ps_pb._remotes.add(
-            name='Other-mover gyro', kind=_KIND_PUCK_847,
+            name='Other-mover gyro', kind=_KIND_GYRO_847,
             device_id=other_dev_id)
         other_remote.R_world_to_stage = (1.0, 0.0, 0.0, 0.0)
         other_remote.calibrated_against = {'kind': 'mover',
@@ -3558,7 +3558,7 @@ def run():
         #   1. Orient input change → claim.panNorm changes
         #   2. Stable orient → stable panNorm (no IK jitter)
         #   3. Orient range coverage → panNorm spans non-trivial range
-        from remote_orientation import KIND_PUCK as _KIND_PUCK_851
+        from remote_orientation import KIND_GYRO as _KIND_GYRO_851
 
         # Mover with Home + Secondary + true mover profile.
         r = c.post('/api/fixtures', json={
@@ -3583,7 +3583,7 @@ def run():
         # Gyro Remote pre-cal'd against the mover (#847 path).
         loop_dev = '#851-loop-gyro'
         loop_remote = _ps_pb._remotes.add(
-            name='Loop-test gyro', kind=_KIND_PUCK_851, device_id=loop_dev)
+            name='Loop-test gyro', kind=_KIND_GYRO_851, device_id=loop_dev)
         loop_remote.R_world_to_stage = (1.0, 0.0, 0.0, 0.0)
         loop_remote.calibrated = True
         loop_remote.calibrated_at = _time_pb.time()

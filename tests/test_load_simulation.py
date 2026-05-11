@@ -216,12 +216,12 @@ def seed_gyros(c, n=2):
     """Add N gyro Remotes pre-calibrated against fixture 0 (so the
     claim writer trusts cross-session cal per #847). Returns the
     device-id list and the Remote handles."""
-    from remote_orientation import KIND_PUCK
+    from remote_orientation import KIND_GYRO
     remotes = []
     for i in range(n):
         did = f"gyro-load-{i:02d}"
         rem = parent_server._remotes.add(
-            name=f"LoadPuck{i}", kind=KIND_PUCK, device_id=did)
+            name=f"LoadPuck{i}", kind=KIND_GYRO, device_id=did)
         rem.R_world_to_stage = (1.0, 0.0, 0.0, 0.0)
         rem.calibrated = True
         rem.calibrated_at = time.time()

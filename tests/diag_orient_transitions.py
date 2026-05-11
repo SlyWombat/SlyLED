@@ -29,7 +29,7 @@ from remote_math import (
 )
 from remote_orientation import (
     KIND_PHONE,
-    KIND_PUCK,
+    KIND_GYRO,
     OrientConvention,
     Remote,
 )
@@ -113,7 +113,7 @@ _trace(
 # 1B. Gyro (LCD-up, forward=+X), same +30° world-Z yaw.
 _trace(
     "Pattern1B: gyro LCD-up, +30° world-Z yaw",
-    kind=KIND_PUCK,
+    kind=KIND_GYRO,
     forward_local=(1.0, 0.0, 0.0),
     up_local=(0.0, 0.0, 1.0),
     calib_quat=(1.0, 0.0, 0.0, 0.0),
@@ -146,7 +146,7 @@ _trace(
 # 2C. Gyro LCD-up, pitch -30° around world +Y. forward=(1,0,0), FLIPS.
 _trace(
     "Pattern2C: gyro LCD-up, -30° world-Y pitch (forward=+X)",
-    kind=KIND_PUCK,
+    kind=KIND_GYRO,
     forward_local=(1.0, 0.0, 0.0),
     up_local=(0.0, 0.0, 1.0),
     calib_quat=(1.0, 0.0, 0.0, 0.0),
