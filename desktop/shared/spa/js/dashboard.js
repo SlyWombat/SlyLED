@@ -134,7 +134,16 @@ function _refreshRemotesDash(){
       // Falls through to the registry name if no fixture is mapped to
       // this deviceId yet (e.g. first orient packet beat the fixture
       // record).
-      var fixName=isGyro?_gyroFixtureNameForDeviceId(r.deviceId):null;
+      // Prefer the server-stamped `fixtureName` (resolved against
+      // the live `_fixtures` + `_children` registries) over the
+      // SPA-side `_gyroFixtureNameForDeviceId` helper that reads
+      // window globals that aren't always populated. Fall back to
+      // the helper for older orchestrators that don't stamp the
+      // field, then to the registry name.
+      var fixName=null;
+      if(isGyro){
+        fixName=r.fixtureName||_gyroFixtureNameForDeviceId(r.deviceId);
+      }
       var rawName=fixName||r.name||('Remote '+r.id);
       var displayName=GUID_RX.test(rawName)?'Phone (unknown host)':rawName;
       var subline;

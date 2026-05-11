@@ -12574,6 +12574,27 @@ def api_remotes_live():
     sources uniformly so the operator can see, at a glance, every
     device that's currently driving the rig."""
     snap = list(_remotes.live_list())
+    # Stamp the operator-assigned gyro fixture name onto each
+    # gyro-* remote so the Dashboard Remote Controllers card can
+    # render it directly without having to walk children + fixtures
+    # in the browser (the SPA's `window._children` and `window._fixtures`
+    # globals aren't populated; doing the resolution server-side is the
+    # single source of truth). Resolution chain: deviceId `gyro-<ip>`
+    # → child by IP → gyro fixture with matching `gyroChildId` → name.
+    for r in snap:
+        did = r.get("deviceId") or ""
+        if not did.startswith("gyro-"):
+            continue
+        ip = did[5:]
+        child = next((c for c in _children if c.get("ip") == ip), None)
+        if child is None:
+            continue
+        gf = next((f for f in _fixtures
+                   if f.get("fixtureType") == "gyro"
+                   and f.get("gyroChildId") == child.get("id")
+                   and f.get("name")), None)
+        if gf is not None:
+            r["fixtureName"] = gf["name"]
     # #849 Part 2 — surface Android Auto Brightness as a virtual remote
     # so the operator can see whether `/api/brightness` traffic is
     # actually arriving and which IP is driving. Pre-fix the Android

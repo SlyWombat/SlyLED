@@ -204,9 +204,22 @@ function _renderSetup(){
           var st=c.status===1?'<span class="badge bon">Online</span>'+rssiHtml+lockHtml:'<span class="badge boff">Offline</span>';
           var fwVer=c.fwVersion||'—';
           var fwHtml=escapeHtml(fwVer)+'<span id="fw-ind-'+c.id+'"></span>';
-          // Name: show altName as primary if set, hostname as secondary (#464)
-          var primaryName=c.altName||c.name||c.hostname||'Gyro';
-          var secondaryName=(c.altName&&c.hostname&&c.altName!==c.hostname)?'<br><span style="color:#64748b;font-size:.75em">'+escapeHtml(c.hostname)+'</span>':'';
+          // Name: prefer the operator-assigned gyro FIXTURE name
+          // (set on the Configure modal) over the auto-discovered
+          // child hostname / altName. The fixture name is what the
+          // operator chose for this physical device; the child
+          // hostname is whatever Windows / DHCP picked. Fall back
+          // through altName → name → hostname when no gyro fixture
+          // is bound yet.
+          var gyroFix=null;
+          for(var _gi=0;_gi<_fixtures.length;_gi++){
+            var _gf=_fixtures[_gi];
+            if(_gf.fixtureType==='gyro'&&_gf.gyroChildId===c.id&&_gf.name){
+              gyroFix=_gf;break;
+            }
+          }
+          var primaryName=(gyroFix&&gyroFix.name)||c.altName||c.name||c.hostname||'Gyro';
+          var secondaryName=(c.hostname&&primaryName!==c.hostname)?'<br><span style="color:#64748b;font-size:.75em">'+escapeHtml(c.hostname)+'</span>':'';
           var acts='<button class="btn btn-on" onclick="refreshChild('+c.id+')">Refresh</button>';
           if(c.status!==1)acts+=' <button class="btn" onclick="findChild('+c.id+',this)" style="background:#1e3a5f;color:#93c5fd">Find</button>';
           acts+=' <button class="btn" onclick="rebootChild('+c.id+')" style="background:#654;color:#fff">Reboot</button>'
