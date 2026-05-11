@@ -8,3 +8,4 @@ qrcode>=7.0
 paramiko>=3.0
 numpy>=1.26
 opencv-python-headless>=4.9
+sounddevice>=0.4

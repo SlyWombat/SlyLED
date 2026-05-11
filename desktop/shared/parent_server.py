@@ -2360,6 +2360,14 @@ def start_background_tasks():
     # mid-download show installing=true via /api/ai/status; warmup just
     # skips them and the operator can press Test once the install finishes.
     threading.Thread(target=_ai_helpers_warmup, daemon=True).start()
+    # #879 — initialise local-audio-brightness so a persisted-enabled
+    # config auto-resumes capture after orchestrator restart. Lazy: the
+    # init only does work if `localAudioBrightness.enabled` is True on
+    # disk; otherwise the instance is created but quiescent.
+    try:
+        _init_local_audio_bri()
+    except Exception as e:
+        log.info("LocalAudioBrightness startup init failed: %s", e)
     # No auto-claim on boot. The UDP CMD_GYRO_ORIENT handler auto-claims
     # on the first orient packet from an enabled gyro fixture, which is
     # the operator pressing Start on the gyro. That's what turns the
@@ -16441,6 +16449,96 @@ def _handle_autobri_push(ip, data):
         _log_brightness_hop(ip, int(master), prev_bri)
     except Exception as e:
         log.warning("AUTOBRI_PUSH handler failed: %s", e)
+
+
+# #879 — local audio brightness producer. Uses the same coalescing
+# dispatch as the Android #861 UDP path so the consumer side is
+# identical (DMX gating, /api/remotes/live virtual source). Lazily
+# initialised on first settings-update or at startup if the operator
+# left it enabled in the persisted settings.
+_local_audio_bri = None
+_LOCAL_AUDIO_BRI_SOURCE = "local-audio"
+
+
+def _local_audio_push_callback(master, flags, seq):
+    """Bridge `LocalAudioBrightness` → `_handle_autobri_push`. Builds
+    the same wire shape Android's UDP packet would carry, so the same
+    handler coalesces both producers identically. `ip` is replaced by
+    a constant source-id string so the dashboard surfaces it as a
+    'Local audio' virtual remote alongside any Android phone push."""
+    try:
+        # Build the same 11-byte payload the AUTOBRI_PUSH handler
+        # expects: header(8) + master(1) + flags(1) + seq(1). The
+        # header bytes after the 4-byte magic+ver+cmd prefix are
+        # ignored by the handler, so any constant filler works.
+        pkt = struct.pack("<HBBI", UDP_MAGIC, UDP_VERSION,
+                          CMD_AUTOBRI_PUSH, 0) \
+              + struct.pack("<BBB", int(master) & 0xFF,
+                            int(flags) & 0xFF, int(seq) & 0xFF)
+        _handle_autobri_push(_LOCAL_AUDIO_BRI_SOURCE, pkt)
+    except Exception as e:
+        log.debug("local-audio push callback failed: %s", e)
+
+
+def _init_local_audio_bri():
+    """Construct the singleton + apply persisted settings. Idempotent:
+    returns the existing instance on repeat calls."""
+    global _local_audio_bri
+    if _local_audio_bri is not None:
+        return _local_audio_bri
+    try:
+        from local_audio_brightness import LocalAudioBrightness
+    except Exception as e:
+        log.info("LocalAudioBrightness unavailable: %s", e)
+        return None
+    _local_audio_bri = LocalAudioBrightness(_local_audio_push_callback)
+    persisted = _settings.get("localAudioBrightness") or {}
+    if persisted:
+        try:
+            _local_audio_bri.update_config(persisted)
+        except Exception as e:
+            log.warning("LocalAudioBrightness apply persisted failed: %s", e)
+    return _local_audio_bri
+
+
+@app.get("/api/local-audio-brightness/devices")
+def api_local_audio_bri_devices():
+    """List input devices the orchestrator can capture from. Empty
+    when sounddevice isn't installed."""
+    inst = _init_local_audio_bri()
+    if inst is None:
+        return jsonify(available=False, devices=[])
+    return jsonify(available=inst.is_available(),
+                   devices=inst.list_devices())
+
+
+@app.get("/api/local-audio-brightness")
+def api_local_audio_bri_status():
+    """Current settings + live status. `currentMaster` and `envelope`
+    update at the capture-rate so the SPA can show a live VU bar."""
+    inst = _init_local_audio_bri()
+    if inst is None:
+        return jsonify(available=False, enabled=False, config={})
+    return jsonify(inst.get_status())
+
+
+@app.post("/api/local-audio-brightness")
+def api_local_audio_bri_update():
+    """Merge body into the config + restart capture if needed. Body:
+    `{enabled?, device?, gain?, floor?, ceiling?, attackMs?, releaseMs?}`.
+    The Settings page wires every input through here."""
+    inst = _init_local_audio_bri()
+    if inst is None:
+        return jsonify(ok=False,
+                       err="sounddevice not installed on this server"), 503
+    body = request.get_json(silent=True) or {}
+    new_status = inst.update_config(body)
+    # Persist the operator's choice so the feature comes back enabled
+    # after a restart.
+    with _lock:
+        _settings["localAudioBrightness"] = dict(new_status.get("config", {}))
+    _save("settings", _settings)
+    return jsonify(ok=True, status=new_status)
 
 
 # #804 — fast-path master brightness for Android auto-brightness (mic-driven).

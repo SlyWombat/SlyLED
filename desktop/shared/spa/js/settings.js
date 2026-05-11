@@ -68,6 +68,8 @@ function loadSettings(){
     if(lpi&&d.logPath)lpi.value=d.logPath;
     _refreshLogStatus();
   });
+  // #879 — local-audio brightness section
+  _labLoad();
   // Load stage dimensions (meters → mm for display)
   ra('GET','/api/stage',null,function(st){
     if(!st)return;
@@ -1080,4 +1082,107 @@ function resetCalTuning(btn){
     if(x.status===200){loadCalTuning();}
   };
   x.send(JSON.stringify({calibrationTuning:{}}));
+}
+
+
+// #879 — local audio brightness ────────────────────────────────────────────
+// Settings card on the General tab; wires the operator's toggles +
+// sliders to /api/local-audio-brightness. Polls /api/local-audio-brightness
+// at 4 Hz while the Settings tab is visible to drive the live VU bar.
+function _labLoad(){
+  // Stop any prior poll from a previous visit to the tab.
+  if(window._labPoll){clearInterval(window._labPoll);window._labPoll=null;}
+  ra('GET','/api/local-audio-brightness/devices',null,function(d){
+    var sel=document.getElementById('lab-device');
+    if(!sel)return;
+    sel.innerHTML='';
+    if(!d||d.available===false){
+      var ua=document.getElementById('lab-unavailable');
+      var ui=document.getElementById('lab-ui');
+      if(ua)ua.style.display='';
+      if(ui)ui.style.display='none';
+      return;
+    }
+    var optDefault=document.createElement('option');
+    optDefault.value='';
+    optDefault.textContent='(system default)';
+    sel.appendChild(optDefault);
+    (d.devices||[]).forEach(function(dev){
+      var opt=document.createElement('option');
+      opt.value=dev.index;
+      opt.textContent=dev.name+(dev.isDefault?' (default)':'');
+      sel.appendChild(opt);
+    });
+    ra('GET','/api/local-audio-brightness',null,function(s){
+      if(!s)return;
+      var cfg=s.config||{};
+      var en=document.getElementById('lab-enabled');if(en)en.checked=!!cfg.enabled;
+      if(cfg.device==null){sel.value='';}else{sel.value=String(cfg.device);}
+      var g=document.getElementById('lab-gain');if(g&&cfg.gain!=null)g.value=cfg.gain;
+      var fl=document.getElementById('lab-floor');if(fl&&cfg.floor!=null)fl.value=cfg.floor;
+      var ce=document.getElementById('lab-ceil');if(ce&&cfg.ceiling!=null)ce.value=cfg.ceiling;
+      var at=document.getElementById('lab-attack');if(at&&cfg.attackMs!=null)at.value=cfg.attackMs;
+      var rl=document.getElementById('lab-release');if(rl&&cfg.releaseMs!=null)rl.value=cfg.releaseMs;
+      _labLiveLbl();
+      // Start the live VU poll.
+      window._labPoll=setInterval(_labPollLive,250);
+    });
+  });
+}
+
+function _labLiveLbl(){
+  var g=document.getElementById('lab-gain');
+  var fl=document.getElementById('lab-floor');
+  var ce=document.getElementById('lab-ceil');
+  var at=document.getElementById('lab-attack');
+  var rl=document.getElementById('lab-release');
+  if(g)document.getElementById('lab-gain-val').textContent=parseFloat(g.value).toFixed(2);
+  if(fl)document.getElementById('lab-floor-val').textContent=fl.value;
+  if(ce)document.getElementById('lab-ceil-val').textContent=ce.value;
+  if(at)document.getElementById('lab-attack-val').textContent=at.value+' ms';
+  if(rl)document.getElementById('lab-release-val').textContent=rl.value+' ms';
+}
+
+function _labSave(){
+  _labLiveLbl();
+  var sel=document.getElementById('lab-device');
+  var deviceVal=sel?sel.value:'';
+  var body={
+    enabled: !!(document.getElementById('lab-enabled')||{}).checked,
+    device:  deviceVal===''?null:parseInt(deviceVal,10),
+    gain:    parseFloat((document.getElementById('lab-gain')||{}).value||1.5),
+    floor:   parseInt((document.getElementById('lab-floor')||{}).value||0,10),
+    ceiling: parseInt((document.getElementById('lab-ceil')||{}).value||255,10),
+    attackMs:  parseFloat((document.getElementById('lab-attack')||{}).value||5),
+    releaseMs: parseFloat((document.getElementById('lab-release')||{}).value||200),
+  };
+  ra('POST','/api/local-audio-brightness',body,function(r){
+    if(r&&r.ok===false){
+      var hs=document.getElementById('hs');
+      if(hs)hs.textContent='Audio brightness: '+(r.err||'failed');
+    }
+  });
+}
+
+function _labPollLive(){
+  // Stop polling when the Settings tab isn't visible. The settings
+  // tab activator can re-arm via _labLoad on next visit.
+  var t=document.getElementById('t-settings');
+  if(!t||t.style.display==='none'){
+    if(window._labPoll){clearInterval(window._labPoll);window._labPoll=null;}
+    return;
+  }
+  ra('GET','/api/local-audio-brightness',null,function(s){
+    if(!s)return;
+    var m=s.currentMaster!=null?s.currentMaster:0;
+    var env=s.envelope!=null?s.envelope:0;
+    var bar=document.getElementById('lab-vu-bar');
+    if(bar)bar.style.width=Math.round((m/255)*100)+'%';
+    var mv=document.getElementById('lab-vu-master');
+    if(mv)mv.textContent=m;
+    var ev=document.getElementById('lab-vu-env');
+    if(ev)ev.textContent=env.toFixed(3);
+    var du=document.getElementById('lab-device-in-use');
+    if(du)du.textContent=s.deviceInUse?('on: '+s.deviceInUse):'';
+  });
 }

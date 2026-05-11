@@ -380,6 +380,62 @@
       </div>
     </div>
     <div class='card'>
+      <div class='card-title'>Auto Brightness — Local Audio Input</div>
+      <p style='font-size:.78em;color:#94a3b8;margin:.2em 0 .8em'>
+        Capture audio from a mic / line-in / loopback on this machine and
+        drive master brightness. Parallel to the Android Auto Brightness
+        path — most recent push wins on the wire.
+      </p>
+      <div id='lab-unavailable' style='display:none;font-size:.8em;color:#fca5a5;padding:.4em;border:1px solid #7f1d1d;border-radius:4px;margin-bottom:.6em'>
+        <code>sounddevice</code> not installed on this server — feature unavailable.
+      </div>
+      <div id='lab-ui'>
+        <label style='display:flex;align-items:center;gap:.5em;margin-bottom:.5em'>
+          <input type='checkbox' id='lab-enabled' onchange='_labSave()'> Enable local-audio brightness
+        </label>
+        <div style='display:flex;gap:.5em;align-items:center;margin-bottom:.5em'>
+          <label style='flex:0 0 80px;font-size:.82em'>Device</label>
+          <select id='lab-device' onchange='_labSave()' style='flex:1'></select>
+        </div>
+        <div style='display:flex;gap:.5em;align-items:center;margin-bottom:.4em'>
+          <label style='flex:0 0 80px;font-size:.82em'>Gain</label>
+          <input id='lab-gain' type='range' min='0' max='10' step='0.1' value='1.5' style='flex:1' onchange='_labSave()' oninput='_labLiveLbl()'>
+          <span id='lab-gain-val' style='width:36px;font-size:.78em;text-align:right'>1.50</span>
+        </div>
+        <div style='display:flex;gap:.5em;align-items:center;margin-bottom:.4em'>
+          <label style='flex:0 0 80px;font-size:.82em'>Floor</label>
+          <input id='lab-floor' type='range' min='0' max='255' value='0' style='flex:1' onchange='_labSave()' oninput='_labLiveLbl()'>
+          <span id='lab-floor-val' style='width:36px;font-size:.78em;text-align:right'>0</span>
+        </div>
+        <div style='display:flex;gap:.5em;align-items:center;margin-bottom:.4em'>
+          <label style='flex:0 0 80px;font-size:.82em'>Ceiling</label>
+          <input id='lab-ceil' type='range' min='0' max='255' value='255' style='flex:1' onchange='_labSave()' oninput='_labLiveLbl()'>
+          <span id='lab-ceil-val' style='width:36px;font-size:.78em;text-align:right'>255</span>
+        </div>
+        <div style='display:flex;gap:.5em;align-items:center;margin-bottom:.4em'>
+          <label style='flex:0 0 80px;font-size:.82em'>Attack</label>
+          <input id='lab-attack' type='range' min='0' max='200' value='5' style='flex:1' onchange='_labSave()' oninput='_labLiveLbl()'>
+          <span id='lab-attack-val' style='width:36px;font-size:.78em;text-align:right'>5 ms</span>
+        </div>
+        <div style='display:flex;gap:.5em;align-items:center;margin-bottom:.6em'>
+          <label style='flex:0 0 80px;font-size:.82em'>Release</label>
+          <input id='lab-release' type='range' min='0' max='1500' value='200' style='flex:1' onchange='_labSave()' oninput='_labLiveLbl()'>
+          <span id='lab-release-val' style='width:36px;font-size:.78em;text-align:right'>200 ms</span>
+        </div>
+        <div style='margin-top:.4em;padding:.4em;border:1px solid #1e293b;border-radius:4px'>
+          <div style='font-size:.72em;color:#94a3b8;margin-bottom:.2em'>Live master</div>
+          <div style='height:8px;background:#0f172a;border-radius:4px;overflow:hidden'>
+            <div id='lab-vu-bar' style='height:100%;width:0%;background:linear-gradient(90deg,#0e7490,#22d3ee);transition:width .08s linear'></div>
+          </div>
+          <div style='display:flex;justify-content:space-between;font-size:.7em;color:#64748b;margin-top:.2em'>
+            <span>Value: <span id='lab-vu-master'>—</span></span>
+            <span>Envelope: <span id='lab-vu-env'>—</span></span>
+            <span id='lab-device-in-use'></span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class='card'>
       <div class='card-title'>Debug Logging</div>
       <div style='margin-top:.3em'>
         <label style='font-size:.82em;color:#94a3b8'>Log file path (blank = default)</label>
