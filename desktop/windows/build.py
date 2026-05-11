@@ -144,7 +144,14 @@ args = [
     "--hidden-import=cv2",
     "--hidden-import=PIL._tkinter_finder",
     "--hidden-import=sounddevice",
-    "--add-data", f"{SHARED / 'local_audio_brightness.py'};.",  # #879
+    # #879 follow-up — sounddevice's Python wrapper is a thin shim
+    # around the bundled libportaudio binary. PyInstaller only picks
+    # up the .py module via `--hidden-import`; the linked DLL needs
+    # `--collect-all` or the EXE crashes on first import with
+    # "_sounddevice_data not found". Same shape as cv2 (also bundles
+    # binaries) but cv2 gets handled by its own PyInstaller hook.
+    "--collect-all=sounddevice",
+    "--add-data", f"{SHARED / 'local_audio_brightness.py'};.",
     "--collect-submodules=flask",
     "--collect-submodules=werkzeug",
     "--collect-submodules=esptool",

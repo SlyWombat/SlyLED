@@ -1105,12 +1105,24 @@ function _labLoad(){
     }
     var optDefault=document.createElement('option');
     optDefault.value='';
-    optDefault.textContent='(system default)';
+    optDefault.textContent='(system default input)';
     sel.appendChild(optDefault);
-    (d.devices||[]).forEach(function(dev){
+    var devs=(d.devices||[]);
+    if(!devs.length){
+      var optNone=document.createElement('option');
+      optNone.value='';
+      optNone.disabled=true;
+      optNone.textContent='(no input devices found)';
+      sel.appendChild(optNone);
+    }
+    devs.forEach(function(dev){
       var opt=document.createElement('option');
       opt.value=dev.index;
-      opt.textContent=dev.name+(dev.isDefault?' (default)':'');
+      // Prefer the server-formatted label (includes host API +
+      // channel count + default flag). Fall back to name-only for
+      // an older server that doesn't include `label`.
+      opt.textContent=dev.label||dev.name;
+      opt.title=(dev.hostApi||'')+' · '+(dev.channels||1)+' ch';
       sel.appendChild(opt);
     });
     ra('GET','/api/local-audio-brightness',null,function(s){

@@ -121,23 +121,74 @@ class LocalAudioBrightness:
             }
 
     def list_devices(self) -> list:
-        """Return [(index, name, isDefault)] for every input device. Empty
-        list if sounddevice isn't installed."""
+        """Return one entry per input-capable device with enough metadata
+        for the operator to pick the right source on Windows (where the
+        same mic can appear under MME / DirectSound / WASAPI host APIs
+        with different latency + loopback semantics).
+
+        Each entry:
+            {index, name, isDefault, channels, hostApi, hostApiId,
+             defaultSampleRate, label}
+
+        `label` is a pre-formatted display string the SPA renders
+        verbatim — saves the SPA from format duplication.
+
+        Empty list if sounddevice isn't installed or query failed."""
         if not _SD_OK:
             return []
         try:
-            devices = _sd.query_devices()
-            default_in = _sd.default.device[0]
+            devices = list(_sd.query_devices())
+            hostapis = list(_sd.query_hostapis())
+            try:
+                default_in = _sd.default.device[0]
+            except Exception:
+                default_in = -1
             out = []
             for i, d in enumerate(devices):
-                if d.get("max_input_channels", 0) <= 0:
+                ch = d.get("max_input_channels", 0)
+                hostapi_idx = d.get("hostapi", -1)
+                hostapi_name = ""
+                if 0 <= hostapi_idx < len(hostapis):
+                    hostapi_name = hostapis[hostapi_idx].get("name", "")
+                # Include WASAPI OUTPUT devices as loopback candidates
+                # so an operator can capture system audio (whatever the
+                # FOH desk is playing through Windows) without needing
+                # a hardware mic. WASAPI loopback opens the output
+                # device for read; sounddevice supports this via
+                # `extra_settings=WasapiSettings(loopback=True)` —
+                # wired in `_restart_capture` below.
+                is_wasapi_loopback = (
+                    ch <= 0
+                    and "WASAPI" in hostapi_name
+                    and d.get("max_output_channels", 0) > 0
+                )
+                if ch <= 0 and not is_wasapi_loopback:
                     continue
+                if is_wasapi_loopback:
+                    # Effective channel count for capture = the output's.
+                    ch = d.get("max_output_channels", 2)
+                name = d.get("name", f"device {i}").strip()
+                is_default = (i == default_in)
+                # Label format: "{name}  ·  {host}  ({ch}ch)" with the
+                # default-source flag suffixed so the SPA can sort by it.
+                suffix = " (loopback)" if is_wasapi_loopback else ""
+                label = f"{name}{suffix}  ·  {hostapi_name}  ({ch}ch)"
+                if is_default:
+                    label += "  · default"
                 out.append({
-                    "index":      i,
-                    "name":       d.get("name", f"device {i}"),
-                    "isDefault":  (i == default_in),
-                    "channels":   d.get("max_input_channels", 0),
+                    "index":             i,
+                    "name":              name + suffix,
+                    "isDefault":         is_default,
+                    "channels":          ch,
+                    "hostApi":           hostapi_name,
+                    "hostApiId":         hostapi_idx,
+                    "defaultSampleRate": d.get("default_samplerate", 0),
+                    "loopback":          is_wasapi_loopback,
+                    "label":             label,
                 })
+            # Sort: default first, then by host API (WASAPI / DirectSound
+            # / MME) for stable ordering across enumerations.
+            out.sort(key=lambda e: (not e["isDefault"], e["hostApi"], e["name"]))
             return out
         except Exception as e:
             log.warning("list_devices failed: %s", e)
@@ -220,13 +271,47 @@ class LocalAudioBrightness:
             return
         try:
             device = self._cfg["device"]  # None = system default
+            extra_settings = None
+            samplerate = _SAMPLE_RATE
+            channels = _CHANNELS
+            # WASAPI loopback path: when the picked device is an OUTPUT
+            # device under WASAPI host API, open in loopback mode so we
+            # capture whatever's playing through Windows (system audio
+            # from the FOH mixer, browser, media player, etc.) rather
+            # than a hardware mic. PortAudio requires the output device
+            # to be opened with `loopback=True` AND the stream's
+            # `channels` + `samplerate` must match the device's native.
+            if device is not None and _SD_OK:
+                try:
+                    info = _sd.query_devices(device)
+                    hostapi_idx = info.get("hostapi", -1)
+                    hostapi_name = ""
+                    if 0 <= hostapi_idx < len(_sd.query_hostapis()):
+                        hostapi_name = _sd.query_hostapis()[hostapi_idx].get(
+                            "name", "")
+                    is_loopback = (
+                        info.get("max_input_channels", 0) <= 0
+                        and "WASAPI" in hostapi_name
+                        and info.get("max_output_channels", 0) > 0
+                    )
+                    if is_loopback:
+                        extra_settings = _sd.WasapiSettings(loopback=True)
+                        # Use native output channels + rate. The
+                        # callback still grabs mono via column 0; stereo
+                        # gets averaged below if we ever extend.
+                        channels = max(1, info.get("max_output_channels", 2))
+                        samplerate = int(info.get(
+                            "default_samplerate", _SAMPLE_RATE))
+                except Exception as e:
+                    log.debug("loopback probe failed: %s", e)
             self._stream = _sd.InputStream(
-                samplerate=_SAMPLE_RATE,
-                channels=_CHANNELS,
+                samplerate=samplerate,
+                channels=channels,
                 dtype="float32",
                 blocksize=_BLOCK_SIZE,
                 device=device,
                 callback=self._audio_callback,
+                extra_settings=extra_settings,
             )
             self._stream.start()
             try:
