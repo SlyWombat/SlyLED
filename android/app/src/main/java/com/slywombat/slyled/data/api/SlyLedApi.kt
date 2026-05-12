@@ -116,6 +116,11 @@ interface SlyLedApi {
     @POST("api/fixtures/{id}/dmx-test")
     suspend fun aimFixtureDirect(@Path("id") id: Int, @Body body: JsonObject): OkResponse
 
+    // #888 — raw-offset channel writes for the Fixtures-page shortcut
+    // renderer. Body: {writes: {<offset>: <byte>}}.
+    @POST("api/fixtures/{id}/channel-write")
+    suspend fun channelWrite(@Path("id") id: Int, @Body body: JsonObject): OkResponse
+
     // ── Mover Control (unified API) ──────────────────────────────────
     @POST("api/mover-control/claim")
     suspend fun moverClaim(@Body body: JsonObject): OkResponse
@@ -203,6 +208,20 @@ interface SlyLedApi {
     @POST("api/show/stop")
     suspend fun stopShow(): OkResponse
 
+    // #888 — skip to next timeline in the running playlist (NowPlayingAnchor).
+    @POST("api/show/next")
+    suspend fun nextShow(): OkResponse
+
+    // #888 — page-level safety actions backing the v3 design.
+    @POST("api/mover-control/all-home")
+    suspend fun moverAllHome(): OkResponse
+
+    @POST("api/fixtures/kill-strobes")
+    suspend fun killStrobes(): OkResponse
+
+    @POST("api/fixtures/kill-effects")
+    suspend fun killEffects(): OkResponse
+
     // ── Cameras ───────────────────────────────────────────────────────
     @GET("api/cameras")
     suspend fun getCameras(): List<Fixture>
@@ -252,6 +271,11 @@ interface SlyLedApi {
 
     @GET("/api/dmx-profiles/{id}")
     suspend fun getDmxProfile(@Path("id") id: String): DmxProfile
+
+    // #888 — full profile incl. channels list, used by the Fixtures-page
+    // shortcut renderer + FixtureSheet. DmxProfile has the metadata only.
+    @GET("/api/dmx-profiles/{id}")
+    suspend fun getDmxProfileFull(@Path("id") id: String): JsonObject
 
     @GET("/api/dmx/status")
     suspend fun getDmxStatus(): JsonObject

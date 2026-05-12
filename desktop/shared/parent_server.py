@@ -5518,6 +5518,54 @@ def api_fixtures_kill_effects():
     return jsonify(ok=True, killed=killed, channelsWritten=written, skipped=skipped)
 
 
+@app.post("/api/fixtures/<int:fid>/channel-write")
+def api_fixture_channel_write(fid):
+    """Write raw bytes to specific channel offsets on a DMX fixture.
+
+    Body: {writes: {<offset>: <byte 0-255>, ...}}
+    Offset is 0-based from the fixture's `dmxStartAddr`. Used by the
+    mobile Fixtures-page shortcut renderer (#888) which already knows
+    the right channel offset from the profile, so the server doesn't
+    re-walk the channel_map.
+
+    Returns: {ok, written: int}. Fixtures held by a claim writer are
+    rejected with 423 to avoid clobbering an in-flight mover-control
+    session.
+    """
+    f = next((f for f in _fixtures if f["id"] == fid), None)
+    if not f or f.get("fixtureType") != "dmx":
+        return jsonify(err="DMX fixture not found"), 404
+    if f.get("isCalibrating"):
+        return jsonify(err="Fixture is being calibrated"), 423
+    snap = _claim_arbiter.snapshot()
+    if _claim_arbiter.is_muted(fid, snap):
+        return jsonify(err="Fixture is held by a claim writer"), 423
+    if not (_artnet.running or _sacn.running):
+        return jsonify(err="DMX engine not running"), 503
+    body = request.get_json(silent=True) or {}
+    writes = body.get("writes") or {}
+    if not isinstance(writes, dict) or not writes:
+        return jsonify(err="writes must be a non-empty dict"), 400
+    uni = int(f.get("dmxUniverse", 1) or 1)
+    addr = int(f.get("dmxStartAddr", 1) or 1)
+    engine = _artnet if _artnet.running else _sacn
+    try:
+        buf = engine.get_universe(uni)
+    except Exception:
+        return jsonify(err="DMX engine not running"), 503
+    written = 0
+    for k, v in writes.items():
+        try:
+            off = int(k)
+            val = max(0, min(255, int(v)))
+        except (TypeError, ValueError):
+            continue
+        if 0 <= addr - 1 + off < 512:
+            buf.set_channel(addr + off, val)
+            written += 1
+    return jsonify(ok=True, written=written)
+
+
 @app.post("/api/fixtures/<int:fid>/dmx-test")
 def api_fixture_dmx_test(fid):
     """Send test DMX values to a fixture. Used by range calibration wizard.

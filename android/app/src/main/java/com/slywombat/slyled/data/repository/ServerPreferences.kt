@@ -83,6 +83,12 @@ class ServerPreferences @Inject constructor(
     // #820 — semantic audio source kind, persisted as enum name string.
     private val AB_AUDIO_SOURCE_KIND_KEY = stringPreferencesKey("auto_brightness_audio_source_kind")
 
+    // #888 — Grab-page favourites (CSV of fixture ids).
+    private val FAVOURITE_MOVERS_KEY = stringPreferencesKey("favourite_movers_csv")
+    // #888 — Shows page starred timelines + last-played map.
+    private val STARRED_TIMELINES_KEY = stringPreferencesKey("starred_timelines_csv")
+    private val LAST_PLAYED_KEY = stringPreferencesKey("last_played_map")  // "tid=ts,tid=ts"
+
     // #826 — aim-wizard derived axes (stage-frame).
     private val WIZ_FWD_X_KEY = floatPreferencesKey("aim_wizard_forward_x")
     private val WIZ_FWD_Y_KEY = floatPreferencesKey("aim_wizard_forward_y")
@@ -129,6 +135,50 @@ class ServerPreferences @Inject constructor(
 
     suspend fun clear() {
         context.dataStore.edit { it.clear() }
+    }
+
+    // #888 — Grab favourites + Shows ranking persistence.
+
+    suspend fun loadFavouriteMovers(): Set<Int> {
+        val csv = context.dataStore.data.first()[FAVOURITE_MOVERS_KEY] ?: ""
+        return csv.split(",").mapNotNull { it.toIntOrNull() }.toSet()
+    }
+
+    suspend fun saveFavouriteMovers(ids: Set<Int>) {
+        context.dataStore.edit { prefs ->
+            prefs[FAVOURITE_MOVERS_KEY] = ids.joinToString(",")
+        }
+    }
+
+    suspend fun loadStarredTimelines(): Set<Int> {
+        val csv = context.dataStore.data.first()[STARRED_TIMELINES_KEY] ?: ""
+        return csv.split(",").mapNotNull { it.toIntOrNull() }.toSet()
+    }
+
+    suspend fun saveStarredTimelines(ids: Set<Int>) {
+        context.dataStore.edit { prefs ->
+            prefs[STARRED_TIMELINES_KEY] = ids.joinToString(",")
+        }
+    }
+
+    suspend fun loadLastPlayedAt(): Map<Int, Long> {
+        val raw = context.dataStore.data.first()[LAST_PLAYED_KEY] ?: ""
+        return raw.split(",")
+            .mapNotNull {
+                val (k, v) = it.split("=").let { p ->
+                    if (p.size != 2) return@mapNotNull null
+                    p[0] to p[1]
+                }
+                val tid = k.toIntOrNull() ?: return@mapNotNull null
+                val ts = v.toLongOrNull() ?: return@mapNotNull null
+                tid to ts
+            }
+            .toMap()
+    }
+
+    suspend fun saveLastPlayedAt(map: Map<Int, Long>) {
+        val raw = map.entries.joinToString(",") { "${it.key}=${it.value}" }
+        context.dataStore.edit { prefs -> prefs[LAST_PLAYED_KEY] = raw }
     }
 
     // #804 — Auto Brightness persisted prefs. Defaults mirror

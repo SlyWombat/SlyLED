@@ -1,21 +1,29 @@
 package com.slywombat.slyled.ui.navigation
 
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.*
 import com.slywombat.slyled.ui.screens.connection.ConnectionScreen
 import com.slywombat.slyled.ui.screens.livestage.LiveStageScreen
 import com.slywombat.slyled.ui.screens.control.ControlScreen
+import com.slywombat.slyled.ui.screens.control.conn.ConnectionPill
+import com.slywombat.slyled.ui.screens.control.haptics.HapticEvent
+import com.slywombat.slyled.ui.screens.control.haptics.rememberHaptics
 import com.slywombat.slyled.ui.screens.status.StatusScreen
 import com.slywombat.slyled.ui.screens.settings.SettingsScreen
 import com.slywombat.slyled.viewmodel.ConnectionViewModel
+import com.slywombat.slyled.viewmodel.ControlViewModel
 
 enum class Tab(val route: String, val label: String, val icon: ImageVector) {
     STAGE("stage", "Stage", Icons.Default.Visibility),
@@ -64,26 +72,36 @@ fun MainScaffold(connectionVm: ConnectionViewModel, onDisconnect: () -> Unit) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
-    val serverInfo by connectionVm.serverInfo.collectAsState()
     val isOnSettings = currentDestination?.route == "settings"
+    val haptic = rememberHaptics()
+    // Shared ControlViewModel so long-press blackout reaches the
+    // setBrightness path used by everything else. #888.
+    val controlVm: ControlViewModel = hiltViewModel()
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
+                    // #888 — long-press logo → instant blackout (master=0).
+                    // The only "nuclear" gesture; safety actions for
+                    // movers / effects live as page-level buttons (§6.5).
                     Text(
                         "SlyLED",
-                        style = MaterialTheme.typography.titleMedium
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.pointerInput(Unit) {
+                            detectTapGestures(
+                                onLongPress = {
+                                    haptic(HapticEvent.HEAVY_DOUBLE)
+                                    controlVm.setBrightness(0)
+                                },
+                            )
+                        },
                     )
                 },
                 actions = {
-                    if (serverInfo.isNotEmpty()) {
-                        Text(
-                            serverInfo,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    // #888 — Connection state pill replaces the plain
+                    // server-info text. Tap to retry, pulses on Degraded/Offline.
+                    ConnectionPill(modifier = Modifier.padding(end = 4.dp))
                     IconButton(onClick = {
                         if (isOnSettings) {
                             navController.popBackStack()

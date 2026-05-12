@@ -13,6 +13,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.putJsonObject
 import javax.inject.Inject
 
 @HiltViewModel
@@ -41,6 +44,25 @@ class ControlViewModel @Inject constructor(
 
     private val _fixtures = MutableStateFlow<List<Fixture>>(emptyList())
     val fixtures: StateFlow<List<Fixture>> = _fixtures.asStateFlow()
+
+    // #888 — DMX-profile catalogue + live fixture state for Grab + Fixtures pages.
+    // The orchestrator exposes profiles via `/api/dmx-profiles`; we use the
+    // catalogue to look up panRange + shortcuts per fixture.
+    private val _profiles = MutableStateFlow<List<DmxProfile>>(emptyList())
+    val profiles: StateFlow<List<DmxProfile>> = _profiles.asStateFlow()
+
+    private val _fixturesLive = MutableStateFlow<Map<String, kotlinx.serialization.json.JsonElement>>(emptyMap())
+    val fixturesLive: StateFlow<Map<String, kotlinx.serialization.json.JsonElement>> = _fixturesLive.asStateFlow()
+
+    // #888 — Grab-page favourites + Shows ranking, persisted per-device.
+    private val _favouriteMovers = MutableStateFlow<Set<Int>>(emptySet())
+    val favouriteMovers: StateFlow<Set<Int>> = _favouriteMovers.asStateFlow()
+
+    private val _starredTimelines = MutableStateFlow<Set<Int>>(emptySet())
+    val starredTimelines: StateFlow<Set<Int>> = _starredTimelines.asStateFlow()
+
+    private val _lastPlayedAt = MutableStateFlow<Map<Int, Long>>(emptyMap())
+    val lastPlayedAt: StateFlow<Map<Int, Long>> = _lastPlayedAt.asStateFlow()
 
     // Controller mode state
     private val _controllerFixtureId = MutableStateFlow<Int?>(null)
@@ -93,9 +115,23 @@ class ControlViewModel @Inject constructor(
             try { _timelines.value = repository.getTimelines() } catch (e: Exception) { Log.e(TAG, "getTimelines", e) }
             try { _playlist.value = repository.getShowPlaylist() } catch (_: Exception) {}
             try { _fixtures.value = repository.getFixtures() } catch (_: Exception) {}
+            try { _profiles.value = repository.getDmxProfiles() } catch (_: Exception) {}
             // #427 — restore the operator's saved stage position so pointer
             // mode is usable without re-entering it every launch.
             try { _userPosition.value = serverPrefs.loadUserPosition() } catch (_: Exception) {}
+            // #888 — restore Grab favourites + Shows starred + last-played from prefs.
+            try { _favouriteMovers.value = serverPrefs.loadFavouriteMovers() } catch (_: Exception) {}
+            try { _starredTimelines.value = serverPrefs.loadStarredTimelines() } catch (_: Exception) {}
+            try { _lastPlayedAt.value = serverPrefs.loadLastPlayedAt() } catch (_: Exception) {}
+        }
+
+        // #888 — Poll fixtures-live every 1.5s for Grab-tile colour + arrow.
+        // Pace matches LiveStageViewModel; both subscribers consume independently.
+        viewModelScope.launch {
+            while (true) {
+                try { _fixturesLive.value = repository.getFixturesLive() } catch (_: Exception) {}
+                delay(if (_settings.value.runnerRunning) 500L else 1500L)
+            }
         }
 
         // Poll settings every 3s
@@ -159,11 +195,102 @@ class ControlViewModel @Inject constructor(
 
     fun clearMessage() { _message.value = null }
 
+    // #888 — Grab + Shows persistence helpers.
+
+    fun toggleFavouriteMover(fid: Int) {
+        val cur = _favouriteMovers.value
+        val next = if (fid in cur) cur - fid else cur + fid
+        _favouriteMovers.value = next
+        viewModelScope.launch {
+            try { serverPrefs.saveFavouriteMovers(next) } catch (_: Exception) {}
+        }
+    }
+
+    fun toggleStarredTimeline(tid: Int) {
+        val cur = _starredTimelines.value
+        val next = if (tid in cur) cur - tid else cur + tid
+        _starredTimelines.value = next
+        viewModelScope.launch {
+            try { serverPrefs.saveStarredTimelines(next) } catch (_: Exception) {}
+        }
+    }
+
+    fun recordTimelineStart(tid: Int) {
+        val now = System.currentTimeMillis()
+        val next = _lastPlayedAt.value + (tid to now)
+        _lastPlayedAt.value = next
+        viewModelScope.launch {
+            try { serverPrefs.saveLastPlayedAt(next) } catch (_: Exception) {}
+        }
+    }
+
+    // #888 — Page-level safety actions backing v3 design §6.5.
+
+    fun sendAllMoversHome() {
+        viewModelScope.launch {
+            try {
+                repository.moverAllHome()
+                _message.value = "Movers sent home"
+            } catch (e: Exception) {
+                _message.value = "All-home failed: ${e.message}"
+            }
+        }
+    }
+
+    fun stopAllEffects() {
+        viewModelScope.launch {
+            // Fire both in parallel — they're independent server-side.
+            val strobes = launch {
+                try { repository.killStrobes() } catch (_: Exception) {}
+            }
+            val effects = launch {
+                try { repository.killEffects() } catch (_: Exception) {}
+            }
+            strobes.join(); effects.join()
+            _message.value = "Strobes + effects stopped"
+        }
+    }
+
+    fun nextShow() {
+        viewModelScope.launch {
+            try {
+                repository.nextShow()
+            } catch (e: Exception) {
+                _message.value = "Next failed: ${e.message}"
+            }
+        }
+    }
+
+    /** #888 — Fixtures-page shortcut renderer needs full profile JSON. */
+    suspend fun fetchProfileFull(profileId: String): kotlinx.serialization.json.JsonObject =
+        repository.getDmxProfileFull(profileId)
+
+    /** #888 — write raw bytes to specific channel offsets. */
+    fun channelWrite(fid: Int, offsetToByte: Map<Int, Int>) {
+        if (offsetToByte.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                val writes = kotlinx.serialization.json.buildJsonObject {
+                    putJsonObject("writes") {
+                        for ((off, byte) in offsetToByte) {
+                            put(off.toString(), kotlinx.serialization.json.JsonPrimitive(byte))
+                        }
+                    }
+                }
+                repository.channelWrite(fid, writes)
+            } catch (e: Exception) {
+                _message.value = "Channel write failed: ${e.message}"
+            }
+        }
+    }
+
     fun startTimeline(id: Int) {
         viewModelScope.launch {
             try {
                 repository.startTimeline(id)
                 _message.value = "Timeline started"
+                // #888 — track for Shows ranking
+                recordTimelineStart(id)
             } catch (e: Exception) { _message.value = "Error: ${e.message}" }
         }
     }

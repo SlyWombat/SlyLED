@@ -3,9 +3,11 @@ package com.slywombat.slyled.ui.theme
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 
 // ── Kinetic Prism Design Tokens (design.md v2.0) ────────────────────────
 
@@ -62,6 +64,52 @@ private val LightColorScheme = lightColorScheme(
     error = RedError,
 )
 
+// #888 — Kinetic Prism type ramp (design doc §8). Until Space Grotesk
+// + Inter font assets are bundled into res/font/, the families default
+// to system Sans / SansSerif. The size, weight, and letter-spacing
+// scale matches the design and re-applies once the .ttf files land.
+private val DisplayFamily = FontFamily.SansSerif // intended: Space Grotesk
+private val BodyFamily = FontFamily.SansSerif    // intended: Inter
+
+private val SlyLedTypography = Typography(
+    displaySmall = TextStyle(
+        fontFamily = DisplayFamily, fontWeight = FontWeight.Bold,
+        fontSize = 28.sp, letterSpacing = (-0.5).sp,
+    ),
+    titleLarge = TextStyle(
+        fontFamily = DisplayFamily, fontWeight = FontWeight.SemiBold,
+        fontSize = 22.sp, letterSpacing = 0.sp,
+    ),
+    titleMedium = TextStyle(
+        fontFamily = DisplayFamily, fontWeight = FontWeight.SemiBold,
+        fontSize = 18.sp, letterSpacing = 0.sp,
+    ),
+    titleSmall = TextStyle(
+        fontFamily = DisplayFamily, fontWeight = FontWeight.SemiBold,
+        fontSize = 14.sp, letterSpacing = 0.1.sp,
+    ),
+    bodyLarge = TextStyle(
+        fontFamily = BodyFamily, fontWeight = FontWeight.Normal,
+        fontSize = 16.sp, letterSpacing = 0.1.sp,
+    ),
+    bodyMedium = TextStyle(
+        fontFamily = BodyFamily, fontWeight = FontWeight.Normal,
+        fontSize = 14.sp, letterSpacing = 0.1.sp,
+    ),
+    bodySmall = TextStyle(
+        fontFamily = BodyFamily, fontWeight = FontWeight.Normal,
+        fontSize = 12.sp, letterSpacing = 0.2.sp,
+    ),
+    labelMedium = TextStyle(
+        fontFamily = BodyFamily, fontWeight = FontWeight.Medium,
+        fontSize = 12.sp, letterSpacing = 1.2.sp,  // uppercase semantic
+    ),
+    labelSmall = TextStyle(
+        fontFamily = BodyFamily, fontWeight = FontWeight.Medium,
+        fontSize = 11.sp, letterSpacing = 1.2.sp,
+    ),
+)
+
 @Composable
 fun SlyLedTheme(
     darkTheme: Boolean = true,
@@ -70,6 +118,7 @@ fun SlyLedTheme(
     val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
     MaterialTheme(
         colorScheme = colorScheme,
-        content = content
+        typography = SlyLedTypography,
+        content = content,
     )
 }

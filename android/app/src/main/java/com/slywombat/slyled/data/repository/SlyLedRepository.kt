@@ -392,6 +392,16 @@ class SlyLedRepository @Inject constructor(
     suspend fun getShowPlaylist() = requireApi().getShowPlaylist()
     suspend fun startShow() = requireApi().startShow()
     suspend fun stopShow() = requireApi().stopShow()
+    // #888 — playlist transport + page-level safety actions.
+    suspend fun nextShow() = requireApi().nextShow()
+    suspend fun moverAllHome() = requireApi().moverAllHome()
+    suspend fun killStrobes() = requireApi().killStrobes()
+    suspend fun killEffects() = requireApi().killEffects()
+    // #888 — full profile (incl. channels) for the shortcut renderer.
+    suspend fun getDmxProfileFull(id: String) = requireApi().getDmxProfileFull(id)
+    // #888 — raw-offset channel writes (Fixtures page).
+    suspend fun channelWrite(id: Int, body: kotlinx.serialization.json.JsonObject) =
+        requireApi().channelWrite(id, body)
 
     // Cameras
     suspend fun getCameras() = requireApi().getCameras()
