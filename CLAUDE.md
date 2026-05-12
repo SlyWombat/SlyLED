@@ -186,7 +186,18 @@ cd android; .\gradlew.bat assembleDebug --no-daemon
 ```
 
 APK lands at `android/app/build/outputs/apk/debug/app-debug.apk`. App is operator-only
-(no editing) — Stage / Control / Status tabs. Phase tracking in issues #15–#19.
+(no editing) — Stage / Control / Status bottom-nav tabs; Settings is the top-right gear.
+Long-press the SlyLED logo for instant blackout. Connection state pill replaces the
+plain server-info text (Connected / Reconnecting / Offline).
+
+**Control tab (v1.8.1, #888):** persistent NowPlayingAnchor over a 4-page
+HorizontalPager — `Master` (default) / `Grab` / `Fixtures` / `Shows`. Page composables
+live under `ui/screens/control/pages/`; per-fixture profile sheet under `overlays/`;
+profile-driven shortcut renderer under `shortcuts/FixtureShortcuts.kt` (Kotlin twin of
+`desktop/shared/spa/js/fixture_shortcuts.js`). Haptics catalogue in
+`ui/screens/control/haptics/Haptics.kt`. Connection state machine + pill in
+`ui/screens/control/conn/`. Design doc: `docs/design/mobile_ui_redesign.md` (v3).
+Phase tracking in issues #15–#19.
 
 ## Git / GitHub
 

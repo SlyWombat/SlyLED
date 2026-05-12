@@ -339,23 +339,37 @@ The primary design and control interface. Full-featured 7-tab SPA with 2D/3D lay
 **Install:** Run `SlyLED-Setup.exe` (includes system tray icon)
 
 ### Android App
-Live operator tool for running shows from your phone. Connects to the desktop server over WiFi.
+Live operator tool for running shows from your phone. Connects to the desktop server over WiFi. As of v1.8.1 the Control tab is rebuilt as a **Command Surface** — see #888 / `docs/design/mobile_ui_redesign.md`.
 
-**Install:** Transfer `SlyLED-debug.apk` to your phone and install.
+**Install:** Sideload `slyled-android.apk` to your phone and install.
 **Connect:** Scan the QR code on the desktop Settings tab, or enter the server IP and port manually.
 
 ![Android Stage View](screenshots/android/android-stage-idle.png)
 
-**Android Screens:**
-- **Stage** — live viewport showing all fixtures (LED, DMX, cameras) with beam cones, tracked object markers, and grid floor. Pinch-to-zoom and drag-to-pan. HUD shows current show status. Play/Stop button and brightness slider at bottom.
-- **Control** — one-tap timeline start, playlist with loop toggle, global brightness slider, and Pointer Mode for aiming DMX moving heads with your phone's gyroscope.
-- **Status** — device monitoring (performers online/offline, RSSI, firmware), camera nodes with Track button to start/stop person tracking, and Art-Net/DMX engine status.
-- **Settings** — server name, stage dimensions, dark mode, config export/import, disconnect.
+**Bottom nav (3 tabs):** Stage / Control / Status. Settings lives at the top-right ⚙ gear, not in the bottom nav.
+
+**Top bar gestures:**
+- **Long-press the SlyLED logo** → instant blackout (master = 0). Heavy double-haptic. The only "nuclear" gesture; other safety actions live as per-page buttons.
+- **Connection pill** — green dot = Connected; orange slow pulse = Reconnecting (Degraded); red fast pulse = Offline. Tap to retry.
+- **⚙ Settings gear** — server name, stage dimensions, Auto Brightness calibration, config export/import, disconnect.
+
+**Stage tab** — live viewport showing all fixtures with beam cones, tracked object markers, grid floor. Pinch-to-zoom + drag-to-pan.
+
+**Control tab (rebuilt for v1.8.1):** persistent Now Playing anchor over a 4-page pager:
+
+- **Master** *(default page)* — global brightness slider with ±5% steppers + bloom-on-drag. Auto Brightness toggle (moved from Settings) + source picker (Mic / Playback / USB) + live envelope meter.
+- **Grab** — moving-head tiles showing current colour + pan/tilt direction arrow. Favourites row at top (star to add). Tap a tile → Controller Mode (gyro-driven pan/tilt at 20 Hz). Top-right "Send all home" button homes every mover.
+- **Fixtures** — non-mover DMX fixtures (bubble machines, hazers, washes, pars, strobes) with profile-driven shortcuts: 🫧 bubbles, 💨 haze low/med/high, 🌀 fan slow/med/fast, 💡 colour swatches, 🟣 UV, ⚡ momentary strobe, 🧼 hold-to-clean. "More controls →" opens a per-channel sheet with capability sliders. Top-right "Stop all effects" kills strobes + bubble/haze in parallel.
+- **Shows** — starred → recent → all sections, ranked by last-played time. One-tap launch. Long-press to star.
+
+**Now Playing anchor** sits above the pager — name, loop chip, elapsed / total, progress bar, STOP and Next.
 
 ![Android Control](screenshots/android/android-control.png)
 ![Android Status](screenshots/android/android-status.png)
 
-**Pointer Mode:** Select a DMX moving head on the Control tab and tap its name under Pointer Mode. Hold your phone and point where you want the light — the fixture's pan/tilt follows your phone orientation in real-time at 20 Hz. Tap Recenter to calibrate, X to exit.
+**Status tab** — device monitoring (performers online/offline, RSSI, firmware), camera nodes with Track button to start/stop person tracking, and Art-Net/DMX engine status.
+
+**Controller Mode (Grab → tap a mover):** Hold the phone and point where you want the beam — pan/tilt follows your phone orientation at 20 Hz. Tap Recenter to calibrate, X to exit. Press-Start / press-Stop guarded by nonce+ACK (#825). The first time you use it on a new phone, the aim-axis wizard (#869) measures your phone's body-frame axes; takes ~10 seconds.
 
 ### Firmware Config (ESP32/D1 Mini)
 Each performer serves a 3-tab config page at `http://<device-ip>/config`:
