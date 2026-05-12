@@ -84,6 +84,21 @@ CAPABILITY_TYPES = {
 
 CATEGORIES = {"par", "wash", "spot", "moving-head", "strobe", "fog", "laser", "bar", "matrix", "blinder", "other"}
 
+# Mobile UI shortcut catalogue (#888 redesign). Channels can opt into a
+# specific UI control by setting `shortcut: <id>`. Renderers (SPA's
+# `fixture_shortcuts.js` + Android's `FixtureShortcuts.kt`) consume this
+# tag directly; un-annotated profiles fall back to capability-type and
+# name-match heuristics. Keep this set in lockstep with the renderers.
+SHORTCUT_IDS = {
+    "bubble-toggle",     # 🫧 toggle, writes 255/0 to a dimmer-class channel
+    "haze-segmented",    # LOW/MED/HIGH/OFF (64/128/220/0) to a dimmer-class channel
+    "fan-segmented",     # Slow/Med/Fast (64/160/255) to a speed channel
+    "color-swatch",      # RGB swatch row, writes to red/green/blue (+ uv) triad
+    "uv-toggle",         # UV switch, writes 255/0 to a uv channel
+    "strobe-momentary",  # press-and-hold ⚡ writes into ShutterStrobe Strobe range
+    "clean-mode",        # long-press maintenance button, writes 255 to a reset channel
+}
+
 # -- Color wheel matching -----------------------------------------------------
 
 import math as _math
@@ -1191,6 +1206,15 @@ class ProfileLibrary:
             bits = ch.get("bits", 8)
             if bits == 16:
                 offsets.add(ch["offset"] + 1)  # fine channel
+            # #888 — optional `shortcut` field: opt-in mobile UI control
+            # mapping. Reject unknown ids to prevent silent typos.
+            sc = ch.get("shortcut")
+            if sc is not None:
+                if not isinstance(sc, str):
+                    return False, f"Channel {i}: shortcut must be a string"
+                if sc not in SHORTCUT_IDS:
+                    return False, (f"Channel {i}: unknown shortcut '{sc}' "
+                                   f"(valid: {sorted(SHORTCUT_IDS)})")
             # Validate capabilities if present
             caps = ch.get("capabilities")
             if caps is not None:

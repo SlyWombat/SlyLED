@@ -5412,6 +5412,112 @@ def api_fixture_calibrate_range(fid):
     return jsonify(ok=True, rangeCalibrated=True, result=result)
 
 
+@app.post("/api/fixtures/kill-strobes")
+def api_fixtures_kill_strobes():
+    """Force every strobe channel to its Open value across all DMX
+    fixtures. #888 — backs the "Stop all effects" safety button on the
+    Fixtures page (called in parallel with kill-effects).
+
+    Skips fixtures held by a claim writer (mover-control, calibration,
+    gyro press-Start) — they're already authored.
+
+    Returns: {ok, killed: int, skipped: list[fid]}.
+    """
+    if not (_artnet.running or _sacn.running):
+        return jsonify(ok=False, err="DMX engine not running"), 409
+    from dmx_profiles import strobe_open_value
+    snap = _claim_arbiter.snapshot()
+    killed = 0
+    skipped = []
+    engine = _artnet if _artnet.running else _sacn
+    for f in _fixtures:
+        if f.get("fixtureType") != "dmx":
+            continue
+        fid = f.get("id")
+        if _claim_arbiter.is_muted(fid, snap):
+            skipped.append(fid)
+            continue
+        pid = f.get("dmxProfileId")
+        info = _profile_lib.channel_info(pid) if pid else None
+        if not info:
+            continue
+        channels = info.get("channels", []) or []
+        strobe_chs = [c for c in channels if c.get("type") == "strobe"]
+        if not strobe_chs:
+            continue
+        try:
+            uni = int(f.get("dmxUniverse", 1) or 1)
+            addr = int(f.get("dmxStartAddr", 1) or 1)
+            buf = engine.get_universe(uni)
+            profile = {"channel_map": info.get("channel_map", {}), "channels": channels}
+            open_val = strobe_open_value(profile)
+            for ch in strobe_chs:
+                off = ch.get("offset", 0)
+                if 0 <= addr - 1 + off < 512:
+                    buf.set_channel(addr + off, int(open_val))
+            killed += 1
+        except Exception:
+            log.warning("kill-strobes: fixture %s failed", fid, exc_info=True)
+            skipped.append(fid)
+    return jsonify(ok=True, killed=killed, skipped=skipped)
+
+
+@app.post("/api/fixtures/kill-effects")
+def api_fixtures_kill_effects():
+    """Zero every channel tagged with the `bubble-toggle` or
+    `haze-segmented` shortcut across all DMX fixtures. #888 — backs the
+    "Stop all effects" safety button (with kill-strobes).
+
+    Falls back to name-match (channel name contains "bubble"/"haze"/"fog")
+    for profiles without explicit shortcut annotations.
+
+    Returns: {ok, killed: int, channelsWritten: int, skipped: list[fid]}.
+    """
+    if not (_artnet.running or _sacn.running):
+        return jsonify(ok=False, err="DMX engine not running"), 409
+    snap = _claim_arbiter.snapshot()
+    EFFECT_SHORTCUTS = {"bubble-toggle", "haze-segmented"}
+    EFFECT_NAME_HINTS = ("bubble", "haze", "fog")
+    killed = 0
+    written = 0
+    skipped = []
+    engine = _artnet if _artnet.running else _sacn
+    for f in _fixtures:
+        if f.get("fixtureType") != "dmx":
+            continue
+        fid = f.get("id")
+        if _claim_arbiter.is_muted(fid, snap):
+            skipped.append(fid)
+            continue
+        pid = f.get("dmxProfileId")
+        info = _profile_lib.channel_info(pid) if pid else None
+        if not info:
+            continue
+        channels = info.get("channels", []) or []
+        targets = []
+        for ch in channels:
+            sc = ch.get("shortcut")
+            name = (ch.get("name") or "").lower()
+            if sc in EFFECT_SHORTCUTS or (
+                sc is None and any(h in name for h in EFFECT_NAME_HINTS)):
+                targets.append(ch.get("offset", 0))
+        if not targets:
+            continue
+        try:
+            uni = int(f.get("dmxUniverse", 1) or 1)
+            addr = int(f.get("dmxStartAddr", 1) or 1)
+            buf = engine.get_universe(uni)
+            for off in targets:
+                if 0 <= addr - 1 + off < 512:
+                    buf.set_channel(addr + off, 0)
+                    written += 1
+            killed += 1
+        except Exception:
+            log.warning("kill-effects: fixture %s failed", fid, exc_info=True)
+            skipped.append(fid)
+    return jsonify(ok=True, killed=killed, channelsWritten=written, skipped=skipped)
+
+
 @app.post("/api/fixtures/<int:fid>/dmx-test")
 def api_fixture_dmx_test(fid):
     """Send test DMX values to a fixture. Used by range calibration wizard.
@@ -12141,6 +12247,59 @@ def api_mover_status():
     return jsonify(claims=_mover_engine.get_status(),
                     engine=_mover_engine.get_engine_health())
 
+
+@app.post("/api/mover-control/all-home")
+def api_mover_all_home():
+    """Send every moving-head fixture to its configured home pose. #888.
+
+    Used by the Grab page "Send all home" safety button. Walks every
+    DMX fixture with a non-zero panRange (i.e. mover), reads its
+    persisted home anchor, and writes the home pan/tilt + blackout
+    dimmer to the universe buffer. Fixtures currently held by a claim
+    are skipped — operators shouldn't yank a fixture out from under
+    their own controller-mode session.
+
+    Returns: {ok, moved: int, skipped: list[fid], engineRunning: bool}.
+    """
+    if not (_artnet.running or _sacn.running):
+        return jsonify(ok=False, err="DMX engine not running",
+                       engineRunning=False), 409
+    snap = _claim_arbiter.snapshot()
+    moved = 0
+    skipped = []
+    for f in _fixtures:
+        if f.get("fixtureType") != "dmx":
+            continue
+        fid = f.get("id")
+        pid = f.get("dmxProfileId")
+        info = _profile_lib.channel_info(pid) if pid else None
+        if not info or int(info.get("panRange", 0) or 0) <= 0:
+            continue  # not a mover
+        if _claim_arbiter.is_muted(fid, snap):
+            skipped.append(fid)
+            continue
+        home_pan = f.get("homePanDmx16")
+        home_tilt = f.get("homeTiltDmx16")
+        if home_pan is None or home_tilt is None:
+            skipped.append(fid)
+            continue
+        try:
+            uni = int(f.get("dmxUniverse", 1) or 1)
+            addr = int(f.get("dmxStartAddr", 1) or 1)
+            engine = _artnet if _artnet.running else _sacn
+            buf = engine.get_universe(uni)
+            profile = {"channel_map": info.get("channel_map", {}),
+                       "channels":    info.get("channels", [])}
+            buf.set_fixture_pan_tilt(addr, int(home_pan), int(home_tilt), profile)
+            # Blackout the lamp so a homed fixture doesn't blast the floor.
+            if "dimmer" in info.get("channel_map", {}):
+                buf.set_fixture_dimmer(addr, 0, profile)
+            moved += 1
+        except Exception:
+            log.warning("all-home: fixture %s failed", fid, exc_info=True)
+            skipped.append(fid)
+    return jsonify(ok=True, moved=moved, skipped=skipped, engineRunning=True)
+
 # ── End Mover Control ───────────────────────────────────────────────────────
 
 
@@ -16189,6 +16348,62 @@ def _blackout_unclaimed_fixtures():
             except Exception:
                 continue
     return muted
+
+
+@app.post("/api/show/next")
+def api_show_next():
+    """Skip to the next timeline in the running playlist. #888.
+
+    If no show is running, returns 400. If at end-of-playlist with
+    loopAll=False, behaves identically to /api/show/stop. Otherwise
+    stops the current playback thread and restarts at the next index.
+
+    Implementation note: one frame of dark may appear between segments
+    because we stop + restart rather than threading a `skip` flag
+    through `_dmx_playback_single`. Acceptable — the operator chose
+    Next, the frame gap reads as transition, not glitch.
+    """
+    if not _show_playback.get("running"):
+        return jsonify(err="No show running"), 400
+    cur_idx = int(_show_playback.get("currentIndex", 0))
+    loop_all = bool(_show_playback.get("loopAll", False))
+    order = list(_show_playlist.get("order", []))
+    if not order:
+        return jsonify(err="Playlist is empty"), 400
+    nxt = cur_idx + 1
+    if nxt >= len(order):
+        if loop_all:
+            nxt = 0
+        else:
+            # Past the end without loop → fall through to stop.
+            return api_show_stop()
+    # Stop current playback thread, give it ~100ms to settle, then
+    # restart via the existing show_start path with the new startIndex.
+    _dmx_playback_stop.set()
+    time.sleep(0.1)
+    _dmx_playback_stop.clear()
+
+    go_epoch = int(time.time()) + 2
+    loop_flag = 1 if loop_all else 0
+    go_pkt = _hdr(CMD_RUNNER_GO, go_epoch) + struct.pack("<IB", go_epoch, loop_flag)
+    for child in _children:
+        if child.get("ip"):
+            _send(child["ip"], go_pkt)
+    _show_playback["running"] = True
+    _show_playback["currentIndex"] = nxt
+    _show_playback["currentTid"] = order[nxt]
+    _show_playback["startEpoch"] = go_epoch
+    _show_playback["loopAll"] = loop_all
+    _show_playback["totalElapsed"] = 0
+    with _lock:
+        _settings["runnerRunning"] = True
+        _settings["activeTimeline"] = order[nxt]
+        _settings["runnerStartEpoch"] = go_epoch
+        _save("settings", _settings)
+    threading.Thread(target=_show_playback_loop,
+                     args=(order, loop_all, go_epoch, nxt),
+                     daemon=True).start()
+    return jsonify(ok=True, currentIndex=nxt, currentTid=order[nxt])
 
 
 @app.post("/api/show/stop")
