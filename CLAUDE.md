@@ -32,9 +32,10 @@ Standard path is the build script:
 powershell.exe -ExecutionPolicy Bypass -File build.ps1 -Port COM7
 ```
 
-**Versioning — two independent tracks:**
-- **Firmware** (`main/version.h`, per-board entries in `firmware/registry.json`): only bumps when firmware code changes. `build.ps1` increments `APP_MINOR` on compile+upload.
-- **App** (orchestrator + Android — `desktop/shared/parent_server.py` `VERSION`, `android/app/build.gradle.kts`, `desktop/windows/installer.iss`): bumps on app/SPA/server releases.
+**Versioning — every platform has its own independent track. Never align them.**
+- **Firmware** — `main/version.h` + per-board entry in `firmware/registry.json`. Each board (LED ESP32, LED D1 Mini, gyro ESP32-S3, DMX bridge, camera, Giga child, Giga parent) is its own number. Only bumps when that board's source changes. `build.ps1` increments `APP_MINOR` on manual compile+upload; `build_release.ps1` source-hash-gates each board.
+- **Orchestrator** — `desktop/shared/parent_server.py` `VERSION` + `desktop/windows/installer.iss`. Tracks SPA + server changes. Source-hash gated.
+- **Android** — `android/app/build.gradle.kts` (`versionName` + `versionCode`). **Tracks independently of the orchestrator** — `build_release.ps1` reads Android's *current* versionName as its baseline and patch-bumps only when Android source changes (cache at `android/.build-cache.json`). A bug fix shipping to the orchestrator does not touch Android, and vice-versa. **Do not align Android's version to the orchestrator's**; see `memory/feedback_android_independent_version.md`.
 
 ## Critical hardware quirks
 
