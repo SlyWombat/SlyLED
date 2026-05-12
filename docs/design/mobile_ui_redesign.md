@@ -368,7 +368,7 @@ Every component below maps to existing Kinetic Prism tokens. No new colours inve
 | `SegmentedRow` | `DarkSlate` | `MutedSlate` | `LightSlate` / `NearWhite` selected | accent fill on selected, 200ms ease |
 | `NowPlayingAnchor` | `DarkNavy` | `DimSlate` @ 30% | `NearWhite` | CyanSecondary pulse when playing |
 | `PrimaryAction` (STOP, Start) | `BluePrimary` | none | white | blue glow on press |
-| `DestructiveAction` (Blackout, Panic rows) | `RedError` | none | white | red glow on press, heavy haptic |
+| `DestructiveAction` (Blackout, page-level safety rows: Send all home / Stop all effects) | `RedError` | none | white | red glow on press, heavy haptic |
 | `FixtureChip` (Grab tile) | `DarkNavy` | `DmxPurple` @ 40% | `NearWhite` | purple glow when claimed by **this** app, muted-purple when by **another** |
 | `ShowRow` | transparent | bottom hairline `DimSlate` | `NearWhite` | cyan glow on current |
 | `Switch` (Auto Brightness, UV) | M3 default, accent → `CyanSecondary` | — | — | bloom on thumb when on |
@@ -422,7 +422,7 @@ ui/screens/control/
     ControllerModeOverlay.kt    ← unchanged in v1
     FixtureSheet.kt             ← new "More controls →"
     TakeoverSheet.kt            ← §6.2 conflict UI
-    PanicSheet.kt               ← §6.5
+    (v3: no PanicSheet — page-level safety buttons replace it; see §6.5)
   haptics/
     Haptics.kt                  ← expect/actual ready for CMP
   conn/
@@ -437,10 +437,10 @@ Compose UI tests for each page state. Roborazzi screenshot tests per state inclu
 - Implement haptics catalogue (§6.3).
 - Settings keeps Auto Brightness calibration.
 
-### 9.6 Stage 4 — Shows ranking + Panic + new endpoints
+### 9.6 Stage 4 — Shows ranking + page-level safety + new endpoints
 - Persist `lastPlayedAt` + `starredTimelines` in `ServerPreferences`.
 - Server: add `POST /api/show/next`, `POST /api/mover-control/all-home`, `POST /api/fixtures/kill-strobes`, `POST /api/fixtures/kill-effects`.
-- Wire Panic sheet to all four.
+- Wire "Send all home" button to Grab page header; "Stop all effects" button (fires kill-strobes + kill-effects in parallel) to Fixtures page header. Blackout remains a long-press logo gesture; STOP show stays on the NowPlayingAnchor. No modal panic sheet.
 
 ### 9.7 Stage 5 — Compose Multiplatform iOS scaffold
 - Move the Android `ui/`, `viewmodel/`, `data/` modules into a CMP shared module.
@@ -495,10 +495,10 @@ All v2 open questions resolved by operator on 2026-05-12:
 - **Page** — one of the four pager surfaces (formerly "cards" in v1).
 - **Quick Grab** — the Grab page's horizontal mover row.
 - **Shortcut** — a profile-derived single-tap or segmented control on a Fixtures page card.
-- **Sheet** — full-screen panel revealed by "More controls →", long-press menu, panic, or takeover.
+- **Sheet** — full-screen panel revealed by "More controls →", long-press menu, or takeover.
 - **Bloom** — soft outer glow on active or pressed elements (Kinetic Prism §3.1).
-- **Anchor / Pager / Sheet / Overlay / Panic** — the five surface types in the mobile shell.
+- **Anchor / Pager / Sheet / Overlay** — the four surface types in the mobile shell.
 
 ---
 
-**Next step:** operator review of §4 (revised IA), §5.3 (hybrid shortcut renderer), §6 (Resilience & Feedback — all-new), §7 (iOS path + Stage 0.5 pre-work), and the remaining §11 open questions.
+**Implementation status (post-v1.8.2):** Stages 1–4 implemented and shipped on Android (`android-v1.8.0` through `android-v1.8.2`). Stage 5 (iOS) pivoted from Compose Multiplatform to a minimal native SwiftUI shell — see `apple_developer_setup.md` (TestFlight workflow) + `testflight_install_guide.md` + `ios/README.md`.

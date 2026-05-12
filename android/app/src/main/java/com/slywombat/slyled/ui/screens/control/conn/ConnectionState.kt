@@ -8,9 +8,17 @@ package com.slywombat.slyled.ui.screens.control.conn
 // Each Control-tab card watches this state to decide whether to enable
 // taps, queue writes, or refuse with a haptic-no-go.
 
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.slywombat.slyled.data.repository.SlyLedRepository
+import com.slywombat.slyled.ui.screens.control.haptics.HapticEvent
+import com.slywombat.slyled.ui.screens.control.haptics.rememberHaptics
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.delay
@@ -83,5 +91,30 @@ class LinkStateViewModel @Inject constructor(
                 _state.value = LinkState.CONNECTED
             } catch (_: Throwable) { /* state machine catches up next tick */ }
         }
+    }
+}
+
+/**
+ * Apply the design-doc §6.1 visual gate to a Compose node based on
+ * link state. Disconnected → 60% alpha + swallow pointer events with a
+ * haptic-no-go bump. Connected/Degraded → pass-through (Degraded write
+ * attempts fail naturally via Retrofit timeouts; the resulting
+ * snackbar is sufficient feedback without preemptively disabling).
+ */
+@Composable
+fun Modifier.linkStateGate(state: LinkState): Modifier {
+    val haptic = rememberHaptics()
+    return when (state) {
+        LinkState.DISCONNECTED ->
+            this
+                .alpha(0.6f)
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        down.consume()
+                        haptic(HapticEvent.NO_GO_BUMP)
+                    }
+                }
+        else -> this
     }
 }

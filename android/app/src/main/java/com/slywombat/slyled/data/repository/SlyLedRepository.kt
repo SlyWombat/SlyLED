@@ -145,6 +145,11 @@ class SlyLedRepository @Inject constructor(
         return requireApi().aimFixtureDirect(id, body)
     }
 
+    // #888 — arbitrary body variant for Grab long-press quick actions
+    // (Flash / Home / Blackout that don't need a claim).
+    suspend fun aimFixtureDirect(id: Int, body: kotlinx.serialization.json.JsonObject): OkResponse =
+        requireApi().aimFixtureDirect(id, body)
+
     // Fixture Controller mode (legacy) — send color/dimmer/strobe channels (0-1 normalized)
     suspend fun setFixtureOutput(id: Int, dimmer: Float, red: Float, green: Float,
                                   blue: Float, white: Float, strobe: Float): OkResponse {
@@ -164,13 +169,17 @@ class SlyLedRepository @Inject constructor(
     private fun requireIdentity(): DeviceIdentity =
         deviceIdentity ?: throw IllegalStateException("DeviceIdentity not available")
 
-    suspend fun moverClaim(moverId: Int): OkResponse {
+    suspend fun moverClaim(moverId: Int, force: Boolean = false): OkResponse {
         val id = requireIdentity()
         val body = buildJsonObject {
             put("moverId", moverId)
             put("deviceId", id.deviceId)
             put("deviceName", id.deviceName)
             put("deviceType", "android")
+            // #888 — force=true tells the server to release any prior
+            // claim and grant us this one. Used by the TakeoverSheet
+            // confirm flow.
+            if (force) put("force", true)
         }
         return requireApi().moverClaim(body)
     }

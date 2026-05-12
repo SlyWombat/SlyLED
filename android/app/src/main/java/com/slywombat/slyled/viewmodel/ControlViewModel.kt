@@ -8,11 +8,15 @@ import com.slywombat.slyled.data.repository.ServerPreferences
 import com.slywombat.slyled.data.repository.SlyLedRepository
 import com.slywombat.slyled.data.repository.UserPosition
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.putJsonObject
@@ -63,6 +67,13 @@ class ControlViewModel @Inject constructor(
 
     private val _lastPlayedAt = MutableStateFlow<Map<Int, Long>>(emptyMap())
     val lastPlayedAt: StateFlow<Map<Int, Long>> = _lastPlayedAt.asStateFlow()
+
+    // #888 §6.2 — claim-conflict pending takeover. Set when the operator
+    // tries to grab a mover currently held by another client; cleared
+    // on confirm (which retries with force=true) or cancel.
+    data class PendingTakeover(val fixtureId: Int, val fixtureName: String, val heldBy: String)
+    private val _pendingTakeover = MutableStateFlow<PendingTakeover?>(null)
+    val pendingTakeover: StateFlow<PendingTakeover?> = _pendingTakeover.asStateFlow()
 
     // Controller mode state
     private val _controllerFixtureId = MutableStateFlow<Int?>(null)
@@ -224,13 +235,35 @@ class ControlViewModel @Inject constructor(
         }
     }
 
+    // Best-effort: pull a holder hint out of a server err message.
+    // Server sends strings like "Mover claimed by Phone-Bob" or
+    // "Mover already held by SPA". Anything between `by ` and end-of-
+    // string is treated as the client name. Returns null if no match.
+    private fun extractHolderName(err: String): String? {
+        val idx = err.lowercase().indexOf(" by ")
+        if (idx < 0) return null
+        val tail = err.substring(idx + 4).trim().trimEnd('.', ',', ';')
+        return tail.ifBlank { null }
+    }
+
+    fun cancelTakeover() { _pendingTakeover.value = null }
+
+    fun confirmTakeover() {
+        val pending = _pendingTakeover.value ?: return
+        _pendingTakeover.value = null
+        enterControllerMode(pending.fixtureId, force = true)
+    }
+
     // #888 — Page-level safety actions backing v3 design §6.5.
 
     fun sendAllMoversHome() {
         viewModelScope.launch {
             try {
-                repository.moverAllHome()
-                _message.value = "Movers sent home"
+                val r = repository.moverAllHome()
+                // OkResponse just carries `ok`; the moved/skipped detail
+                // lives in the response body we don't currently surface.
+                _message.value = if (r.ok) "Movers sent home"
+                                  else "All-home failed"
             } catch (e: Exception) {
                 _message.value = "All-home failed: ${e.message}"
             }
@@ -240,14 +273,70 @@ class ControlViewModel @Inject constructor(
     fun stopAllEffects() {
         viewModelScope.launch {
             // Fire both in parallel — they're independent server-side.
+            // Track per-side outcomes so the snackbar reflects reality
+            // instead of always claiming success.
+            var strobesOk = false; var strobesErr: String? = null
+            var effectsOk = false; var effectsErr: String? = null
             val strobes = launch {
-                try { repository.killStrobes() } catch (_: Exception) {}
+                try { strobesOk = repository.killStrobes().ok }
+                catch (e: Exception) { strobesErr = e.message }
             }
             val effects = launch {
-                try { repository.killEffects() } catch (_: Exception) {}
+                try { effectsOk = repository.killEffects().ok }
+                catch (e: Exception) { effectsErr = e.message }
             }
             strobes.join(); effects.join()
-            _message.value = "Strobes + effects stopped"
+            _message.value = when {
+                strobesOk && effectsOk -> "Strobes + effects stopped"
+                strobesOk && !effectsOk -> "Strobes stopped; effects failed${effectsErr?.let { " — $it" } ?: ""}"
+                !strobesOk && effectsOk -> "Effects stopped; strobes failed${strobesErr?.let { " — $it" } ?: ""}"
+                else -> "Stop all effects failed${strobesErr?.let { " — $it" } ?: ""}"
+            }
+        }
+    }
+
+    // #888 — single-fixture quick actions for the Grab long-press menu.
+    // All go through aimFixtureDirect (/api/fixtures/<fid>/dmx-test)
+    // which takes normalised pan/tilt/dimmer — no claim required.
+
+    fun flashFixture(fid: Int) {
+        viewModelScope.launch {
+            try {
+                val on = buildJsonObject { put("dimmer", JsonPrimitive(1.0)) }
+                val off = buildJsonObject { put("dimmer", JsonPrimitive(0.0)) }
+                repository.aimFixtureDirect(fid, on)
+                delay(180)
+                repository.aimFixtureDirect(fid, off)
+            } catch (e: Exception) {
+                _message.value = "Flash failed: ${e.message}"
+            }
+        }
+    }
+
+    fun homeFixture(fid: Int) {
+        viewModelScope.launch {
+            try {
+                val body = buildJsonObject {
+                    put("pan", JsonPrimitive(0.5))
+                    put("tilt", JsonPrimitive(0.5))
+                    put("dimmer", JsonPrimitive(0.0))
+                }
+                repository.aimFixtureDirect(fid, body)
+                _message.value = "Fixture sent home"
+            } catch (e: Exception) {
+                _message.value = "Home failed: ${e.message}"
+            }
+        }
+    }
+
+    fun blackoutFixture(fid: Int) {
+        viewModelScope.launch {
+            try {
+                val body = buildJsonObject { put("dimmer", JsonPrimitive(0.0)) }
+                repository.aimFixtureDirect(fid, body)
+            } catch (e: Exception) {
+                _message.value = "Blackout failed: ${e.message}"
+            }
         }
     }
 
@@ -261,9 +350,40 @@ class ControlViewModel @Inject constructor(
         }
     }
 
-    /** #888 — Fixtures-page shortcut renderer needs full profile JSON. */
-    suspend fun fetchProfileFull(profileId: String): kotlinx.serialization.json.JsonObject =
-        repository.getDmxProfileFull(profileId)
+    /**
+     * #888 — Fixtures-page shortcut renderer needs full profile JSON.
+     * Cache by profileId so N fixtures sharing one profile don't each
+     * fire concurrent GETs (Pixel WiFi on a busy rig can RTT > 500 ms).
+     * In-flight requests share a Deferred so only one network call
+     * lands per profileId.
+     */
+    private val _profileFullCache = mutableMapOf<String, kotlinx.serialization.json.JsonObject>()
+    private val _profileFullInFlight = mutableMapOf<String, Deferred<kotlinx.serialization.json.JsonObject>>()
+    private val _profileFullMutex = Mutex()
+
+    suspend fun fetchProfileFull(profileId: String): kotlinx.serialization.json.JsonObject {
+        _profileFullCache[profileId]?.let { return it }
+        val deferred: Deferred<kotlinx.serialization.json.JsonObject>
+        _profileFullMutex.lock()
+        try {
+            _profileFullCache[profileId]?.let { cached ->
+                _profileFullMutex.unlock()
+                return cached
+            }
+            deferred = _profileFullInFlight[profileId] ?: viewModelScope.async(start = CoroutineStart.LAZY) {
+                try {
+                    val full = repository.getDmxProfileFull(profileId)
+                    _profileFullCache[profileId] = full
+                    full
+                } finally {
+                    _profileFullInFlight.remove(profileId)
+                }
+            }.also { _profileFullInFlight[profileId] = it }
+        } finally {
+            if (_profileFullMutex.isLocked) _profileFullMutex.unlock()
+        }
+        return deferred.await()
+    }
 
     /** #888 — write raw bytes to specific channel offsets. */
     fun channelWrite(fid: Int, offsetToByte: Map<Int, Int>) {
@@ -351,7 +471,7 @@ class ControlViewModel @Inject constructor(
 
     // ── Controller mode (unified mover-control API) ───────────────────
 
-    fun enterControllerMode(fixtureId: Int) {
+    fun enterControllerMode(fixtureId: Int, force: Boolean = false) {
         // #752 — explicit clear of stale per-fixture state from any
         // previous session. Without this, `_controllerStatus`,
         // `_controllerConnected`, and the orient-failure counters
@@ -371,12 +491,26 @@ class ControlViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 // Step 1: Claim the mover
-                val claimResult = repository.moverClaim(fixtureId)
+                val claimResult = repository.moverClaim(fixtureId, force = force)
                 if (!claimResult.ok) {
-                    _message.value = claimResult.err ?: "Mover claimed by another device"
+                    // #888 §6.2 — detect claim-conflict and surface
+                    // the takeover sheet instead of a silent snackbar.
+                    val errMsg = claimResult.err ?: ""
+                    val isConflict = "claim" in errMsg.lowercase()
+                        || "another" in errMsg.lowercase()
+                        || "held" in errMsg.lowercase()
+                    if (isConflict && !force) {
+                        val name = _fixtures.value.find { it.id == fixtureId }?.name
+                            ?: "Fixture $fixtureId"
+                        val heldBy = extractHolderName(errMsg) ?: "another client"
+                        _pendingTakeover.value = PendingTakeover(fixtureId, name, heldBy)
+                    } else {
+                        _message.value = errMsg.ifBlank { "Mover claimed by another device" }
+                    }
                     _controllerFixtureId.value = null
                     return@launch
                 }
+                _pendingTakeover.value = null
 
                 // Step 2: Start streaming (turns on light via server)
                 val startResult = repository.moverStart(fixtureId)

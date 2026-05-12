@@ -224,14 +224,48 @@ function resolveShortcutsForProfile(profile) {
   return out;
 }
 
+/**
+ * Strobe-momentary press value — midpoint of the channel's
+ * `ShutterStrobe/Strobe` capability range. Mirrors Kotlin's
+ * `strobeMomentaryValue` in FixtureShortcuts.kt. Returns null when
+ * no Strobe range is declared (renderer should hide the shortcut).
+ */
+function strobeMomentaryValue(shortcut) {
+  for (const cap of (shortcut.capabilities || [])) {
+    if (cap.type === "ShutterStrobe" && cap.shutterEffect === "Strobe") {
+      const rng = cap.range || [];
+      if (rng.length !== 2) continue;
+      return Math.floor((rng[0] + rng[1]) / 2);
+    }
+  }
+  return null;
+}
+
+/**
+ * Strobe-momentary release value — midpoint of the channel's
+ * `ShutterStrobe/Open` capability range, or 0 when none declared.
+ */
+function strobeOpenValue(shortcut) {
+  for (const cap of (shortcut.capabilities || [])) {
+    if (cap.type === "ShutterStrobe" && cap.shutterEffect === "Open") {
+      const rng = cap.range || [];
+      if (rng.length !== 2) continue;
+      return Math.floor((rng[0] + rng[1]) / 2);
+    }
+  }
+  return 0;
+}
+
 // Export for ES module + plain-script usage.
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     SHORTCUT_IDS, SHORTCUT_SPECS, resolveChannelShortcut, resolveShortcutsForProfile,
+    strobeMomentaryValue, strobeOpenValue,
   };
 }
 if (typeof window !== "undefined") {
   window.FixtureShortcuts = {
     SHORTCUT_IDS, SHORTCUT_SPECS, resolveChannelShortcut, resolveShortcutsForProfile,
+    strobeMomentaryValue, strobeOpenValue,
   };
 }

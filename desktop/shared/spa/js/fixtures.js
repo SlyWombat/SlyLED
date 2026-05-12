@@ -800,6 +800,7 @@ function showDmxDetails(fid){
     +'Universe '+fix.dmxUniverse+' | Address '+(fix.dmxStartAddr||1)+' | '+fix.dmxChannelCount+' channels'
     +(fix.dmxProfileId?' | Profile: <b>'+escapeHtml(fix.dmxProfileId)+'</b>':'')
     +'</div>';
+  h+='<div id="dmx-detail-shortcuts" style="margin-bottom:.4em"></div>';
   h+='<div id="dmx-detail-ch" style="max-height:350px;overflow-y:auto"><p style="color:#888;font-size:.82em">Loading channels...</p></div>';
   h+='<div style="margin-top:.6em;display:flex;gap:.5em;flex-wrap:wrap">'
     +'<button class="btn btn-on" onclick="_dmxDetailAllOn('+fid+')" style="font-size:.78em">All On (255)</button>'
@@ -831,6 +832,82 @@ function showDmxDetails(fid){
     });
     el.innerHTML=ch;
   });
+  // #888 — render profile-driven shortcuts above the channel sliders.
+  if(fix.dmxProfileId&&window.FixtureShortcuts){_renderFixtureShortcuts(fid,fix.dmxProfileId);}
+}
+
+// #888 — profile-driven shortcut row for the Channel Test modal. Pulls
+// the full profile (incl. `shortcut` annotations + capability ranges)
+// from /api/dmx-profiles/<id>, resolves shortcuts via the shared JS
+// renderer, and writes via /api/fixtures/<fid>/channel-write so the
+// SPA + Android codepaths share the same backend.
+function _renderFixtureShortcuts(fid,profileId){
+  var host=document.getElementById('dmx-detail-shortcuts');if(!host)return;
+  ra('GET','/api/dmx-profiles/'+encodeURIComponent(profileId),null,function(prof){
+    if(!prof||!prof.channels){host.innerHTML='';return;}
+    // Rebuild channel_map for the resolver (server omits it from the
+    // /api/dmx-profiles/<id> response).
+    var cm={};
+    prof.channels.forEach(function(c){if(c.type&&!(c.type in cm))cm[c.type]=c.offset;});
+    prof.channel_map=cm;
+    var sh=window.FixtureShortcuts.resolveShortcutsForProfile(prof);
+    if(!sh.length){host.innerHTML='';return;}
+    var html='<div style="font-size:.72em;color:#64748b;margin:.3em 0">Quick controls</div>'
+      +'<div style="display:flex;gap:.4em;flex-wrap:wrap;margin-bottom:.4em">';
+    sh.forEach(function(s){html+=_renderShortcutBtn(fid,s);});
+    html+='</div>';
+    host.innerHTML=html;
+  });
+}
+
+function _renderShortcutBtn(fid,sc){
+  var icon=escapeHtml(sc.icon||'');
+  var lbl=escapeHtml(sc.label||sc.id);
+  var btnStyle='font-size:.78em;background:#1e3a5f;color:#93c5fd';
+  if(sc.ui==='toggle'){
+    return '<button class="btn" onclick="_shortcutToggle('+fid+','+sc.channelOffset+','+sc.onValue+','+sc.offValue+',this)" style="'+btnStyle+'" data-on="0">'+icon+' '+lbl+'</button>';
+  }
+  if(sc.ui==='segmented'){
+    var b='';
+    sc.segments.forEach(function(seg){
+      b+='<button class="btn" onclick="_shortcutWrite('+fid+','+sc.channelOffset+','+seg.value+')" style="'+btnStyle+'">'+icon+' '+escapeHtml(seg.label)+'</button>';
+    });
+    return b;
+  }
+  if(sc.ui==='color-swatch'){
+    var b='';
+    sc.swatches.forEach(function(sw){
+      var hex='#'+((1<<24)|(sw.rgb[0]<<16)|(sw.rgb[1]<<8)|sw.rgb[2]).toString(16).slice(1);
+      b+='<button class="btn" onclick="_shortcutSwatch('+fid+','+sc.channelOffsets.red+','+sc.channelOffsets.green+','+sc.channelOffsets.blue+','+sw.rgb[0]+','+sw.rgb[1]+','+sw.rgb[2]+')" style="background:'+hex+';width:28px;height:28px;padding:0;border:1px solid #000" title="'+escapeHtml(sw.label)+'"></button>';
+    });
+    return b;
+  }
+  if(sc.ui==='momentary'){
+    var onV=(window.FixtureShortcuts.strobeMomentaryValue(sc)||128);
+    var offV=window.FixtureShortcuts.strobeOpenValue(sc);
+    return '<button class="btn" onmousedown="_shortcutWrite('+fid+','+sc.channelOffset+','+onV+')" onmouseup="_shortcutWrite('+fid+','+sc.channelOffset+','+offV+')" onmouseleave="_shortcutWrite('+fid+','+sc.channelOffset+','+offV+')" style="'+btnStyle+';background:#7c3aed;color:#e9d5ff">'+icon+' '+lbl+' (hold)</button>';
+  }
+  if(sc.ui==='long-press'){
+    return '<button class="btn" onclick="if(confirm(\''+lbl+' — run clean mode?\')){_shortcutWrite('+fid+','+sc.channelOffset+','+sc.onValue+');}" style="'+btnStyle+'">'+icon+' '+lbl+'</button>';
+  }
+  return '';
+}
+
+function _shortcutWrite(fid,offset,value){
+  ra('POST','/api/fixtures/'+fid+'/channel-write',{writes:{[offset]:value}},function(){});
+}
+
+function _shortcutToggle(fid,offset,onVal,offVal,btn){
+  var isOn=btn.getAttribute('data-on')==='1';
+  var newOn=!isOn;
+  btn.setAttribute('data-on',newOn?'1':'0');
+  btn.style.background=newOn?'#22c55e':'#1e3a5f';
+  _shortcutWrite(fid,offset,newOn?onVal:offVal);
+}
+
+function _shortcutSwatch(fid,redOff,greenOff,blueOff,r,g,b){
+  var writes={};writes[redOff]=r;writes[greenOff]=g;writes[blueOff]=b;
+  ra('POST','/api/fixtures/'+fid+'/channel-write',{writes:writes},function(){});
 }
 function _dmxDetailSetAll(fid,val){
   var sliders=document.querySelectorAll('.dmx-detail-slider');

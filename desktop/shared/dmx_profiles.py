@@ -1179,6 +1179,27 @@ class ProfileLibrary:
                     f"LSB will be written but the MSB write expects an "
                     f"8-bit-only coarse, leaving the channel in an "
                     f"inconsistent half-written state.")
+
+        # #888 — unknown `shortcut` ids on per-channel entries. The
+        # strict `validate_profile` rejects unknown ids, but a typo in
+        # a hand-edited custom profile that slips past validation
+        # (e.g. lands via `import_profiles` with the field missing
+        # entirely, or the file is loaded with the field set after a
+        # post-validation external edit) would otherwise be invisible.
+        # Surfacing it here lets _load_custom log a one-liner the
+        # operator can see in the orchestrator log.
+        for i, ch in enumerate(channels):
+            if not isinstance(ch, dict):
+                continue
+            sc = ch.get("shortcut")
+            if sc is None:
+                continue
+            if not isinstance(sc, str) or sc not in SHORTCUT_IDS:
+                issues.append(
+                    f"channel {i} ('{ch.get('type', '?')}'): unknown "
+                    f"shortcut '{sc}' — mobile UI will fall back to the "
+                    f"heuristic/name-match resolver. Valid ids: "
+                    f"{sorted(SHORTCUT_IDS)}.")
         return issues
 
     def validate_profile(self, profile):

@@ -119,7 +119,7 @@ fun MasterPage(
                 ) {
                     OutlinedButton(
                         onClick = {
-                            val v = (sliderValue - 12f).coerceIn(0f, 255f)
+                            val v = (sliderValue - 13f).coerceIn(0f, 255f)
                             sliderValue = v
                             controlVm.setBrightness(v.roundToInt())
                             haptic(HapticEvent.SOFT_TICK)
@@ -132,7 +132,7 @@ fun MasterPage(
                     }
                     OutlinedButton(
                         onClick = {
-                            val v = (sliderValue + 12f).coerceIn(0f, 255f)
+                            val v = (sliderValue + 13f).coerceIn(0f, 255f)
                             sliderValue = v
                             controlVm.setBrightness(v.roundToInt())
                             haptic(HapticEvent.SOFT_TICK)

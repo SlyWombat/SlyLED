@@ -6,7 +6,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowForward
@@ -21,12 +20,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.slywombat.slyled.data.model.DmxProfile
 import com.slywombat.slyled.data.model.Fixture
 import com.slywombat.slyled.ui.screens.control.haptics.HapticEvent
 import com.slywombat.slyled.ui.screens.control.haptics.rememberHaptics
 import com.slywombat.slyled.ui.screens.control.shortcuts.ResolvedShortcut
-import com.slywombat.slyled.ui.screens.control.shortcuts.ShortcutId
 import com.slywombat.slyled.ui.screens.control.shortcuts.ShortcutUi
 import com.slywombat.slyled.ui.screens.control.shortcuts.resolveShortcutsForProfile
 import com.slywombat.slyled.ui.screens.control.shortcuts.strobeMomentaryValue
@@ -35,18 +32,15 @@ import com.slywombat.slyled.ui.theme.DmxPurple
 import com.slywombat.slyled.ui.theme.RedError
 import com.slywombat.slyled.viewmodel.ControlViewModel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
 
 /**
  * Fixtures page — non-mover DMX fixtures (bubble machines, hazers,
@@ -132,7 +126,6 @@ private fun FixtureCard(
     vm: ControlViewModel = hiltViewModel(),
 ) {
     val haptic = rememberHaptics()
-    val scope = rememberCoroutineScope()
     var profileJson by remember(fixture.dmxProfileId) { mutableStateOf<JsonObject?>(null) }
     var shortcuts by remember(fixture.dmxProfileId) { mutableStateOf<List<ResolvedShortcut>>(emptyList()) }
     var loadError by remember(fixture.dmxProfileId) { mutableStateOf<String?>(null) }
@@ -210,7 +203,6 @@ private fun ShortcutRow(
     onWrite: (Map<Int, Int>) -> Unit,
 ) {
     val haptic = rememberHaptics()
-    val scope = rememberCoroutineScope()
 
     when (sc.ui) {
         ShortcutUi.TOGGLE -> {
@@ -402,10 +394,14 @@ fun jsonToMap(obj: JsonObject): Map<String, Any?> {
 }
 
 private fun decode(el: JsonElement): Any? = when (el) {
+    is JsonNull -> null
     is JsonPrimitive -> when {
+        // Quoted strings stay as-is so "True White" doesn't get
+        // tokenised into a boolean.
+        el.isString -> el.content
         el.booleanOrNull != null -> el.boolean
         el.intOrNull != null -> el.intOrNull
-        el.content == "null" -> null
+        el.doubleOrNull != null -> el.doubleOrNull
         else -> el.content
     }
     is JsonObject -> jsonToMap(el)

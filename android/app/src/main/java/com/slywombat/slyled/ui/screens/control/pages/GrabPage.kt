@@ -1,8 +1,9 @@
 package com.slywombat.slyled.ui.screens.control.pages
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -19,18 +20,15 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.Canvas
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.slywombat.slyled.data.model.DmxProfile
 import com.slywombat.slyled.data.model.Fixture
 import com.slywombat.slyled.ui.screens.control.haptics.HapticEvent
 import com.slywombat.slyled.ui.screens.control.haptics.rememberHaptics
@@ -41,7 +39,6 @@ import com.slywombat.slyled.viewmodel.ControlViewModel
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -132,6 +129,9 @@ fun GrabPage(
                             haptic(HapticEvent.LIGHT_TICK)
                             vm.toggleFavouriteMover(fix.id)
                         },
+                        onFlash = { haptic(HapticEvent.SUCCESS_TICK); vm.flashFixture(fix.id) },
+                        onHome = { haptic(HapticEvent.HEAVY_THUD); vm.homeFixture(fix.id) },
+                        onBlackout = { haptic(HapticEvent.HEAVY_THUD); vm.blackoutFixture(fix.id) },
                     )
                 }
             }
@@ -161,6 +161,9 @@ fun GrabPage(
                         haptic(HapticEvent.LIGHT_TICK)
                         vm.toggleFavouriteMover(fix.id)
                     },
+                    onFlash = { haptic(HapticEvent.SUCCESS_TICK); vm.flashFixture(fix.id) },
+                    onHome = { haptic(HapticEvent.HEAVY_THUD); vm.homeFixture(fix.id) },
+                    onBlackout = { haptic(HapticEvent.HEAVY_THUD); vm.blackoutFixture(fix.id) },
                 )
             }
         }
@@ -196,16 +199,29 @@ private fun MoverTile(
     starred: Boolean,
     onTap: () -> Unit,
     onToggleStar: () -> Unit,
+    onFlash: () -> Unit,
+    onHome: () -> Unit,
+    onBlackout: () -> Unit,
 ) {
     val rgb = liveRgb(live)
     val panDeg = liveAngle(live, "panDeg") ?: 0f
     val tiltDeg = liveAngle(live, "tiltDeg") ?: 0f
+    var menuOpen by remember(fixture.id) { mutableStateOf(false) }
+    val haptic = rememberHaptics()
 
     Surface(
         modifier = Modifier
             .width(88.dp)
             .height(120.dp)
-            .clickable(onClick = onTap),
+            .pointerInput(fixture.id) {
+                detectTapGestures(
+                    onTap = { onTap() },
+                    onLongPress = {
+                        haptic(HapticEvent.SUCCESS_TICK)
+                        menuOpen = true
+                    },
+                )
+            },
         shape = RoundedCornerShape(10.dp),
         color = MaterialTheme.colorScheme.surface,
         border = androidx.compose.foundation.BorderStroke(
@@ -228,15 +244,26 @@ private fun MoverTile(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onToggleStar, modifier = Modifier.size(22.dp)) {
+                // Material 3 minimum tap target = 48 dp; icon stays small
+                // for the tile aesthetic. Hit box is invisibly larger.
+                IconButton(onClick = onToggleStar, modifier = Modifier.size(48.dp)) {
                     Icon(
                         if (starred) Icons.Filled.Star else Icons.Filled.StarBorder,
                         contentDescription = "Favourite",
                         tint = if (starred) CyanSecondary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp),
+                        modifier = Modifier.size(20.dp),
                     )
                 }
             }
+            MoverActionMenu(
+                expanded = menuOpen,
+                onDismiss = { menuOpen = false },
+                starred = starred,
+                onFlash = { menuOpen = false; onFlash() },
+                onHome = { menuOpen = false; onHome() },
+                onBlackout = { menuOpen = false; onBlackout() },
+                onToggleStar = { menuOpen = false; onToggleStar() },
+            )
         }
     }
 }
@@ -248,13 +275,28 @@ private fun MoverRow(
     starred: Boolean,
     onTap: () -> Unit,
     onToggleStar: () -> Unit,
+    onFlash: () -> Unit,
+    onHome: () -> Unit,
+    onBlackout: () -> Unit,
 ) {
     val rgb = liveRgb(live)
     val panDeg = liveAngle(live, "panDeg") ?: 0f
     val tiltDeg = liveAngle(live, "tiltDeg") ?: 0f
+    var menuOpen by remember(fixture.id) { mutableStateOf(false) }
+    val haptic = rememberHaptics()
 
     Surface(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onTap),
+        modifier = Modifier
+            .fillMaxWidth()
+            .pointerInput(fixture.id) {
+                detectTapGestures(
+                    onTap = { onTap() },
+                    onLongPress = {
+                        haptic(HapticEvent.SUCCESS_TICK)
+                        menuOpen = true
+                    },
+                )
+            },
         shape = RoundedCornerShape(8.dp),
         color = MaterialTheme.colorScheme.surface,
     ) {
@@ -282,7 +324,7 @@ private fun MoverRow(
                 tint = DmxPurple,
                 modifier = Modifier.size(20.dp),
             )
-            IconButton(onClick = onToggleStar, modifier = Modifier.size(28.dp)) {
+            IconButton(onClick = onToggleStar, modifier = Modifier.size(48.dp)) {
                 Icon(
                     if (starred) Icons.Filled.Star else Icons.Filled.StarBorder,
                     contentDescription = "Favourite",
@@ -290,7 +332,37 @@ private fun MoverRow(
                            else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            MoverActionMenu(
+                expanded = menuOpen,
+                onDismiss = { menuOpen = false },
+                starred = starred,
+                onFlash = { menuOpen = false; onFlash() },
+                onHome = { menuOpen = false; onHome() },
+                onBlackout = { menuOpen = false; onBlackout() },
+                onToggleStar = { menuOpen = false; onToggleStar() },
+            )
         }
+    }
+}
+
+@Composable
+private fun MoverActionMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    starred: Boolean,
+    onFlash: () -> Unit,
+    onHome: () -> Unit,
+    onBlackout: () -> Unit,
+    onToggleStar: () -> Unit,
+) {
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        DropdownMenuItem(text = { Text("⚡ Flash") }, onClick = onFlash)
+        DropdownMenuItem(text = { Text("🏠 Send home") }, onClick = onHome)
+        DropdownMenuItem(text = { Text("⬛ Blackout this fixture") }, onClick = onBlackout)
+        DropdownMenuItem(
+            text = { Text(if (starred) "★ Unfavourite" else "☆ Favourite") },
+            onClick = onToggleStar,
+        )
     }
 }
 

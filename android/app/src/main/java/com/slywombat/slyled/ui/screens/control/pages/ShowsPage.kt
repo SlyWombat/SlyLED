@@ -209,7 +209,7 @@ private fun ShowRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        IconButton(onClick = onToggleStar, modifier = Modifier.size(32.dp)) {
+        IconButton(onClick = onToggleStar, modifier = Modifier.size(48.dp)) {
             Icon(
                 if (starred) Icons.Filled.Star else Icons.Filled.StarBorder,
                 contentDescription = "Star",

@@ -1,5 +1,6 @@
 package com.slywombat.slyled.ui.screens.control
 
+import androidx.compose.foundation.clickable
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -41,13 +42,20 @@ fun NowPlayingAnchor(
     modifier: Modifier = Modifier,
     onStop: () -> Unit,
     onNext: () -> Unit,
+    onJumpToShows: () -> Unit = {},
 ) {
     val haptic = rememberHaptics()
     if (!isRunning || timelineStatus == null) {
         // Idle: tight one-liner. Reserves the slot so the pager doesn't
-        // jump up when a show starts/stops.
+        // jump up when a show starts/stops. Tap jumps to Shows page
+        // (design doc §4.3).
         Surface(
-            modifier = modifier.fillMaxWidth(),
+            modifier = modifier
+                .fillMaxWidth()
+                .clickable {
+                    haptic(HapticEvent.SOFT_TICK)
+                    onJumpToShows()
+                },
             color = MaterialTheme.colorScheme.surfaceVariant,
         ) {
             Row(

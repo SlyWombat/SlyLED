@@ -5424,7 +5424,7 @@ def api_fixtures_kill_strobes():
     Returns: {ok, killed: int, skipped: list[fid]}.
     """
     if not (_artnet.running or _sacn.running):
-        return jsonify(ok=False, err="DMX engine not running"), 409
+        return jsonify(ok=False, err="DMX engine not running"), 503
     from dmx_profiles import strobe_open_value
     snap = _claim_arbiter.snapshot()
     killed = 0
@@ -5474,7 +5474,7 @@ def api_fixtures_kill_effects():
     Returns: {ok, killed: int, channelsWritten: int, skipped: list[fid]}.
     """
     if not (_artnet.running or _sacn.running):
-        return jsonify(ok=False, err="DMX engine not running"), 409
+        return jsonify(ok=False, err="DMX engine not running"), 503
     snap = _claim_arbiter.snapshot()
     EFFECT_SHORTCUTS = {"bubble-toggle", "haze-segmented"}
     EFFECT_NAME_HINTS = ("bubble", "haze", "fog")
@@ -5495,11 +5495,20 @@ def api_fixtures_kill_effects():
             continue
         channels = info.get("channels", []) or []
         targets = []
+        # Mirror the JS/Kotlin shortcut renderer's ELIGIBLE_NAME_TYPES gate:
+        # only dimmer-class / speed / reset channels are eligible for the
+        # name-match fallback, so a strobe-typed "Fog Strobe Macro" channel
+        # doesn't get zeroed when the operator hits Stop all effects.
+        # Explicit-shortcut hits remain unrestricted (profile author opt-in).
+        ELIGIBLE_NAME_TYPES = {"dimmer", "intensity", "speed", "reset"}
         for ch in channels:
             sc = ch.get("shortcut")
             name = (ch.get("name") or "").lower()
-            if sc in EFFECT_SHORTCUTS or (
-                sc is None and any(h in name for h in EFFECT_NAME_HINTS)):
+            t = ch.get("type")
+            if sc in EFFECT_SHORTCUTS:
+                targets.append(ch.get("offset", 0))
+            elif sc is None and t in ELIGIBLE_NAME_TYPES and any(
+                    h in name for h in EFFECT_NAME_HINTS):
                 targets.append(ch.get("offset", 0))
         if not targets:
             continue
@@ -12052,6 +12061,12 @@ def api_mover_claim():
             log.info("MOVER_CLAIM from %s — clearing stale_reason=%s",
                      did, remote_pre.stale_reason)
             remote_pre.clear_stale()
+    # #888 §6.2 — force=true releases any prior holder before claiming.
+    # Used by the Android TakeoverSheet flow when the operator confirms
+    # they want to grab a mover that's currently held by someone else.
+    if bool(body.get("force")):
+        try: _mover_engine.release(mid, blackout=False)
+        except Exception: log.warning("force claim: prior release failed", exc_info=True)
     ok, reason = _mover_engine.claim(mid, did, dname, dtype,
                                      convention=conv)
     if not ok:
@@ -12311,10 +12326,10 @@ def api_mover_all_home():
     """
     if not (_artnet.running or _sacn.running):
         return jsonify(ok=False, err="DMX engine not running",
-                       engineRunning=False), 409
+                       engineRunning=False), 503
     snap = _claim_arbiter.snapshot()
     moved = 0
-    skipped = []
+    skipped = []  # list of {id, reason} so the operator UI can render hints
     for f in _fixtures:
         if f.get("fixtureType") != "dmx":
             continue
@@ -12324,12 +12339,12 @@ def api_mover_all_home():
         if not info or int(info.get("panRange", 0) or 0) <= 0:
             continue  # not a mover
         if _claim_arbiter.is_muted(fid, snap):
-            skipped.append(fid)
+            skipped.append({"id": fid, "reason": "claimed"})
             continue
         home_pan = f.get("homePanDmx16")
         home_tilt = f.get("homeTiltDmx16")
         if home_pan is None or home_tilt is None:
-            skipped.append(fid)
+            skipped.append({"id": fid, "reason": "no_home"})
             continue
         try:
             uni = int(f.get("dmxUniverse", 1) or 1)
@@ -12345,7 +12360,7 @@ def api_mover_all_home():
             moved += 1
         except Exception:
             log.warning("all-home: fixture %s failed", fid, exc_info=True)
-            skipped.append(fid)
+            skipped.append({"id": fid, "reason": "error"})
     return jsonify(ok=True, moved=moved, skipped=skipped, engineRunning=True)
 
 # ── End Mover Control ───────────────────────────────────────────────────────
@@ -15939,6 +15954,13 @@ _show_playback = {
     "totalElapsed": 0,
 }
 
+# #888 — generation counter to make show-start/stop/next thread-safe.
+# Every spawn of `_show_playback_loop` captures the current generation;
+# state mutations in the loop check that they still match before
+# touching `_show_playback` / `_settings`. Prevents two loops from
+# racing on universe writes when /api/show/next stop+respawns mid-segment.
+_show_playback_generation = 0
+
 @app.get("/api/show/playlist")
 def api_show_playlist_get():
     """Return ordered timeline playlist + loop setting."""
@@ -15977,9 +15999,21 @@ def api_show_playlist_set():
     return jsonify(ok=True)
 
 
-def _show_playback_loop(playlist_order, loop_all, go_epoch, start_idx=0):
-    """Background thread: play timelines sequentially."""
+def _show_playback_loop(playlist_order, loop_all, go_epoch, start_idx=0,
+                        my_generation=None):
+    """Background thread: play timelines sequentially.
+
+    `my_generation` is captured at spawn time. After every mutation of
+    shared state (`_show_playback`, `_settings`), we check that this
+    loop is still the active generation; if not, a newer start/next has
+    superseded us and we return without clobbering shared state. #888.
+    """
     global _show_playback
+    if my_generation is None:
+        my_generation = _show_playback_generation
+
+    def _is_current():
+        return my_generation == _show_playback_generation
     tl_list = []
     for tid in playlist_order:
         tl = next((t for t in _timelines if t["id"] == tid), None)
@@ -16004,12 +16038,16 @@ def _show_playback_loop(playlist_order, loop_all, go_epoch, start_idx=0):
     if loop_all and len(tl_list) == 1 and start_idx == 0:
         tid, tl = tl_list[0]
         duration = tl.get("durationS", 60)
+        if not _is_current():
+            return
         _show_playback["currentIndex"] = 0
         _show_playback["currentTid"] = tid
         _settings["activeTimeline"] = tid
         _save("settings", _settings)
         log.info("Show playback: single-item loop_all → _dmx_playback_loop")
         _dmx_playback_loop(tid, time.time(), duration, loop=True)
+        if not _is_current():
+            return  # a newer show start/next has taken over; leave shared state alone
         _show_playback["running"] = False
         _show_playback["currentTid"] = -1
         with _lock:
@@ -16054,11 +16092,13 @@ def _show_playback_loop(playlist_order, loop_all, go_epoch, start_idx=0):
             _show_playback["totalElapsed"] = cumulative
 
         first_pass = False  # subsequent loops start from beginning (#361)
-        if not loop_all or _dmx_playback_stop.is_set():
+        if not loop_all or _dmx_playback_stop.is_set() or not _is_current():
             break
         # Loop: reset and go again
         cumulative = 0
 
+    if not _is_current():
+        return  # newer show start/next has taken over; preserve its shared state
     _show_playback["running"] = False
     _show_playback["currentTid"] = -1
     with _lock:
@@ -16323,7 +16363,13 @@ def api_show_start():
         _settings["runnerStartEpoch"] = go_epoch
         _save("settings", _settings)
 
-    threading.Thread(target=_show_playback_loop, args=(order, loop_all, go_epoch, start_idx),
+    # #888 — bump generation so any still-running prior loop sees the
+    # mismatch and exits without clobbering this start's shared state.
+    global _show_playback_generation
+    _show_playback_generation += 1
+    my_gen = _show_playback_generation
+    threading.Thread(target=_show_playback_loop,
+                     args=(order, loop_all, go_epoch, start_idx, my_gen),
                      daemon=True).start()
     return jsonify(ok=True, started=started, goEpoch=go_epoch, timelines=len(order))
 
@@ -16448,8 +16494,13 @@ def api_show_next():
         _settings["activeTimeline"] = order[nxt]
         _settings["runnerStartEpoch"] = go_epoch
         _save("settings", _settings)
+    # #888 — bump generation so the prior loop exits cleanly on its
+    # next state-mutation point instead of racing this one's writes.
+    global _show_playback_generation
+    _show_playback_generation += 1
+    my_gen = _show_playback_generation
     threading.Thread(target=_show_playback_loop,
-                     args=(order, loop_all, go_epoch, nxt),
+                     args=(order, loop_all, go_epoch, nxt, my_gen),
                      daemon=True).start()
     return jsonify(ok=True, currentIndex=nxt, currentTid=order[nxt])
 

@@ -1,0 +1,24 @@
+{
+  "_doc": "Expected shortcut renderer output, indexed by profile id. Both the JS resolver (desktop/shared/spa/js/fixture_shortcuts.js) and the Kotlin twin (android/.../FixtureShortcuts.kt) must produce these exact `id` lists in this exact order for the corresponding profile. tests/test_fixture_shortcuts.py exercises the JS path via Node. The Android JUnit test (when added) exercises the Kotlin path against the same JSON corpus.",
+
+  "chauvet-dj-hurricane-bubble-haze-x2-q6": {
+    "shortcutIds": [
+      "bubble-toggle",
+      "haze-segmented",
+      "fan-segmented",
+      "color-swatch",
+      "uv-toggle",
+      "strobe-momentary",
+      "clean-mode"
+    ],
+    "shortcuts": [
+      { "id": "bubble-toggle",     "ui": "toggle",       "channelOffset": 0 },
+      { "id": "haze-segmented",    "ui": "segmented",    "channelOffset": 1 },
+      { "id": "fan-segmented",     "ui": "segmented",    "channelOffset": 2 },
+      { "id": "color-swatch",      "ui": "color-swatch", "anchorOffset": 5 },
+      { "id": "uv-toggle",         "ui": "toggle",       "channelOffset": 8 },
+      { "id": "strobe-momentary",  "ui": "momentary",    "channelOffset": 10 },
+      { "id": "clean-mode",        "ui": "long-press",   "channelOffset": 3 }
+    ]
+  }
+}

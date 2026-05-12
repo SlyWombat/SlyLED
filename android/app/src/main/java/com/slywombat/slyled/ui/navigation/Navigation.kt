@@ -24,6 +24,7 @@ import com.slywombat.slyled.ui.screens.status.StatusScreen
 import com.slywombat.slyled.ui.screens.settings.SettingsScreen
 import com.slywombat.slyled.viewmodel.ConnectionViewModel
 import com.slywombat.slyled.viewmodel.ControlViewModel
+import com.slywombat.slyled.viewmodel.SettingsViewModel
 
 enum class Tab(val route: String, val label: String, val icon: ImageVector) {
     STAGE("stage", "Stage", Icons.Default.Visibility),
@@ -77,6 +78,11 @@ fun MainScaffold(connectionVm: ConnectionViewModel, onDisconnect: () -> Unit) {
     // Shared ControlViewModel so long-press blackout reaches the
     // setBrightness path used by everything else. #888.
     val controlVm: ControlViewModel = hiltViewModel()
+    // #888 — long-press blackout must also disable Auto Brightness, or
+    // the AUTOBRI_PUSH stream (UDP 4211, ~20 Hz) immediately overrides
+    // master=0 with the envelope follower's next value. Without this
+    // the blackout gesture is silently defeated when Auto is on.
+    val settingsVm: SettingsViewModel = hiltViewModel()
 
     Scaffold(
         topBar = {
@@ -92,6 +98,9 @@ fun MainScaffold(connectionVm: ConnectionViewModel, onDisconnect: () -> Unit) {
                             detectTapGestures(
                                 onLongPress = {
                                     haptic(HapticEvent.HEAVY_DOUBLE)
+                                    // Disable Auto Brightness first so its
+                                    // pusher stream stops overriding master=0.
+                                    settingsVm.setAutoBrightnessEnabled(false)
                                     controlVm.setBrightness(0)
                                 },
                             )

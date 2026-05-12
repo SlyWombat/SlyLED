@@ -11,6 +11,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.slywombat.slyled.data.model.Fixture
+import com.slywombat.slyled.ui.screens.control.conn.LinkStateViewModel
+import com.slywombat.slyled.ui.screens.control.conn.linkStateGate
 import com.slywombat.slyled.ui.screens.control.overlays.FixtureSheet
 import com.slywombat.slyled.ui.screens.control.overlays.TakeoverSheet
 import com.slywombat.slyled.ui.screens.control.pages.FixturesPage
@@ -65,9 +67,9 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
 
     // FixtureSheet (More controls →) state.
     var openSheet by remember { mutableStateOf<Pair<Fixture, JsonObject>?>(null) }
-    // Takeover state — stub; wired here so the GrabPage tap can route through
-    // ControllerMode and only show on a real conflict. v1: not auto-shown.
-    var takeover by remember { mutableStateOf<Pair<String, String>?>(null) }
+    // #888 §6.2 — claim-conflict takeover wired through ControlViewModel
+    // so GrabPage taps that hit a held mover surface the right sheet.
+    val pendingTakeover by viewModel.pendingTakeover.collectAsState()
 
     val pagerState = rememberPagerState(
         initialPage = ControlPage.MASTER.ordinal,
@@ -85,6 +87,11 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
                 timelines = timelines,
                 onStop = { viewModel.stopShow() },
                 onNext = { viewModel.nextShow() },
+                onJumpToShows = {
+                    scope.launch {
+                        pagerState.animateScrollToPage(ControlPage.SHOWS.ordinal)
+                    }
+                },
             )
 
             // Segmented header tied to pager.
@@ -103,9 +110,16 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
                 }
             }
 
+            // #888 §6.1 — observe link state at the pager level and
+            // gate every page's interactions when offline. Connected
+            // and Degraded pass through; Disconnected dims + swallows
+            // taps with a NO_GO_BUMP haptic.
+            val linkVm: LinkStateViewModel = hiltViewModel()
+            val linkState by linkVm.state.collectAsState()
+
             HorizontalPager(
                 state = pagerState,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().linkStateGate(linkState),
             ) { pageIdx ->
                 when (ControlPage.entries[pageIdx]) {
                     ControlPage.MASTER -> MasterPage()
@@ -133,14 +147,15 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
         )
     }
 
-    // Conflict takeover sheet — manually triggered for now; auto-wired
-    // once GrabPage detects the held-by-other claim state in v2.
-    takeover?.let { (name, heldBy) ->
+    // #888 §6.2 — claim-conflict takeover sheet. Surfaces when
+    // enterControllerMode detected another client already holds the
+    // mover. Confirm retries with force=true; cancel clears.
+    pendingTakeover?.let { p ->
         TakeoverSheet(
-            fixtureName = name,
-            heldBy = heldBy,
-            onConfirm = { takeover = null },
-            onCancel = { takeover = null },
+            fixtureName = p.fixtureName,
+            heldBy = p.heldBy,
+            onConfirm = { viewModel.confirmTakeover() },
+            onCancel = { viewModel.cancelTakeover() },
         )
     }
 

@@ -1,0 +1,313 @@
+{
+  "id": "chauvet-dj-hurricane-bubble-haze-x2-q6",
+  "name": "Chauvet DJ Hurricane Bubble Haze X2 Q6",
+  "manufacturer": "Chauvet DJ",
+  "category": "fog",
+  "channels": [
+    {
+      "offset": 0,
+      "name": "Bubble Output",
+      "type": "dimmer",
+      "default": 0,
+      "shortcut": "bubble-toggle",
+      "capabilities": [
+        {
+          "range": [
+            0,
+            10
+          ],
+          "type": "NoFunction",
+          "label": "Off"
+        },
+        {
+          "range": [
+            11,
+            255
+          ],
+          "type": "Effect",
+          "label": "Bubble output on"
+        }
+      ]
+    },
+    {
+      "offset": 1,
+      "name": "Haze Output",
+      "type": "dimmer",
+      "default": 0,
+      "shortcut": "haze-segmented",
+      "capabilities": [
+        {
+          "range": [
+            0,
+            10
+          ],
+          "type": "NoFunction",
+          "label": "No function"
+        },
+        {
+          "range": [
+            11,
+            126
+          ],
+          "type": "Effect",
+          "label": "Continuous haze, low to high"
+        },
+        {
+          "range": [
+            127,
+            255
+          ],
+          "type": "Effect",
+          "label": "Timed haze (uses Interval/Duration), low to high"
+        }
+      ]
+    },
+    {
+      "offset": 2,
+      "name": "Fan Speed",
+      "type": "speed",
+      "default": 128,
+      "shortcut": "fan-segmented",
+      "capabilities": [
+        {
+          "range": [
+            0,
+            255
+          ],
+          "type": "Speed",
+          "label": "Blower fan speed, slow to fast"
+        }
+      ]
+    },
+    {
+      "offset": 3,
+      "name": "Clean Mode",
+      "type": "reset",
+      "default": 0,
+      "shortcut": "clean-mode",
+      "capabilities": [
+        {
+          "range": [
+            0,
+            10
+          ],
+          "type": "NoFunction",
+          "label": "No function"
+        },
+        {
+          "range": [
+            11,
+            255
+          ],
+          "type": "Maintenance",
+          "label": "Bubble cleaning mode on (bubble pump only)"
+        }
+      ]
+    },
+    {
+      "offset": 4,
+      "name": "Dimmer",
+      "type": "dimmer",
+      "default": 255,
+      "capabilities": [
+        {
+          "range": [
+            0,
+            10
+          ],
+          "type": "NoFunction",
+          "label": "No function"
+        },
+        {
+          "range": [
+            11,
+            255
+          ],
+          "type": "Intensity",
+          "label": "LED dimmer 0-100%"
+        }
+      ]
+    },
+    {
+      "offset": 5,
+      "name": "Red",
+      "type": "red",
+      "default": 0,
+      "shortcut": "color-swatch",
+      "capabilities": [
+        {
+          "range": [
+            0,
+            10
+          ],
+          "type": "NoFunction",
+          "label": "No function"
+        },
+        {
+          "range": [
+            11,
+            255
+          ],
+          "type": "ColorIntensity",
+          "label": "Red 0-100%"
+        }
+      ]
+    },
+    {
+      "offset": 6,
+      "name": "Green",
+      "type": "green",
+      "default": 0,
+      "capabilities": [
+        {
+          "range": [
+            0,
+            10
+          ],
+          "type": "NoFunction",
+          "label": "No function"
+        },
+        {
+          "range": [
+            11,
+            255
+          ],
+          "type": "ColorIntensity",
+          "label": "Green 0-100%"
+        }
+      ]
+    },
+    {
+      "offset": 7,
+      "name": "Blue",
+      "type": "blue",
+      "default": 0,
+      "capabilities": [
+        {
+          "range": [
+            0,
+            10
+          ],
+          "type": "NoFunction",
+          "label": "No function"
+        },
+        {
+          "range": [
+            11,
+            255
+          ],
+          "type": "ColorIntensity",
+          "label": "Blue 0-100%"
+        }
+      ]
+    },
+    {
+      "offset": 8,
+      "name": "UV",
+      "type": "uv",
+      "default": 0,
+      "shortcut": "uv-toggle",
+      "capabilities": [
+        {
+          "range": [
+            0,
+            10
+          ],
+          "type": "NoFunction",
+          "label": "No function"
+        },
+        {
+          "range": [
+            11,
+            255
+          ],
+          "type": "ColorIntensity",
+          "label": "UV 0-100%"
+        }
+      ]
+    },
+    {
+      "offset": 9,
+      "name": "Color Macro",
+      "type": "macro",
+      "default": 0,
+      "capabilities": [
+        {
+          "range": [
+            0,
+            10
+          ],
+          "type": "NoFunction",
+          "label": "No function"
+        },
+        {
+          "range": [
+            11,
+            255
+          ],
+          "type": "Effect",
+          "label": "Color macros (1=Red, 2=Green, 3=Blue, 4=UV, 5=Cyan, 6=Magenta, 7=Yellow, 8=White, 9-15=mix+UV, 16=4-colour chase, 17=14-colour chase)"
+        }
+      ]
+    },
+    {
+      "offset": 10,
+      "name": "Strobe",
+      "type": "strobe",
+      "default": 0,
+      "shortcut": "strobe-momentary",
+      "capabilities": [
+        {
+          "range": [
+            0,
+            10
+          ],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Open",
+          "label": "Open (no strobe)"
+        },
+        {
+          "range": [
+            11,
+            255
+          ],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Strobe",
+          "label": "Strobe slow to fast"
+        }
+      ]
+    },
+    {
+      "offset": 11,
+      "name": "Color Macro Speed",
+      "type": "effect-speed",
+      "default": 0,
+      "capabilities": [
+        {
+          "range": [
+            0,
+            10
+          ],
+          "type": "NoFunction",
+          "label": "No function"
+        },
+        {
+          "range": [
+            11,
+            255
+          ],
+          "type": "EffectSpeed",
+          "label": "Color macro speed slow to fast"
+        }
+      ]
+    }
+  ],
+  "channelCount": 12,
+  "colorMode": "rgb",
+  "beamWidth": 40,
+  "panRange": 0,
+  "tiltRange": 0,
+  "communityDownloads": 5,
+  "communityUploadTs": "2026-05-12 15:56:42",
+  "communityChannelHash": "b5a9cf9f715373b9bad4b94f83ba38e64c14f4ac"
+}
