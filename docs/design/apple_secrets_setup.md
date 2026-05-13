@@ -53,8 +53,13 @@ The signing process on the runner needs both the cert and the private key in one
 cd ~/slyled-apple-cert
 # Convert the .cer (DER) to PEM
 openssl x509 -inform DER -in slyled-distribution.cer -out slyled-distribution.pem
-# Bundle into .p12 — pick a STRONG password; you'll save it as a GitHub secret
-openssl pkcs12 -export \
+# Bundle into .p12 — pick a STRONG password; you'll save it as a GitHub secret.
+# IMPORTANT: -legacy is mandatory. OpenSSL 3.x defaults to PBES2/AES-256
+# encryption, which macOS `security import` on the GitHub Actions runner
+# rejects with the misleading error "MAC verification failed (wrong
+# password?)". -legacy uses PBE-SHA1-3DES / PBE-SHA1-RC2-40, the legacy
+# format the Apple keychain tool accepts.
+openssl pkcs12 -export -legacy \
                -inkey slyled-distribution.key \
                -in slyled-distribution.pem \
                -out slyled-distribution.p12 \
