@@ -174,6 +174,18 @@ function resolveChannelShortcut(channel) {
 function resolveShortcutsForProfile(profile) {
   if (!profile || !Array.isArray(profile.channels)) return [];
 
+  // Rebuild channel_map from `channels` when caller didn't supply it.
+  // /api/dmx-profiles/<id> omits channel_map; without this fallback
+  // the color-swatch shortcut (which gates on red/green/blue) gets
+  // silently dropped. SPA + Android use this identical fallback.
+  if (!profile.channel_map) {
+    const cm = {};
+    for (const c of profile.channels) {
+      if (c && c.type && !(c.type in cm)) cm[c.type] = c.offset;
+    }
+    profile.channel_map = cm;
+  }
+
   const out = [];
   const seenSwatch = { added: false };
 

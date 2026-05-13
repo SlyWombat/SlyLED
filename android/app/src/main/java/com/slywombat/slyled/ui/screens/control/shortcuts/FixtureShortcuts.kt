@@ -172,8 +172,25 @@ fun resolveChannelShortcut(channel: Map<String, Any?>): ShortcutId? {
 fun resolveShortcutsForProfile(profile: Map<String, Any?>): List<ResolvedShortcut> {
     @Suppress("UNCHECKED_CAST")
     val channels = profile["channels"] as? List<Map<String, Any?>> ?: return emptyList()
+
+    // Rebuild channel_map from the `channels` list when caller didn't
+    // supply it. The server's /api/dmx-profiles/<id> endpoint omits
+    // channel_map from the JSON response; without this fallback the
+    // color-swatch shortcut (which gates on red/green/blue presence)
+    // was silently dropped on Android while the SPA — which rebuilds
+    // channel_map at the call site in fixtures.js — saw it correctly.
     @Suppress("UNCHECKED_CAST")
-    val channelMap = (profile["channel_map"] as? Map<String, Any?>)?.mapValues { (it.value as? Number)?.toInt() ?: 0 } ?: emptyMap()
+    val provided = profile["channel_map"] as? Map<String, Any?>
+    val channelMap: Map<String, Int> = if (provided != null) {
+        provided.mapValues { (it.value as? Number)?.toInt() ?: 0 }
+    } else {
+        val cm = mutableMapOf<String, Int>()
+        for (ch in channels) {
+            val t = ch["type"] as? String ?: continue
+            if (t !in cm) cm[t] = (ch["offset"] as? Number)?.toInt() ?: 0
+        }
+        cm
+    }
 
     val out = mutableListOf<ResolvedShortcut>()
     var swatchAdded = false

@@ -1,6 +1,10 @@
 package com.slywombat.slyled.ui.screens.control.pages
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -39,6 +43,8 @@ import kotlin.math.roundToInt
 fun MasterPage(
     controlVm: ControlViewModel = hiltViewModel(),
     settingsVm: SettingsViewModel = hiltViewModel(),
+    sliderInteractionSource: MutableInteractionSource =
+        remember { MutableInteractionSource() },
     modifier: Modifier = Modifier,
 ) {
     val haptic = rememberHaptics()
@@ -46,6 +52,16 @@ fun MasterPage(
     val brightness = settings.globalBrightness ?: 255
     var sliderValue by remember { mutableFloatStateOf(brightness.toFloat()) }
     LaunchedEffect(brightness) { sliderValue = brightness.toFloat() }
+
+    // #888 — gate Auto Brightness Switch behind RECORD_AUDIO permission
+    // (mirrors SettingsScreen pattern). Without this, first-tap on a
+    // fresh install hits AudioRecord.startRecording() without consent
+    // and the app crashes silently.
+    val micPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) settingsVm.setAutoBrightnessEnabled(true)
+    }
 
     val autoEnabled by settingsVm.autoBrightnessEnabled.collectAsState()
     val envelope by settingsVm.autoBrightnessEnvelope.collectAsState()
@@ -102,6 +118,12 @@ fun MasterPage(
                             haptic(HapticEvent.LIGHT_TICK)
                         },
                         valueRange = 0f..255f,
+                        // #888 — wire the shared interactionSource so
+                        // ControlScreen can detect the drag and
+                        // disable HorizontalPager scroll while it's
+                        // active. Without this, dragging the slider
+                        // swipes the pager to the next page.
+                        interactionSource = sliderInteractionSource,
                         modifier = Modifier.weight(1f),
                     )
                     Icon(
@@ -172,9 +194,15 @@ fun MasterPage(
                     }
                     Switch(
                         checked = autoEnabled,
-                        onCheckedChange = {
+                        onCheckedChange = { want ->
                             haptic(HapticEvent.LIGHT_TICK)
-                            settingsVm.setAutoBrightnessEnabled(it)
+                            if (want && !settingsVm.autoBrightnessHasPermission()) {
+                                // System permission dialog; the launcher
+                                // calls setAutoBrightnessEnabled(true) on grant.
+                                micPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            } else {
+                                settingsVm.setAutoBrightnessEnabled(want)
+                            }
                         },
                     )
                 }

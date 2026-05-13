@@ -1,5 +1,7 @@
 package com.slywombat.slyled.ui.screens.control
 
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -117,12 +119,23 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
             val linkVm: LinkStateViewModel = hiltViewModel()
             val linkState by linkVm.state.collectAsState()
 
+            // #888 fix — gesture conflict: the Material 3 Slider in
+            // MasterPage and the HorizontalPager both want horizontal
+            // drags. Share a MutableInteractionSource so the pager
+            // knows when a slider drag is in progress and disables its
+            // own swipe-to-change-page detector for the duration.
+            val sliderInteractionSource = remember { MutableInteractionSource() }
+            val sliderDragging by sliderInteractionSource.collectIsDraggedAsState()
+
             HorizontalPager(
                 state = pagerState,
+                userScrollEnabled = !sliderDragging,
                 modifier = Modifier.fillMaxSize().linkStateGate(linkState),
             ) { pageIdx ->
                 when (ControlPage.entries[pageIdx]) {
-                    ControlPage.MASTER -> MasterPage()
+                    ControlPage.MASTER -> MasterPage(
+                        sliderInteractionSource = sliderInteractionSource,
+                    )
                     ControlPage.GRAB -> GrabPage(onGrab = { fid ->
                         viewModel.enterControllerMode(fid)
                     })
