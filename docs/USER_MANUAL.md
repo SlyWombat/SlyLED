@@ -344,7 +344,7 @@ Live operator tool for running shows from your phone. Connects to the desktop se
 **Install:** Sideload `slyled-android.apk` to your phone and install.
 **Connect:** Scan the QR code on the desktop Settings tab, or enter the server IP and port manually.
 
-![Android Stage View](screenshots/android/android-stage-idle.png)
+![Android Connect screen](screenshots/android/android-connection.png)
 
 **Bottom nav (3 tabs):** Stage / Control / Status. Settings lives at the top-right ⚙ gear, not in the bottom nav.
 
@@ -355,19 +355,35 @@ Live operator tool for running shows from your phone. Connects to the desktop se
 
 **Stage tab** — live viewport showing all fixtures with beam cones, tracked object markers, grid floor. Pinch-to-zoom + drag-to-pan.
 
-**Control tab (rebuilt for v1.8.1):** persistent Now Playing anchor over a 4-page pager:
+![Android Stage view](screenshots/android/android-stage-idle.png)
+
+**Control tab (rebuilt for v1.8.1):** persistent Now Playing anchor over a 4-page pager.
 
 - **Master** *(default page)* — global brightness slider with ±5% steppers + bloom-on-drag. Auto Brightness toggle (moved from Settings) + source picker (Mic / Playback / USB) + live envelope meter.
+
+  ![Control · Master](screenshots/android/android-control-master.png)
+
 - **Grab** — moving-head tiles showing current colour + pan/tilt direction arrow. Favourites row at top (star to add). Tap a tile → Controller Mode (gyro-driven pan/tilt at 20 Hz). Top-right "Send all home" button homes every mover.
+
+  ![Control · Grab](screenshots/android/android-control-grab.png)
+
 - **Fixtures** — non-mover DMX fixtures (bubble machines, hazers, washes, pars, strobes) with profile-driven shortcuts: 🫧 bubbles, 💨 haze low/med/high, 🌀 fan slow/med/fast, 💡 colour swatches, 🟣 UV, ⚡ momentary strobe, 🧼 hold-to-clean. "More controls →" opens a per-channel sheet with capability sliders. Top-right "Stop all effects" kills strobes + bubble/haze in parallel.
+
+  ![Control · Fixtures](screenshots/android/android-control-fixtures.png)
+
 - **Shows** — starred → recent → all sections, ranked by last-played time. One-tap launch. Long-press to star.
+
+  ![Control · Shows](screenshots/android/android-control-shows.png)
 
 **Now Playing anchor** sits above the pager — name, loop chip, elapsed / total, progress bar, STOP and Next.
 
-![Android Control](screenshots/android/android-control.png)
+**Status tab** — device monitoring (performers online/offline, RSSI, firmware), camera nodes with Track button to start/stop person tracking, and Art-Net/DMX engine status.
+
 ![Android Status](screenshots/android/android-status.png)
 
-**Status tab** — device monitoring (performers online/offline, RSSI, firmware), camera nodes with Track button to start/stop person tracking, and Art-Net/DMX engine status.
+**Settings sheet** (top-right ⚙) — System name, units, stage dimensions (W × H × D), dark mode, logging, plus the Auto Brightness configuration block (enable, model mode, sensitivity/floor/ceiling/attack/release sliders).
+
+![Android Settings](screenshots/android/android-settings.png)
 
 **Controller Mode (Grab → tap a mover):** Hold the phone and point where you want the beam — pan/tilt follows your phone orientation at 20 Hz. Tap Recenter to calibrate, X to exit. Press-Start / press-Stop guarded by nonce+ACK (#825). The first time you use it on a new phone, the aim-axis wizard (#869) measures your phone's body-frame axes; takes ~10 seconds.
 
