@@ -1,0 +1,195 @@
+# iOS TestFlight build — fires on `ios-v*` tags. Operator never needs
+# a Mac: GitHub provides macos-14 runners, the workflow imports a
+# pre-generated signing cert + App Store Connect API key from repo
+# secrets, generates the Xcode project from ios/project.yml at build
+# time (via XcodeGen), archives, exports an App Store IPA, and uploads
+# it to TestFlight via `xcrun altool`.
+#
+# Required GitHub repo secrets (see docs/design/apple_secrets_setup.md
+# for step-by-step setup instructions, all doable on Windows):
+#   - BUILD_CERT_P12_B64       base64-encoded Apple Distribution .p12
+#   - BUILD_CERT_PASSWORD      password used when creating the .p12
+#   - APP_STORE_CONNECT_KEY_ID       e.g. "ABCDEF1234"
+#   - APP_STORE_CONNECT_ISSUER_ID    UUID issuer for the API key
+#   - APP_STORE_CONNECT_API_KEY_B64  base64-encoded .p8 private key
+#   - APPLE_TEAM_ID            10-char Developer Program team id
+#
+# Tag a release with `git tag ios-v0.1.0 && git push origin ios-v0.1.0`
+# and the workflow runs in ~8–15 minutes. Build appears in TestFlight
+# under "Processing" (~30 min) then "Ready to Test" after Beta App
+# Review (first time on a new version: 15 min – 24 hr).
+
+name: iOS TestFlight build
+
+on:
+  push:
+    tags:
+      - 'ios-v*'
+  workflow_dispatch:  # manual fire from the Actions UI
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 16
+        run: sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer
+
+      - name: Show Xcode + tool versions
+        run: |
+          xcodebuild -version
+          swift --version
+          xcrun altool --version
+
+      - name: Import signing cert into a clean keychain
+        env:
+          P12_B64: ${{ secrets.BUILD_CERT_P12_B64 }}
+          P12_PASSWORD: ${{ secrets.BUILD_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${P12_B64:-}" ] || [ -z "${P12_PASSWORD:-}" ]; then
+            echo "::error::BUILD_CERT_P12_B64 + BUILD_CERT_PASSWORD secrets missing — see docs/design/apple_secrets_setup.md"
+            exit 1
+          fi
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASS="$(uuidgen)"
+          echo "$P12_B64" | base64 --decode -o "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$P12_PASSWORD" \
+                          -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          # Put the temp keychain ahead of the default search list so
+          # xcodebuild finds the cert without prompting.
+          security list-keychains -d user -s "$KEYCHAIN_PATH" \
+                                  $(security list-keychains -d user | tr -d '"')
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+                                          -s -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+          # Sanity: confirm the Apple Distribution identity is visible.
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH" || true
+
+      - name: Stage App Store Connect API key
+        env:
+          ASC_API_KEY_B64: ${{ secrets.APP_STORE_CONNECT_API_KEY_B64 }}
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ASC_API_KEY_B64:-}" ] || [ -z "${ASC_KEY_ID:-}" ]; then
+            echo "::error::APP_STORE_CONNECT_API_KEY_B64 + APP_STORE_CONNECT_KEY_ID missing"
+            exit 1
+          fi
+          mkdir -p "$HOME/private_keys"
+          echo "$ASC_API_KEY_B64" | base64 --decode \
+            -o "$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          chmod 600 "$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: Compute build number from run id
+        id: bn
+        run: echo "build=$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Archive
+        working-directory: ios
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          BUILD_NUMBER: ${{ steps.bn.outputs.build }}
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project SlyLED.xcodeproj \
+            -scheme SlyLED \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath "build/SlyLED.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyID "$KEY_ID" \
+            -authenticationKeyIssuerID "$ISSUER_ID" \
+            -authenticationKeyPath "$HOME/private_keys/AuthKey_${KEY_ID}.p8" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            archive | tee build/archive.log
+
+      - name: Export App Store IPA
+        working-directory: ios
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>uploadBitcode</key><false/>
+            <key>uploadSymbols</key><true/>
+            <key>destination</key><string>export</string>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild \
+            -exportArchive \
+            -archivePath "build/SlyLED.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "build/ipa" \
+            -allowProvisioningUpdates \
+            -authenticationKeyID "$KEY_ID" \
+            -authenticationKeyIssuerID "$ISSUER_ID" \
+            -authenticationKeyPath "$HOME/private_keys/AuthKey_${KEY_ID}.p8"
+
+      - name: Upload to TestFlight
+        working-directory: ios
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          IPA="$(find build/ipa -maxdepth 2 -name '*.ipa' | head -n 1)"
+          if [ -z "$IPA" ]; then
+            echo "::error::No .ipa produced by exportArchive"
+            ls -la build/ipa/ || true
+            exit 1
+          fi
+          echo "Uploading $IPA"
+          xcrun altool --upload-app \
+                       --type ios \
+                       --file "$IPA" \
+                       --apiKey "$KEY_ID" \
+                       --apiIssuer "$ISSUER_ID"
+
+      - name: Upload archive + log as build artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slyled-ios-${{ github.ref_name }}
+          path: |
+            ios/build/SlyLED.xcarchive
+            ios/build/ipa/*.ipa
+            ios/build/archive.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Clean up keychain
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/build.keychain-db" 2>/dev/null || true
+          rm -f "$HOME/private_keys"/*.p8 2>/dev/null || true

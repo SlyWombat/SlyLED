@@ -1,0 +1,85 @@
+# XcodeGen project spec for SlyLED iOS.
+# Generates ios/SlyLED.xcodeproj at build time from this YAML so the
+# repo doesn't have to track the fragile .pbxproj XML — and so the
+# operator can build via GitHub Actions on macos-14 without ever
+# touching a Mac. See .github/workflows/ios-testflight.yml.
+#
+# Local run on a Mac (not required): `brew install xcodegen && cd ios && xcodegen`.
+
+name: SlyLED
+
+options:
+  bundleIdPrefix: ca.electricrv
+  developmentLanguage: en
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "16.0"
+  createIntermediateGroups: true
+
+# Project-level settings inherited by every target.
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MARKETING_VERSION: "0.1.0"      # CFBundleShortVersionString. Bump in tag commits.
+    CURRENT_PROJECT_VERSION: "1"    # CFBundleVersion (build #). Bump per build.
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+
+targets:
+  SlyLED:
+    type: application
+    platform: iOS
+
+    # Source roots — XcodeGen walks these and pulls every .swift in.
+    # The structure under ios/SlyLED/ matches the existing repo layout.
+    sources:
+      - path: SlyLED
+        excludes:
+          - "**/.DS_Store"
+
+    # Use the existing hand-written Info.plist. XcodeGen-generated
+    # Info.plist values would clobber our NSLocalNetworkUsageDescription
+    # + NSBonjourServices + microphone usage strings.
+    info:
+      path: SlyLED/Info.plist
+      properties: {}
+
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ca.electricrv.slyled
+        INFOPLIST_FILE: SlyLED/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        TARGETED_DEVICE_FAMILY: "1,2"  # 1=iPhone, 2=iPad
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
+
+        # Signing — Manual + Apple Distribution. The CI workflow passes
+        # DEVELOPMENT_TEAM via xcodebuild flag at archive time so this
+        # spec doesn't have to encode the operator's team id.
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "Apple Distribution"
+        # PROVISIONING_PROFILE_SPECIFIER intentionally blank — Xcode
+        # auto-creates an App Store profile via the App Store Connect
+        # API key passed by the CI workflow (xcodebuild
+        # -allowProvisioningUpdates -authenticationKey*).
+
+        # ARM64 only — iOS hasn't shipped 32-bit in a decade and
+        # macOS Apple Silicon simulators are all arm64-too.
+        ARCHS: arm64
+        ONLY_ACTIVE_ARCH: NO
+
+        # Swift build settings.
+        SWIFT_OBJC_BRIDGING_HEADER: ""
+        SWIFT_OBJC_INTERFACE_HEADER_NAME: "SlyLED-Swift.h"
+        SWIFT_OPTIMIZATION_LEVEL[config=Debug]: -Onone
+        SWIFT_OPTIMIZATION_LEVEL[config=Release]: -O
+        SWIFT_COMPILATION_MODE[config=Release]: wholemodule
+
+        # Asset compilation — when v0.2 lands app-icon assets they go
+        # in SlyLED/Assets.xcassets and this flag wires them up.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+
+    # Capabilities (entitlements) declared on the App ID side at
+    # developer.apple.com/account/resources/identifiers. The Info.plist
+    # declares the usage descriptions; this just confirms the target
+    # uses no extra entitlements at the project layer for v0.1.

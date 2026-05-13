@@ -1,6 +1,8 @@
 # Apple Developer Setup — TestFlight Distribution for SlyLED iOS
 
-**Audience:** the SlyLED operator. This is operator-side pre-work — Claude cannot do these steps because they require your Apple ID, a credit card, and access to your iPhone for testing. Once you've completed these steps, Claude can scaffold the Compose Multiplatform iOS module and you can build the first `.ipa` on a Mac.
+**Audience:** the SlyLED operator. This is operator-side pre-work — Claude cannot do these steps because they require your Apple ID, a credit card, and access to your iPhone for testing.
+
+> **No Mac required.** Once Steps 1–5 below are done, the iOS build runs on a cloud Mac via GitHub Actions on every `ios-v*` tag push. See [`apple_secrets_setup.md`](apple_secrets_setup.md) for the OpenSSL-on-Windows path to generate the signing cert, the App Store Connect API key, and the six GitHub Secrets the workflow needs. Step 3 (install Xcode) is **optional** — only needed if you ever get Mac access and want to iterate locally.
 
 **Outcome:** ability to upload signed builds of the SlyLED iOS app to **Apple TestFlight**, where you (and up to 100 internal testers / 10,000 external testers per build) install it without UDID registration. Builds expire 90 days after upload — re-upload to refresh.
 
