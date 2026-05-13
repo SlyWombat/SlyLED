@@ -63,8 +63,12 @@ targets:
         # PROVISIONING_PROFILE_SPECIFIER, which we deliberately don't
         # carry in the repo.
         CODE_SIGN_STYLE: Automatic
-        # CODE_SIGN_IDENTITY omitted — Automatic signing picks "Apple
-        # Distribution: <team>" from the runner keychain itself.
+        # CODE_SIGN_IDENTITY must be explicit for archive builds even
+        # with Automatic style — otherwise Xcode picks "Apple
+        # Development" first and asks for an iOS App Development
+        # profile (requires registered test devices on the team).
+        # Scoping with [sdk=iphoneos*] keeps simulator builds unaffected.
+        "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Distribution"
 
         # ARM64 only — iOS hasn't shipped 32-bit in a decade and
         # macOS Apple Silicon simulators are all arm64-too.
