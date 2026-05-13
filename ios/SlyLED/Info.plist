@@ -47,6 +47,19 @@
     </dict>
     <key>UILaunchScreen</key>
     <dict/>
+    <!-- App Store validator requires CFBundleIconName when icons live in
+         an Asset Catalog (the only way Apple accepts icons since iOS 11).
+         Resolves the Asset Catalog's "AppIcon" set. -->
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
+    <!-- Skip iPad multitasking. Without this, App Store validation
+         requires all 4 orientations + a storyboard launch screen. The
+         SlyLED operator app is portrait-only on iPhone; the iPad form
+         factor isn't a v0.1 target. UIRequiresFullScreen=YES tells the
+         OS the app runs full-screen on iPad too, bypassing the
+         multitasking-app requirements. -->
+    <key>UIRequiresFullScreen</key>
+    <true/>
     <key>UIRequiredDeviceCapabilities</key>
     <array>
         <string>arm64</string>
