@@ -48,7 +48,15 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: ca.electricrv.slyled
         INFOPLIST_FILE: SlyLED/Info.plist
         GENERATE_INFOPLIST_FILE: NO
-        TARGETED_DEVICE_FAMILY: "1,2"  # 1=iPhone, 2=iPad
+        # iPhone-only. Setting "1,2" (iPhone+iPad) triggers Apple's iPad-
+        # multitasking validator gate — requires all 4 orientations +
+        # UILaunchStoryboardName, neither of which UIRequiresFullScreen
+        # bypasses (run #25804879286 was rejected at upload with both
+        # of those errors despite UIRequiresFullScreen=YES). The
+        # operator app is a portrait-only iPhone tool; iPad is not a
+        # v0.1 target. Flip to "1,2" + add the orientation/launch-
+        # screen plumbing in v0.2 if iPad ever becomes a target.
+        TARGETED_DEVICE_FAMILY: "1"
         SUPPORTS_MACCATALYST: NO
         SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
 

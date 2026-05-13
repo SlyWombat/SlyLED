@@ -205,11 +205,31 @@ jobs:
             exit 1
           fi
           echo "Uploading $IPA"
+          # altool has a long-standing bug where it exits 0 even when it
+          # prints "UPLOAD FAILED with N errors" (run #25804879286 hit
+          # exactly this — workflow step went green, App Store Connect
+          # had no build, real errors were buried in the step log).
+          # Capture stdout+stderr, parse for the failure marker, then
+          # fail the step ourselves.
+          UPLOAD_LOG="$RUNNER_TEMP/altool.log"
+          set +e
           xcrun altool --upload-app \
                        --type ios \
                        --file "$IPA" \
                        --apiKey "$KEY_ID" \
-                       --apiIssuer "$ISSUER_ID"
+                       --apiIssuer "$ISSUER_ID" 2>&1 | tee "$UPLOAD_LOG"
+          ALTOOL_EXIT=${PIPESTATUS[0]}
+          set -e
+          if grep -qE 'UPLOAD FAILED|Failed to upload|ERROR ITMS-' "$UPLOAD_LOG"; then
+            echo "::error::altool reported upload failure (exit=$ALTOOL_EXIT). Top errors:"
+            grep -E 'Validation failed|ERROR|UPLOAD FAILED' "$UPLOAD_LOG" | head -10
+            exit 1
+          fi
+          if [ "$ALTOOL_EXIT" -ne 0 ]; then
+            echo "::error::altool exited $ALTOOL_EXIT"
+            exit "$ALTOOL_EXIT"
+          fi
+          echo "altool reports successful upload."
 
       - name: Upload archive + log as build artifact
         if: always()
