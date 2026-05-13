@@ -43,10 +43,9 @@ The iOS bundle ID is **`ca.electricrv.slyled`** (mirrors the Android `applicatio
 3. Select **App IDs**, then **App**.
 4. **Description:** `SlyLED Operator`
 5. **Bundle ID:** Explicit → `ca.electricrv.slyled`
-6. **Capabilities:** check only what's needed:
-   - **Background Modes** (for the UDP socket while screen-off so the connection pill keeps polling).
-   - **Microphone** (Auto Brightness via `AVAudioEngine`).
-   - Leave everything else **unchecked**.
+6. **Capabilities:** leave everything **unchecked**. The capabilities list in this portal is for *entitlements* — Push Notifications, iCloud, Sign in with Apple, etc. SlyLED needs none of those for its current feature set.
+   - The features you might expect to enable here — **Microphone** (Auto Brightness), **Camera** (QR scan), **Local Network** access — are *runtime permissions*, not entitlements. They're configured via `NSMicrophoneUsageDescription` / `NSCameraUsageDescription` / `NSLocalNetworkUsageDescription` in `ios/SlyLED/Info.plist` (already in place), and iOS asks the user at runtime the first time the feature is used.
+   - Background Modes is also intentionally **off**. The current UDP poll runs only while the app is foregrounded; the operator-facing flow doesn't require background execution. Adding it later is harmless — Apple lets you flip capabilities on an existing App ID, but unused entitlements widen the attack surface and trigger extra review questions, so leave them off until you actually need them.
 7. **Continue → Register**.
 
 ---

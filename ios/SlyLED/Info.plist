@@ -33,6 +33,8 @@
     <string>SlyLED talks to the orchestrator computer over your local Wi-Fi to control the lighting rig.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>SlyLED uses the microphone for Auto Brightness, which follows the music's loudness to drive the master light level. The mic is only active when Auto Brightness is enabled.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>SlyLED uses the camera to scan the QR code shown on the orchestrator's Settings tab. Scanning fills in the server address automatically so you don't have to type it.</string>
     <key>NSBonjourServices</key>
     <array>
         <string>_slyled._tcp</string>
