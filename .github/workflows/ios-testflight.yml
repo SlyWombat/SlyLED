@@ -103,27 +103,31 @@ jobs:
         id: bn
         run: echo "build=$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
 
-      - name: Archive
+      - name: Archive (unsigned — Export step re-signs with Distribution)
         working-directory: ios
         env:
-          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
-          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
-          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           BUILD_NUMBER: ${{ steps.bn.outputs.build }}
         run: |
           set -euo pipefail
+          # Canonical CI pattern: archive with signing disabled, then
+          # let `xcodebuild -exportArchive` (next step) re-sign the
+          # bundle using the Apple Distribution cert in the keychain
+          # via its ExportOptions.plist. This sidesteps every flavour
+          # of "Xcode picks Apple Development at archive time"
+          # confusion that hit runs #25801877725 / #25802143287 /
+          # #25802250222 / #25802423800 in succession.
+          mkdir -p build
           xcodebuild \
             -project SlyLED.xcodeproj \
             -scheme SlyLED \
             -configuration Release \
             -destination "generic/platform=iOS" \
             -archivePath "build/SlyLED.xcarchive" \
-            -allowProvisioningUpdates \
-            -authenticationKeyID "$KEY_ID" \
-            -authenticationKeyIssuerID "$ISSUER_ID" \
-            -authenticationKeyPath "$HOME/private_keys/AuthKey_${KEY_ID}.p8" \
-            DEVELOPMENT_TEAM="$TEAM_ID" \
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
             archive | tee build/archive.log
 
       - name: Export App Store IPA
