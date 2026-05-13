@@ -92,6 +92,26 @@ jobs:
             -o "$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8"
           chmod 600 "$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8"
 
+      - name: Install provisioning profile
+        env:
+          PP_B64: ${{ secrets.BUILD_PROVISIONING_PROFILE_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PP_B64:-}" ]; then
+            echo "::error::BUILD_PROVISIONING_PROFILE_B64 secret missing"
+            exit 1
+          fi
+          PP_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$PP_DIR"
+          # Decode profile, then install under its UUID.mobileprovision name —
+          # that's where xcodebuild expects to find it during export.
+          TMP_PP="$RUNNER_TEMP/profile.mobileprovision"
+          echo "$PP_B64" | base64 --decode -o "$TMP_PP"
+          UUID=$(security cms -D -i "$TMP_PP" \
+                  | plutil -extract UUID raw -)
+          cp "$TMP_PP" "$PP_DIR/${UUID}.mobileprovision"
+          echo "installed profile UUID=$UUID"
+
       - name: Install XcodeGen
         run: brew install xcodegen
 
@@ -145,7 +165,13 @@ jobs:
           <dict>
             <key>method</key><string>app-store</string>
             <key>teamID</key><string>$TEAM_ID</string>
-            <key>signingStyle</key><string>automatic</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>ca.electricrv.slyled</key>
+              <string>SlyLED iOS App Store</string>
+            </dict>
             <key>uploadBitcode</key><false/>
             <key>uploadSymbols</key><true/>
             <key>destination</key><string>export</string>
@@ -156,11 +182,7 @@ jobs:
             -exportArchive \
             -archivePath "build/SlyLED.xcarchive" \
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
-            -exportPath "build/ipa" \
-            -allowProvisioningUpdates \
-            -authenticationKeyID "$KEY_ID" \
-            -authenticationKeyIssuerID "$ISSUER_ID" \
-            -authenticationKeyPath "$HOME/private_keys/AuthKey_${KEY_ID}.p8"
+            -exportPath "build/ipa"
 
       - name: Upload to TestFlight
         working-directory: ios
