@@ -52,23 +52,26 @@ targets:
         SUPPORTS_MACCATALYST: NO
         SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
 
-        # Signing — Automatic via the App Store Connect API key. The CI
-        # workflow passes DEVELOPMENT_TEAM + -allowProvisioningUpdates +
-        # -authenticationKey* at archive time; Xcode contacts Apple,
-        # creates/refreshes the App Store provisioning profile for
-        # ca.electricrv.slyled, and signs with the Apple Distribution
-        # cert imported into the runner's temp keychain.
-        # Manual signing here was a mistake — it bypasses
-        # -allowProvisioningUpdates entirely and demands a hard-coded
-        # PROVISIONING_PROFILE_SPECIFIER, which we deliberately don't
-        # carry in the repo.
+        # Signing — Automatic via the App Store Connect API key. Xcode
+        # contacts Apple at archive time, creates/refreshes the App
+        # Store provisioning profile for ca.electricrv.slyled, and
+        # signs with the Apple Distribution cert imported into the
+        # runner's temp keychain.
+        #
+        # CRITICAL: DEVELOPMENT_TEAM must be hard-coded *here* (not
+        # just passed via xcodebuild CLI), or Xcode's signing pre-pass
+        # treats the target as team-less, picks "Apple Development" as
+        # the default identity, and then complains about every
+        # conflicting override. Hardcoding the team ID is fine — it's
+        # public (visible in every shipped IPA's embedded mobile
+        # provisioning profile).
+        DEVELOPMENT_TEAM: V97FBD9SXN
         CODE_SIGN_STYLE: Automatic
-        # CODE_SIGN_IDENTITY must be explicit for archive builds even
-        # with Automatic style — otherwise Xcode picks "Apple
-        # Development" first and asks for an iOS App Development
-        # profile (requires registered test devices on the team).
-        # Scoping with [sdk=iphoneos*] keeps simulator builds unaffected.
-        "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Distribution"
+        # CODE_SIGN_IDENTITY omitted on purpose: with DEVELOPMENT_TEAM
+        # hard-coded AND archive action, Automatic signing picks the
+        # team's Apple Distribution identity automatically. Adding an
+        # explicit override triggers "conflicting code signing
+        # identity" errors.
 
         # ARM64 only — iOS hasn't shipped 32-bit in a decade and
         # macOS Apple Silicon simulators are all arm64-too.
