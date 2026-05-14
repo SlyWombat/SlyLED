@@ -34,9 +34,9 @@ struct ConnectionPillView: View {
 
     private var color: Color {
         switch state {
-        case .connected: return .green
-        case .degraded: return .orange
-        case .disconnected: return .red
+        case .connected: return Color.kpGreenOnline
+        case .degraded: return Color.kpOrangeWled
+        case .disconnected: return Color.kpRedError
         }
     }
 }

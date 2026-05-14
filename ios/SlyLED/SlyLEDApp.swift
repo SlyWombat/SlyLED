@@ -1,21 +1,44 @@
-// SlyLEDApp.swift — entry point for the iOS shell.
-// First TestFlight build (v0.1.0 — "TestFlight pipeline shake-down").
-// Full UI parity with Android v1.8.1 comes in subsequent builds.
+// SlyLEDApp — entry point. Wires the `@StateObject` graph: ServerPreferences
+// is the persistence root, OrchestratorClient + MicAutoBrightness consume
+// it, ControlViewModel depends on client + connection state + prefs.
 
 import SwiftUI
 
 @main
 struct SlyLEDApp: App {
+    @StateObject private var prefs: ServerPreferences
+    @StateObject private var client: OrchestratorClient
     @StateObject private var connection = ConnectionState()
-    @StateObject private var orchestrator = OrchestratorClient()
+    @StateObject private var control: ControlViewModel
+    @StateObject private var autoBrightness: MicAutoBrightness
+
+    init() {
+        let prefs = ServerPreferences()
+        let client = OrchestratorClient(prefs: prefs)
+        let conn = ConnectionState()
+        let control = ControlViewModel(client: client, prefs: prefs, connection: conn)
+        let autoBri = MicAutoBrightness(prefs: prefs)
+
+        _prefs = StateObject(wrappedValue: prefs)
+        _client = StateObject(wrappedValue: client)
+        _connection = StateObject(wrappedValue: conn)
+        _control = StateObject(wrappedValue: control)
+        _autoBrightness = StateObject(wrappedValue: autoBri)
+    }
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootShell()
+                .environmentObject(prefs)
+                .environmentObject(client)
                 .environmentObject(connection)
-                .environmentObject(orchestrator)
+                .environmentObject(control)
+                .environmentObject(autoBrightness)
                 .preferredColorScheme(.dark)
-                .onAppear { connection.startPolling(client: orchestrator) }
+                .onAppear {
+                    connection.startPolling(client: client)
+                    control.startPolling()
+                }
         }
     }
 }
