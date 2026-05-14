@@ -1443,9 +1443,17 @@ function _submitAddFixture(){
     closeModal();
     ra('POST','/api/children',{ip:ip},function(r){
       if(r&&r.ok){
-        // Auto-create fixture for this child
         var cid=r.id;
         var cname=r.name||r.hostname||ip;
+        // DMX bridges and gyro controllers belong in Hardware only — their
+        // downstream DMX devices / mover assignments are added as separate
+        // fixtures (childId:null) via the DMX / Gyro tabs of this modal.
+        if(r.type==='dmx'||r.type==='gyro'){
+          var label=r.type==='dmx'?'DMX bridge':'gyro controller';
+          document.getElementById('hs').textContent=(r.duplicate?'Already registered ':'Added ')+label+': '+cname;
+          setTimeout(loadSetup,2000);
+          return;
+        }
         ra('POST','/api/fixtures',{name:cname,fixtureType:'led',type:'linear',childId:cid},function(fr){
           document.getElementById('hs').textContent=r.duplicate?'Already registered':'Added LED fixture: '+cname;
           setTimeout(loadSetup,2000);

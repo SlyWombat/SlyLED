@@ -170,16 +170,32 @@ function _rtPreviewAll(){
 function _rtPause(){tlPause();}
 function _rtRewind(){tlRewind();}
 
+// Push baked LED steps to children via LOAD_STEP packets. LED performers
+// run autonomously from a preloaded step buffer; without this the child
+// receives RUNNER_GO but has nothing to play.
+function _rtSyncOne(tid,onDone){
+  ra('POST','/api/timelines/'+tid+'/baked/sync',{},function(sr){
+    if(!sr||!sr.ok){if(onDone)onDone(sr&&sr.err||'sync failed');return;}
+    var poll=setInterval(function(){
+      ra('GET','/api/timelines/'+tid+'/sync/status',null,function(sp){
+        if(!sp||!sp.done)return;
+        clearInterval(poll);
+        if(onDone)onDone(null);
+      });
+    },400);
+  });
+}
+
 function _rtBakeOne(tid){
   ra('POST','/api/timelines/'+tid+'/bake',{},function(r){
     if(!r)return;
-    // Poll bake status
     var poll=setInterval(function(){
       ra('GET','/api/timelines/'+tid+'/baked/status',null,function(s){
         if(!s||s.status==='running')return;
         clearInterval(poll);
-        // Refresh playlist to update bake indicator
-        ra('GET','/api/show/playlist',null,function(d){if(d)_rtRenderPlaylist(d);});
+        _rtSyncOne(tid,function(){
+          ra('GET','/api/show/playlist',null,function(d){if(d)_rtRenderPlaylist(d);});
+        });
       });
     },500);
   });
@@ -188,21 +204,13 @@ function _rtBakeOne(tid){
 function _rtBakeAll(onDone){
   ra('GET','/api/show/playlist',null,function(d){
     if(!d||!d.order||!d.order.length){alert('Playlist is empty.');return;}
+    var order=(d.order||[]).slice();
     var unbaked=d.items.filter(function(it){return !it.baked;});
-    if(!unbaked.length){
-      document.getElementById('hs').textContent='All timelines already baked';
-      if(onDone)onDone();
-      return;
-    }
-    document.getElementById('hs').textContent='Baking '+unbaked.length+' timeline(s)...';
+    document.getElementById('hs').textContent=unbaked.length?
+      'Baking '+unbaked.length+' timeline(s)...':'Syncing timelines to fixtures...';
     var idx=0;
     function bakeNext(){
-      if(idx>=unbaked.length){
-        document.getElementById('hs').textContent='All timelines baked';
-        ra('GET','/api/show/playlist',null,function(d2){if(d2)_rtRenderPlaylist(d2);});
-        if(onDone)onDone();
-        return;
-      }
+      if(idx>=unbaked.length){syncAll(0);return;}
       var tid=unbaked[idx].id;
       ra('POST','/api/timelines/'+tid+'/bake',{},function(){
         var poll=setInterval(function(){
@@ -211,6 +219,23 @@ function _rtBakeAll(onDone){
             clearInterval(poll);idx++;bakeNext();
           });
         },500);
+      });
+    }
+    // Sync every timeline in the playlist — even ones that were already
+    // baked. A stale sync (child rebooted, orchestrator restarted) leaves
+    // LED performers with empty step buffers and RUNNER_GO falls on deaf
+    // ears; re-syncing is cheap and idempotent.
+    function syncAll(si){
+      if(si>=order.length){
+        document.getElementById('hs').textContent='All timelines baked + synced';
+        ra('GET','/api/show/playlist',null,function(d2){if(d2)_rtRenderPlaylist(d2);});
+        if(onDone)onDone();
+        return;
+      }
+      document.getElementById('hs').textContent='Syncing timeline '+(si+1)+'/'+order.length+'...';
+      _rtSyncOne(order[si],function(err){
+        if(err){document.getElementById('hs').textContent='Sync failed: '+err;return;}
+        syncAll(si+1);
       });
     }
     bakeNext();

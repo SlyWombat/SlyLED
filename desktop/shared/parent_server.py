@@ -84,7 +84,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "2.0.3"
+VERSION = "2.0.4"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -2422,7 +2422,12 @@ def api_children_add():
     # Prevent duplicate IP entries
     existing = next((c for c in _children if c.get("ip") == ip), None)
     if existing:
-        return jsonify(ok=True, id=existing["id"], duplicate=True)
+        return jsonify(ok=True, id=existing["id"], duplicate=True,
+                       type=existing.get("type", "slyled"),
+                       boardType=existing.get("boardType", ""),
+                       name=existing.get("name", ""),
+                       hostname=existing.get("hostname", ""),
+                       ip=ip)
     child = {"ip": ip, "hostname": ip, "name": ip,
              "desc": "", "sc": 0, "strings": [], "status": 0, "seen": 0,
              "type": "slyled"}
@@ -19934,6 +19939,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
