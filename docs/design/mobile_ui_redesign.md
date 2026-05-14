@@ -322,41 +322,43 @@ The "Stop all effects" button in Fixtures fires both kill-strobes and kill-effec
 
 ## 7. iOS strategy
 
-### 7.1 Decision (operator-confirmed 2026-05-12)
+### 7.1 Decision (revised 2026-05-14, post-v1.8.2)
 
-Distribution path: **paid Apple Developer account, ad-hoc provisioning for testing soon, App Store later.** The operator has confirmed they accept the $99/yr Developer Program cost and the ad-hoc provisioning workflow. This resolves the v1 hand-wave; TestFlight is **not** the path because of the 90-day expiry pain.
+Distribution path: **paid Apple Developer Program + TestFlight upload via GitHub Actions on `macos-15` runners.** A tagged commit (`git tag ios-v*`) triggers `.github/workflows/ios-testflight.yml`, which generates the Xcode project from `ios/project.yml` via XcodeGen, archives, exports an App Store IPA, and uploads through `xcrun altool`. Apple's Beta App Review processes the build (15 min – 24 hr for the first build of a new `MARKETING_VERSION`); operator installs through the TestFlight app on their iPhone. The 90-day TestFlight expiry is mitigated by tagging a refresh build every ~75 days.
 
-**Implementation:** **Compose Multiplatform (Option A)** — the v1 recommendation now stands without the distribution caveat.
+**Implementation:** **native SwiftUI**, not Compose Multiplatform.
 
-### 7.2 Stage 0 — Apple Developer setup (before any iOS code)
+Detail of every surface's port — file layout, REST/UDP/audio shims, theme tokens, persistence schema, single-tag jump to parity — lives in [`ios_parity_spec.md`](ios_parity_spec.md). This section captures only the decision and its rationale.
 
-Mandatory pre-work, owner-side (operator):
-1. Enroll in the Apple Developer Program ($99/yr).
-2. Create a Bundle ID `ca.electricrv.slyled` in the developer portal.
-3. Generate development + ad-hoc distribution certificates and provisioning profiles.
-4. Register the operator's test devices (iPhone UDIDs) under the ad-hoc profile (limit: 100 devices/year).
-5. Install Xcode 16+ on the build machine.
+### 7.2 Stage 0 — Apple Developer setup (operator-side)
 
-Without these, no iOS build can be signed or installed on a device. This unblocks every iOS commit; it cannot be skipped.
+Pre-work, handled by the operator on Windows + Apple web portals — no Mac required:
 
-### 7.3 Why Compose Multiplatform
+1. Apple Developer Program enrolment ($99/yr).
+2. Bundle ID `ca.electricrv.slyled` registered in the developer portal.
+3. Apple Distribution cert + App Store Connect API key generated; entered as GitHub repo secrets per [`apple_secrets_setup.md`](apple_secrets_setup.md).
+4. Operator added as an internal TestFlight tester.
+5. Steps 1–4 detailed in [`apple_developer_setup.md`](apple_developer_setup.md); end-user install steps in [`testflight_install_guide.md`](testflight_install_guide.md).
 
-- 100% reuse of the Compose UI, the StateFlow viewmodels, and (with a Ktor swap) the Retrofit client.
-- The hard parts of mobile parity (profile-driven shortcut renderer, mover claim flow, AUTOBRI_PUSH transport, conflict handling) are written once.
-- JetBrains-maintained; production-grade on iOS as of Compose 1.6.
-- Sideload (ad-hoc) bypasses the App Store review uncertainty that was the historical knock on non-native UI on iOS.
+This is one-time setup. After completion every release is `git tag ios-vX.Y.Z && git push origin ios-vX.Y.Z`.
 
-**Platform-specific shims** via `expect/actual`:
-- `Haptics` — Android `VibrationEffect`, iOS `UIImpactFeedbackGenerator`.
-- `AudioCapture` for Auto Brightness — Android `PlaybackCaptureService`, iOS `AVAudioEngine`. ~2 days of Swift work.
-- `UdpSocket` — Android `DatagramSocket`, iOS `Network.framework`. Wraps the existing v4 binary protocol.
-- `Storage` for `ServerPreferences` — Android `DataStore`, iOS `UserDefaults` (or `kotlinx-serialization` to file).
+### 7.3 Why native SwiftUI (not Compose Multiplatform)
 
-### 7.4 What we explicitly considered and rejected
+The v1 design doc recommended Compose Multiplatform with ad-hoc provisioning. After v1.8.2 shipped on Android, that decision was reversed for three concrete reasons:
 
-- **Native SwiftUI mirror.** Doubles the UI surface area; every shortcut, bloom, state machine maintained twice. Worth revisiting only if Compose Multiplatform on iOS demonstrably can't hit 60fps for the live overlay.
-- **React Native.** No existing JS in the codebase; no benefit over CMP.
-- **TestFlight as the distribution model.** 90-day build expiry forces a monthly rebuild-and-redistribute dance that the operator will hate. Ad-hoc bypasses this.
+- **The Swift shell already exists** (v0.1.0 TestFlight pipeline-validation build) and ships green through `.github/workflows/ios-testflight.yml`. Rebuilding the install path for CMP costs more than re-writing the UI in Swift.
+- **TestFlight, not ad-hoc.** The operator runs a Windows machine; ad-hoc provisioning's "build locally in Xcode and AirDrop the IPA" loop doesn't fit the cross-platform CI workflow. TestFlight + a GitHub Actions `macos-15` runner does.
+- **Native iOS APIs without Kotlin/Native interop.** `AVAudioEngine` for Auto Brightness, `CoreMotion` for ControllerModeOverlay, `Network.framework` for UDP, `CoreHaptics` for the haptics catalogue — all first-class in Swift, all `expect/actual` shim friction in CMP.
+
+The trade-off is a dual UI codebase: every new control on Android must be ported to Swift, and `FixtureShortcuts.kt` has a literal Swift twin in `FixtureShortcuts.swift`. The mitigation is a shared snapshot-test corpus across Pytest (SPA), JUnit (Android), and XCTest (iOS) — the corpus is the contract; the three implementations must round-trip it identically.
+
+If the dual-codebase tax ever proves intolerable, re-open the CMP option as a follow-up issue — but only after iOS reaches v0.7 (parity), so we never block parity on a refactor.
+
+### 7.4 What we considered and rejected
+
+- **Compose Multiplatform (the v1 recommendation).** Rejected for the three reasons in §7.3. Re-open post-v0.7 only if the parallel-codebase cost becomes a real burden.
+- **Ad-hoc distribution.** Rejected because the operator's machine is Windows-only and the GitHub Actions runner is a cleaner signing host than a manually-managed Mac in the operator's hands.
+- **React Native.** No existing JS in the codebase; no benefit over native SwiftUI.
 
 ## 8. Component inventory
 
