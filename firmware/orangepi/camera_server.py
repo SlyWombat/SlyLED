@@ -22,7 +22,7 @@ from flask import Flask, jsonify, request
 import flask.cli
 flask.cli.show_server_banner = lambda *a, **kw: None   # suppress dev-server warning (#289)
 
-VERSION = "1.6.3"
+VERSION = "1.6.4"
 PORT = 5000
 UDP_PORT = 4210
 CONFIG_DIR = Path("/opt/slyled")
@@ -110,6 +110,7 @@ KNOWN_FOV = {
     "046d:0893": 90,    # Logitech C930e
     "046d:085c": 82,    # Logitech C922
     "046d:08e5": 90,    # Logitech BRIO
+    "32e4:0234": 120,   # ELP AR0234 Global Shutter (120° low-distortion M12 lens)
 }
 
 # ── Hardware detection ──────────────────────────────────────────────────

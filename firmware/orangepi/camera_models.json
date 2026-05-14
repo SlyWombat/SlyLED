@@ -9,6 +9,14 @@
       "k1": 0.02,
       "source": "lab-bench-2026-04-27",
       "notes": "4K mode, V4L2-cropped frame. Manufacturer spec is 90 deg diagonal; effective horizontal FOV measured at ~78.5 deg by sighting a 1 m wide target at 0.65 m distance and confirming both edges fall on image columns 0 and 3839 of a 4K frame. k1 barrel distortion estimated visually at +2% on the long edge."
+    },
+    "Global Shutter Camera: Global S": {
+      "displayName": "ELP AR0234 Global Shutter (120° low-distortion)",
+      "nominalFovDeg": 120.0,
+      "effectiveFovDeg": 120.0,
+      "k1": 0.0,
+      "source": "operator-spec-2026-05-14",
+      "notes": "ELP AR0234 USB module (VID:PID 32e4:0234) with the 120° low-distortion M12 lens. Operator-specified value; k1 set to 0 because the lens is marketed as low-distortion. Validate against a checkerboard intrinsic calibration if accuracy at frame edges matters for cal-pipeline coverage polygons."
     }
   }
 }
