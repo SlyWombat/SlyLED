@@ -36,12 +36,15 @@ targets:
         excludes:
           - "**/.DS_Store"
 
-    # Use the existing hand-written Info.plist. XcodeGen-generated
-    # Info.plist values would clobber our NSLocalNetworkUsageDescription
-    # + NSBonjourServices + microphone usage strings.
-    info:
-      path: SlyLED/Info.plist
-      properties: {}
+    # We use the hand-written Info.plist at SlyLED/Info.plist. NO `info:`
+    # block here — XcodeGen would overwrite the file with one generated
+    # from `properties` (even `properties: {}` writes an empty plist),
+    # and Xcode then falls back to defaults like CFBundleVersion="1" /
+    # CFBundleShortVersionString="1.0", which is exactly what bricked
+    # ios-v0.7.0 / -r2 / -r3 uploads against Apple's "build must be
+    # higher than previously uploaded version: '1'" check. Xcode finds
+    # the Info.plist via the target's INFOPLIST_FILE build setting
+    # below (GENERATE_INFOPLIST_FILE=NO keeps Xcode from touching it).
 
     settings:
       base:
