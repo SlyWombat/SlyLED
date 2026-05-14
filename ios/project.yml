@@ -21,7 +21,7 @@ settings:
   base:
     SWIFT_VERSION: "5.10"
     MARKETING_VERSION: "0.7.0"      # CFBundleShortVersionString. Bump in tag commits.
-    CURRENT_PROJECT_VERSION: "1"    # CFBundleVersion (build #). Bump per build.
+    CURRENT_PROJECT_VERSION: "70000"  # Local default. CI overrides with $GITHUB_RUN_NUMBER.
     ENABLE_USER_SCRIPT_SANDBOXING: NO
 
 targets:
