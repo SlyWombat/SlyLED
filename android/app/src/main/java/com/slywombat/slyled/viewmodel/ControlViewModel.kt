@@ -59,6 +59,15 @@ class ControlViewModel @Inject constructor(
     private val _fixturesLive = MutableStateFlow<Map<String, kotlinx.serialization.json.JsonElement>>(emptyMap())
     val fixturesLive: StateFlow<Map<String, kotlinx.serialization.json.JsonElement>> = _fixturesLive.asStateFlow()
 
+    // LED children (performer nodes) + the saved Actions library — backing
+    // the Fixtures-page LED section. Children are polled so a node coming
+    // online appears; actions are fetched once on load.
+    private val _children = MutableStateFlow<List<Child>>(emptyList())
+    val children: StateFlow<List<Child>> = _children.asStateFlow()
+
+    private val _actions = MutableStateFlow<List<Action>>(emptyList())
+    val actions: StateFlow<List<Action>> = _actions.asStateFlow()
+
     // #888 — Grab-page favourites + Shows ranking, persisted per-device.
     private val _favouriteMovers = MutableStateFlow<Set<Int>>(emptySet())
     val favouriteMovers: StateFlow<Set<Int>> = _favouriteMovers.asStateFlow()
@@ -136,6 +145,7 @@ class ControlViewModel @Inject constructor(
             _safeLoad("getShowPlaylist")  { _playlist.value = repository.getShowPlaylist() }
             _safeLoad("getFixtures")      { _fixtures.value = repository.getFixtures() }
             _safeLoad("getDmxProfiles")   { _profiles.value = repository.getDmxProfiles() }
+            _safeLoad("getActions")       { _actions.value = repository.getActions() }
             // #427 — restore the operator's saved stage position so pointer
             // mode is usable without re-entering it every launch.
             _safeLoad("loadUserPosition") { _userPosition.value = serverPrefs.loadUserPosition() }
@@ -159,6 +169,15 @@ class ControlViewModel @Inject constructor(
             while (true) {
                 try { _settings.value = repository.getSettings() } catch (_: Exception) {}
                 delay(3000)
+            }
+        }
+
+        // Poll LED children every 5s so the Fixtures-page LED section
+        // reflects nodes coming online / going offline.
+        viewModelScope.launch {
+            while (true) {
+                try { _children.value = repository.getChildren() } catch (_: Exception) {}
+                delay(5000)
             }
         }
 
@@ -291,6 +310,38 @@ class ControlViewModel @Inject constructor(
             } catch (e: Exception) {
                 _message.value = "All-home failed: ${e.message}"
             }
+        }
+    }
+
+    // Fixtures-page LED section — fire an ad-hoc action at an LED child's
+    // selected strings. `actionId` fires a saved Action; pass `inlineType`
+    // + r/g/b/p* for an inline quick control. `strings` null/empty targets
+    // every string on the child.
+    fun fireLedAction(
+        childId: Int,
+        actionId: Int? = null,
+        inlineType: Int? = null,
+        r: Int = 0, g: Int = 0, b: Int = 0,
+        p16a: Int = 0, p8a: Int = 0, p8b: Int = 0, p8c: Int = 0, p8d: Int = 0,
+        strings: List<Int>? = null,
+    ) {
+        viewModelScope.launch {
+            try {
+                val resp = repository.fireChildAction(
+                    childId, actionId, inlineType, r, g, b,
+                    p16a, p8a, p8b, p8c, p8d, strings,
+                )
+                if (!resp.ok) _message.value = "LED action failed"
+            } catch (e: Exception) {
+                _message.value = "LED action failed: ${e.message}"
+            }
+        }
+    }
+
+    fun stopLedAction(childId: Int) {
+        viewModelScope.launch {
+            try { repository.stopChildAction(childId) }
+            catch (e: Exception) { _message.value = "Stop failed: ${e.message}" }
         }
     }
 

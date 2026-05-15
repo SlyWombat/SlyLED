@@ -79,6 +79,38 @@ class SlyLedRepository @Inject constructor(
     suspend fun refreshAllChildren() = requireApi().refreshAllChildren()
     suspend fun getChildStatus(id: Int) = requireApi().getChildStatus(id)
 
+    // Fire an ad-hoc action at an LED child, targeting selected strings.
+    // `actionId` fires a saved /api/actions entry; pass `inlineType` +
+    // r/g/b/p16a/p8* instead for an inline action. `strings` is the list
+    // of string indices to light; null/empty means every string.
+    suspend fun fireChildAction(
+        childId: Int,
+        actionId: Int? = null,
+        inlineType: Int? = null,
+        r: Int = 0, g: Int = 0, b: Int = 0,
+        p16a: Int = 0, p8a: Int = 0, p8b: Int = 0, p8c: Int = 0, p8d: Int = 0,
+        strings: List<Int>? = null,
+    ): OkResponse {
+        val body = buildJsonObject {
+            if (actionId != null) {
+                put("actionId", actionId)
+            } else {
+                put("type", inlineType ?: 0)
+                put("r", r); put("g", g); put("b", b)
+                put("p16a", p16a)
+                put("p8a", p8a); put("p8b", p8b); put("p8c", p8c); put("p8d", p8d)
+            }
+            if (strings.isNullOrEmpty()) {
+                put("allStrings", true)
+            } else {
+                putJsonArray("strings") { strings.forEach { add(it) } }
+            }
+        }
+        return requireApi().fireChildAction(childId, body)
+    }
+
+    suspend fun stopChildAction(childId: Int) = requireApi().stopChildAction(childId)
+
     // Layout
     suspend fun getLayout() = requireApi().getLayout()
     suspend fun saveLayout(layout: Layout) = requireApi().saveLayout(layout)

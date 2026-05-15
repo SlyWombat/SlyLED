@@ -2597,6 +2597,89 @@ def api_child_status(cid):
     return jsonify(ok=True, activeAction=aa, runnerActive=bool(ra),
                    currentStep=cs, wifiRssi=rssi, uptimeS=up)
 
+def _action_led_ranges_for(child, string_indices):
+    """ledStart[8] / ledEnd[8] uint16 arrays targeting only the strings in
+    `string_indices`. Absolute LED offsets are kept identical to
+    `_child_led_ranges` (the child's leds[] array is one concatenated
+    span) — non-selected slots stay at the 0xFFFF sentinel so the
+    firmware skips them."""
+    ls = [0xFFFF] * 8
+    le = [0xFFFF] * 8
+    sc = child.get("sc", 0)
+    strings = child.get("strings", [])
+    sel = set(string_indices)
+    offset = 0
+    for j in range(min(sc, len(strings), 8)):
+        leds = strings[j].get("leds", 0)
+        if leds > 0:
+            if j in sel:
+                ls[j] = offset
+                le[j] = offset + leds - 1
+            offset += leds
+    return struct.pack("<8H", *ls), struct.pack("<8H", *le)
+
+
+@app.post("/api/children/<int:cid>/action")
+def api_child_action(cid):
+    """Fire an ad-hoc action at an LED child, targeting selected strings.
+
+    Body — either a saved action by id, or inline params:
+      {"actionId": <id>}                  fire a saved /api/actions entry
+      {"type": <0-13>, "r":, "g":, "b":,  inline action (type 0 = blackout)
+       "speedMs":, "cooling":, ...}
+    plus a string selector:
+      {"strings": [0, 2]}                 target string indices 0 and 2
+      {"allStrings": true}  / omitted     target every configured string
+
+    Sends one CMD_ACTION (0x10) packet; the child applies it immediately
+    without a runner. No bake, no sync — this is the operator override
+    path the Android Control→Fixtures LED section uses."""
+    child = next((c for c in _children if c.get("id") == cid), None)
+    if child is None:
+        return jsonify(err="no such child"), 404
+    ip = child.get("ip")
+    if not ip:
+        return jsonify(err="child has no IP"), 409
+    body = request.get_json(silent=True) or {}
+    if "actionId" in body:
+        action = next((a for a in _actions if a.get("id") == body["actionId"]), None)
+        if action is None:
+            return jsonify(err="no such action"), 404
+    else:
+        action = body
+    sc = int(child.get("sc", 0) or 0)
+    if sc <= 0:
+        return jsonify(err="child has no configured strings"), 409
+    if body.get("allStrings") or "strings" not in body:
+        sel = list(range(sc))
+    else:
+        sel = sorted({int(s) for s in body.get("strings", []) if 0 <= int(s) < sc})
+    if not sel:
+        return jsonify(err="no strings selected"), 400
+    t, r, g, b, p16a, p8a, p8b, p8c, p8d = _act_params(action)
+    ls, le = _action_led_ranges_for(child, sel)
+    pl = struct.pack("<BBBBHBBBB", t, r, g, b, p16a, p8a, p8b, p8c, p8d)
+    _send(ip, _hdr(CMD_ACTION) + pl + ls + le)
+    log.info("Child %d ad-hoc action: type=%d strings=%s", cid, t, sel)
+    return jsonify(ok=True, type=t, strings=sel)
+
+
+@app.post("/api/children/<int:cid>/action/stop")
+def api_child_action_stop(cid):
+    """Stop any ad-hoc action on an LED child (CMD_ACTION_STOP). Leaves
+    the LEDs at their last frame — pair with a type-0 blackout action to
+    also clear them."""
+    child = next((c for c in _children if c.get("id") == cid), None)
+    if child is None:
+        return jsonify(err="no such child"), 404
+    ip = child.get("ip")
+    if not ip:
+        return jsonify(err="child has no IP"), 409
+    _send(ip, _hdr(CMD_ACTION_STOP))
+    log.info("Child %d ad-hoc action stop", cid)
+    return jsonify(ok=True)
+
+
 @app.post("/api/children/import")
 def api_children_import():
     global _nxt_c

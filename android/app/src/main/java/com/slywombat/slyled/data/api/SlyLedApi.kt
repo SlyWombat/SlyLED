@@ -34,6 +34,13 @@ interface SlyLedApi {
     @GET("api/children/{id}/status")
     suspend fun getChildStatus(@Path("id") id: Int): ChildStatus
 
+    // Fire an ad-hoc action at an LED child's selected strings.
+    @POST("api/children/{id}/action")
+    suspend fun fireChildAction(@Path("id") id: Int, @Body body: JsonObject): OkResponse
+
+    @POST("api/children/{id}/action/stop")
+    suspend fun stopChildAction(@Path("id") id: Int): OkResponse
+
     // Layout
     @GET("api/layout")
     suspend fun getLayout(): Layout

@@ -155,6 +155,57 @@ def run():
         r = c.post('/api/children/import', json='not a list')
         ok('Import bad data → 400', r.status_code == 400)
 
+        # ── Ad-hoc LED action firing (POST /api/children/<id>/action) ──
+        # Seed a known LED child directly so the test is hardware-free.
+        # _send() swallows socket errors, so firing at a fake IP still
+        # exercises the whole CMD_ACTION packet-build path.
+        _led_child = {'id': 99001, 'ip': '10.0.0.231', 'hostname': 'LEDTEST',
+                      'name': 'LED Test', 'sc': 2,
+                      'strings': [{'leds': 60}, {'leds': 30}],
+                      'status': 1, 'type': 'slyled'}
+        parent_server._children.append(_led_child)
+        try:
+            r = c.post('/api/children/99001/action', json={'type': 0})
+            d = r.get_json()
+            ok('Fire inline action (all strings)',
+               r.status_code == 200 and d.get('ok') and d.get('strings') == [0, 1])
+
+            r = c.post('/api/children/99001/action',
+                       json={'type': 1, 'r': 255, 'strings': [1]})
+            d = r.get_json()
+            ok('Fire inline action (string subset)',
+               r.status_code == 200 and d.get('strings') == [1])
+
+            r = c.post('/api/children/99001/action',
+                       json={'type': 1, 'strings': [5, 9]})
+            ok('Fire with all-out-of-range strings → 400', r.status_code == 400)
+
+            r = c.post('/api/children/99001/action',
+                       json={'type': 1, 'strings': []})
+            ok('Fire with empty strings → 400', r.status_code == 400)
+
+            r = c.post('/api/actions', json={'name': 'LED Test Solid',
+                                             'type': 1, 'r': 10, 'g': 20, 'b': 30})
+            _aid = r.get_json().get('id')
+            r = c.post('/api/children/99001/action', json={'actionId': _aid})
+            ok('Fire saved action by id', r.status_code == 200 and r.get_json().get('ok'))
+            if _aid is not None:
+                c.delete(f'/api/actions/{_aid}')
+
+            r = c.post('/api/children/99001/action', json={'actionId': 8888888})
+            ok('Fire unknown actionId → 404', r.status_code == 404)
+
+            r = c.post('/api/children/99001/action/stop')
+            ok('Stop LED action', r.status_code == 200 and r.get_json().get('ok'))
+
+            r = c.post('/api/children/77777/action', json={'type': 0})
+            ok('Fire on unknown child → 404', r.status_code == 404)
+            r = c.post('/api/children/77777/action/stop')
+            ok('Stop on unknown child → 404', r.status_code == 404)
+        finally:
+            parent_server._children[:] = [ch for ch in parent_server._children
+                                          if ch.get('id') != 99001]
+
         # ── Regression: camera node added via /api/children must not become
         #    an LED fixture. Capability-probe of :5000/status must route the
         #    node to type="camera" with no child record persisted.
