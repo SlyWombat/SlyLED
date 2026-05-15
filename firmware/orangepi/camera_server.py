@@ -22,7 +22,7 @@ from flask import Flask, jsonify, request
 import flask.cli
 flask.cli.show_server_banner = lambda *a, **kw: None   # suppress dev-server warning (#289)
 
-VERSION = "1.6.4"
+VERSION = "1.6.5"
 PORT = 5000
 UDP_PORT = 4210
 CONFIG_DIR = Path("/opt/slyled")
@@ -748,6 +748,7 @@ if _hw_info.get("cameras") else '<div class="card"><h2>Camera</h2><p style="colo
 if _hw_info.get("cameras") else '<div class="card" style="margin-top:.5em"><h2>Cameras</h2><p style="color:#fca5a5;font-size:.82em">No cameras detected.</p></div>'}
 <div class="card" style="margin-top:.5em">
 <h2>Device</h2>
+<button class="btn btn-save" onclick="_rescan()" id="rescan-btn">Rescan Cameras</button>
 <button class="btn btn-reboot" onclick="_reboot()">Reboot</button>
 <button class="btn btn-reset" onclick="_reset()">Factory Reset</button>
 </div>
@@ -884,6 +885,29 @@ function _reboot(){{
   if(!confirm('Reboot camera node?'))return;
   var x=new XMLHttpRequest();x.open('POST','/reboot');x.send();
   document.getElementById('msg').textContent='Rebooting...';
+}}
+function _rescan(){{
+  var btn=document.getElementById('rescan-btn'),msg=document.getElementById('msg');
+  btn.disabled=true;btn.textContent='Rescanning...';msg.textContent='';
+  var x=new XMLHttpRequest();x.open('POST','/cameras/rescan');
+  x.onload=function(){{
+    try{{
+      var d=JSON.parse(x.responseText);
+      msg.style.color='#86efac';
+      msg.textContent=d.cameraCount+' camera(s) detected'
+        +(d.added.length?' — added '+d.added.join(', '):'');
+      // Camera lists are server-rendered; reload to show the new set.
+      setTimeout(function(){{location.reload();}},900);
+    }}catch(e){{
+      btn.disabled=false;btn.textContent='Rescan Cameras';
+      msg.style.color='#fca5a5';msg.textContent='Rescan failed';
+    }}
+  }};
+  x.onerror=function(){{
+    btn.disabled=false;btn.textContent='Rescan Cameras';
+    msg.style.color='#fca5a5';msg.textContent='Connection failed';
+  }};
+  x.send();
 }}
 function _reset(){{
   if(!confirm('Factory reset? This will clear all settings.'))return;
@@ -1030,6 +1054,25 @@ def reboot():
         os.system("reboot")
     threading.Timer(1, _do_reboot).start()
     return jsonify(ok=True, message="Rebooting in 1 second...")
+
+@app.post("/cameras/rescan")
+def cameras_rescan():
+    """Re-enumerate USB V4L2 cameras without a reboot — use after hot-
+    plugging a camera so it shows up in /status immediately.
+
+    `_detect_cameras()` sorts by /dev/videoN, so a camera already present
+    keeps its path and list index across a rescan; a newly-plugged camera
+    appends at the next index. An active stream or tracker on camera 0 is
+    therefore unaffected. Saved per-camera V4L2 settings are re-applied."""
+    before = [c.get("device") for c in _hw_info.get("cameras", [])]
+    _detect_hardware()
+    after = [c.get("device") for c in _hw_info.get("cameras", [])]
+    added = [d for d in after if d not in before]
+    removed = [d for d in before if d not in after]
+    log.info("Camera rescan: %d -> %d cameras (added=%s removed=%s)",
+             len(before), len(after), added, removed)
+    return jsonify(ok=True, cameraCount=len(after), cameras=after,
+                   added=added, removed=removed)
 
 @app.get("/health")
 def health():
