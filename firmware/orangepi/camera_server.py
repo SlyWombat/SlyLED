@@ -22,7 +22,7 @@ from flask import Flask, jsonify, request
 import flask.cli
 flask.cli.show_server_banner = lambda *a, **kw: None   # suppress dev-server warning (#289)
 
-VERSION = "1.6.5"
+VERSION = "1.6.6"
 PORT = 5000
 UDP_PORT = 4210
 CONFIG_DIR = Path("/opt/slyled")
@@ -86,7 +86,52 @@ def _camera_cfg(idx):
         "enabled": cfg.get("enabled", True),
         "flip": cfg.get("flip", "none"),  # none, h, v, 180
         "preferred": cfg.get("preferred", False),
+        # Operator-set desired capture resolution. 0 = auto (use the
+        # probe-detected native). The probe picks the largest format
+        # v4l2-ctl reports, which a camera's secondary /dev/videoN node
+        # can under-report — this override is the escape hatch.
+        "resW": cfg.get("resW", 0),
+        "resH": cfg.get("resH", 0),
     }
+
+
+def _camera_capture_res(idx, cam_entry):
+    """Resolution to capture at for camera `idx`, as (w, h).
+
+    Priority: an operator-set desired resolution (cameraCfg[idx].resW/H,
+    exposed in the /config UI) wins; else the probe-detected native
+    resW/resH; else the global default."""
+    if idx is not None:
+        cfg = _camera_cfg(idx)
+        if cfg["resW"] > 0 and cfg["resH"] > 0:
+            return cfg["resW"], cfg["resH"]
+    e = cam_entry or {}
+    if e.get("resW", 0) > 0 and e.get("resH", 0) > 0:
+        return e["resW"], e["resH"]
+    return _config.get("resolutionW", 1920), _config.get("resolutionH", 1080)
+
+
+def _capture_res_for_device(device):
+    """Desired capture (w, h) for a camera device path — resolves the
+    device back to its camera index so the per-camera override applies."""
+    cams = _hw_info.get("cameras", [])
+    idx = next((i for i, c in enumerate(cams) if c.get("device") == device), None)
+    cam_entry = cams[idx] if idx is not None else None
+    return _camera_capture_res(idx, cam_entry)
+
+
+def _cam_res_options_html(idx, cam):
+    """<option> tags for the /config camera card's resolution <select>.
+    Renders Auto + the current override; _loadFormats() fills the rest
+    of the device's advertised resolutions on Settings-tab open."""
+    cfg = _camera_cfg(idx)
+    rw, rh = cfg["resW"], cfg["resH"]
+    probe = f'{cam.get("resW", 0)}x{cam.get("resH", 0)}'
+    html = ('<option value="0x0"' + (' selected' if rw == 0 else '')
+            + f'>Auto (probe: {probe})</option>')
+    if rw > 0 and rh > 0:
+        html += f'<option value="{rw}x{rh}" selected>{rw} x {rh}</option>'
+    return html
 
 def _save_config():
     try:
@@ -370,6 +415,40 @@ def camera_controls_set():
     return jsonify(ok=True, applied=applied)
 
 
+@app.get("/camera/formats")
+def camera_formats():
+    """List the resolutions a camera's V4L2 device advertises, so the
+    /config UI can offer a desired-resolution dropdown instead of the
+    operator guessing. ?cam=N selects the camera index. Returns the
+    largest first."""
+    import subprocess
+    cam_idx = request.args.get("cam", 0, type=int)
+    cameras = _hw_info.get("cameras", [])
+    if cam_idx < 0 or cam_idx >= len(cameras):
+        return jsonify(ok=False, err="Invalid camera index"), 400
+    dev = cameras[cam_idx]["device"]
+    sizes = set()
+    if os.path.exists("/usr/bin/v4l2-ctl"):
+        try:
+            r = subprocess.run(
+                ["/usr/bin/v4l2-ctl", "--list-formats-ext", "-d", dev],
+                capture_output=True, text=True, timeout=4)
+            for line in r.stdout.splitlines():
+                if "Size:" in line:
+                    for p in line.split():
+                        if "x" in p and p[0].isdigit():
+                            try:
+                                w, h = p.split("x")
+                                sizes.add((int(w), int(h)))
+                            except ValueError:
+                                pass
+        except Exception as e:
+            log.warning("camera/formats cam%d: %s", cam_idx, e)
+    formats = [{"w": w, "h": h} for w, h in
+               sorted(sizes, key=lambda s: s[0] * s[1], reverse=True)]
+    return jsonify(ok=True, cam=cam_idx, formats=formats)
+
+
 # ── Camera settings slots + auto-tune (#623) ───────────────────────────
 
 V4L2_SLOTS_DIR = V4L2_SETTINGS_DIR  # same dir, named cam<idx>.slot.<name>.json
@@ -600,6 +679,14 @@ def status():
         c["enabled"] = cfg["enabled"]
         c["flip"] = cfg["flip"]
         c["preferred"] = cfg["preferred"]
+        # `resW`/`resH` are the probe-detected native; `desiredResW/H`
+        # is the operator override (0 = auto). `captureResW/H` is what
+        # capture actually uses, after applying the override.
+        c["desiredResW"] = cfg["resW"]
+        c["desiredResH"] = cfg["resH"]
+        cap_w, cap_h = _camera_capture_res(i, cam)
+        c["captureResW"] = cap_w
+        c["captureResH"] = cap_h
         cam_list.append(c)
     return jsonify({
         "role": "camera",
@@ -729,6 +816,8 @@ if _hw_info.get("cameras") else '<div class="card"><h2>Camera</h2><p style="colo
 <option value="v" {'selected' if _camera_cfg(i)['flip']=='v' else ''}>Flip Vertical</option>
 <option value="180" {'selected' if _camera_cfg(i)['flip']=='180' else ''}>Rotate 180&deg;</option>
 </select>
+<label>Capture Resolution</label>
+<select id="cam-res-{i}" style="margin-bottom:.3em">{_cam_res_options_html(i, c)}</select>
 <div style="display:flex;gap:1.5em;align-items:center;margin:.4em 0">
 <label style="display:flex;align-items:center;gap:.3em"><input type="checkbox" id="cam-en-{i}" {'checked' if _camera_cfg(i)['enabled'] else ''}> Enabled</label>
 <label style="display:flex;align-items:center;gap:.3em"><input type="radio" name="cam-pref" id="cam-pref-{i}" {'checked' if _camera_cfg(i)['preferred'] else ''}> Preferred</label>
@@ -875,11 +964,35 @@ function _saveCam(idx){{
   cfg.flip=(document.getElementById('cam-flip-'+idx)||{{}}).value||'none';
   cfg.enabled=!!(document.getElementById('cam-en-'+idx)||{{}}).checked;
   cfg.preferred=!!(document.getElementById('cam-pref-'+idx)||{{}}).checked;
+  var res=((document.getElementById('cam-res-'+idx)||{{}}).value||'0x0').split('x');
+  cfg.resW=parseInt(res[0])||0;cfg.resH=parseInt(res[1])||0;
   var body={{cameraCfg:{{}}}};body.cameraCfg[idx]=cfg;
   var x=new XMLHttpRequest();
   x.open('POST','/config');x.setRequestHeader('Content-Type','application/json');
   x.onload=function(){{document.getElementById('msg').textContent='Camera '+idx+' saved';}};
   x.send(JSON.stringify(body));
+}}
+function _loadFormats(idx){{
+  var sel=document.getElementById('cam-res-'+idx);
+  if(!sel)return;
+  var x=new XMLHttpRequest();x.open('GET','/camera/formats?cam='+idx);
+  x.onload=function(){{
+    try{{
+      var d=JSON.parse(x.responseText);
+      if(!d.formats)return;
+      var have={{}},k;
+      for(k=0;k<sel.options.length;k++)have[sel.options[k].value]=1;
+      d.formats.forEach(function(f){{
+        var v=f.w+'x'+f.h;
+        if(!have[v]){{
+          var o=document.createElement('option');
+          o.value=v;o.textContent=f.w+' x '+f.h;
+          sel.appendChild(o);
+        }}
+      }});
+    }}catch(e){{}}
+  }};
+  x.send();
 }}
 function _reboot(){{
   if(!confirm('Reboot camera node?'))return;
@@ -995,7 +1108,7 @@ function _v4l2Reset(idx){{
   x.send(JSON.stringify(body));
 }}
 // Auto-load V4L2 controls when Settings tab shown
-(function(){{var origTab=_tab;_tab=function(i){{origTab(i);if(i===1){{var cams={len(_hw_info.get("cameras", []))};for(var ci=0;ci<cams;ci++)_v4l2Load(ci);}}}};}}());
+(function(){{var origTab=_tab;_tab=function(i){{origTab(i);if(i===1){{var cams={len(_hw_info.get("cameras", []))};for(var ci=0;ci<cams;ci++){{_v4l2Load(ci);_loadFormats(ci);}}}}}};}}());
 </script></body></html>'''
 
 @app.get("/config/json")
@@ -1026,6 +1139,14 @@ def config_post():
             for k in ("name", "fovDeg", "enabled", "flip", "preferred"):
                 if k in cam_cfg:
                     existing[k] = cam_cfg[k]
+            # Desired-resolution override — 0 means "auto" (use probe).
+            for k in ("resW", "resH"):
+                if k in cam_cfg:
+                    try:
+                        v = int(cam_cfg[k])
+                    except (TypeError, ValueError):
+                        v = 0
+                    existing[k] = v if 0 <= v <= 8192 else 0
             cfg_map[str(idx)] = existing
         # If setting preferred, clear preferred on others
         for idx, cam_cfg in body["cameraCfg"].items():
@@ -1088,7 +1209,8 @@ def snapshot():
     if idx < 0 or idx >= len(cameras):
         return jsonify(ok=False, err=f"Camera index {idx} out of range (0-{len(cameras)-1})"), 400
     dev = cameras[idx]["device"]
-    res = f"{cameras[idx].get('resW') or _config.get('resolutionW', 1920)}x{cameras[idx].get('resH') or _config.get('resolutionH', 1080)}"
+    _rw, _rh = _camera_capture_res(idx, cameras[idx])
+    res = f"{_rw}x{_rh}"
 
     from flask import Response
     import subprocess
@@ -1143,14 +1265,15 @@ def _cv_capture(device, timeout=5):
                     if attempt < 2:
                         _time.sleep(0.5)
                     continue
-            # Set MJPEG format + native resolution from probe
+            # Set MJPEG format + desired capture resolution
             cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-            # Find native resolution for this device
             cam_entry = next((c for c in _hw_info.get("cameras", []) if c.get("device") == device), None)
             if cam_entry:
                 _probe_camera_details(cam_entry)
-            native_w = cam_entry["resW"] if cam_entry and cam_entry.get("resW", 0) > 0 else 1920
-            native_h = cam_entry["resH"] if cam_entry and cam_entry.get("resH", 0) > 0 else 1080
+            # Desired resolution: per-camera override > probed native >
+            # global default. Lets the operator force a resolution when
+            # the probe under-reports a camera's second /dev/videoN node.
+            native_w, native_h = _capture_res_for_device(device)
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, native_w)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, native_h)
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -1220,10 +1343,7 @@ def _capture_frame_bgr(device, res_hint=None):
         return frame
     # Build a resolution string for CLI tools — match /snapshot's logic.
     if not res_hint:
-        cam_entry = next((c for c in _hw_info.get("cameras", [])
-                          if c.get("device") == device), None)
-        rw = (cam_entry or {}).get("resW") or _config.get("resolutionW", 1920)
-        rh = (cam_entry or {}).get("resH") or _config.get("resolutionH", 1080)
+        rw, rh = _capture_res_for_device(device)
         res_hint = f"{rw}x{rh}"
     jpeg, tool = _cli_capture_jpeg(device, res_hint)
     if not jpeg:
@@ -1457,10 +1577,10 @@ def stereo_capture():
     def _target_res(cam_entry):
         if isinstance(req_res, list) and len(req_res) == 2:
             return int(req_res[0]), int(req_res[1])
-        # Per-camera native with a 1920x1080 cap — a 4K frame would be
-        # ~6 MB base64 which kills the HTTP round-trip.
-        w = cam_entry.get("resW") or 1920
-        h = cam_entry.get("resH") or 1080
+        # Desired resolution (per-camera override > probed) with a
+        # 1920-wide cap — a 4K frame would be ~6 MB base64 which kills
+        # the HTTP round-trip.
+        w, h = _capture_res_for_device(cam_entry["device"])
         if w > 1920:
             scale = 1920 / w
             w = 1920
