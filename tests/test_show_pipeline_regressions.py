@@ -1135,8 +1135,95 @@ def test_865_bar_array_rejects_when_under_two_bars():
             f"got {show1!r}"[:200])
 
 
+def test_v205_baked_sync_empty_rig_contract():
+    """v2.0.5 regression — the SPA's _rtBakeAll chains a sync between
+    bake and /api/show/start. When no children are registered (or no
+    fixture has a real LED childId), the sync API takes an early-return
+    that bypasses the _sync_progress dict entirely. The SPA must be able
+    to detect that path from the POST response alone, because polling
+    /sync/status would return {done:False} forever and hang the start
+    chain (the v2.0.5 → v2.0.6 fix).
+
+    Contract this test pins:
+      - empty-rig POST /api/timelines/<tid>/baked/sync returns 200 with
+        `ok=True` AND `synced` as a number — that combination is the
+        unambiguous signal "no async progress, do not poll".
+      - non-empty (has a child with IP) returns `ok=True` with a
+        `performers` count instead (the async path).
+    """
+    print("\n-- test_v205_baked_sync_empty_rig_contract --")
+    with parent_server.app.test_client() as c:
+        c.post("/api/reset", headers={"X-SlyLED-Confirm": "true"})
+        # Minimal timeline so a bake result exists when sync runs.
+        r = c.post("/api/timelines", json={"name": "empty-rig", "durationS": 5})
+        tid = r.get_json()["id"]
+        # Inject a synthetic bake result so sync can't 404.
+        parent_server._bake_result[tid] = {
+            "timelineId": tid, "bakedAt": int(time.time()),
+            "fixtures": {}, "totalFrames": 0, "fps": 40,
+        }
+
+        # Case A: no children registered → empty-rig early return.
+        before = list(parent_server._children)
+        parent_server._children[:] = []
+        try:
+            r = c.post(f"/api/timelines/{tid}/baked/sync")
+            _ok(r.status_code == 200,
+                "v2.0.6 empty-rig sync returns 200",
+                f"got {r.status_code}")
+            body = r.get_json()
+            _ok(body.get("ok") is True,
+                "v2.0.6 empty-rig sync body has ok=True",
+                f"got {body!r}")
+            _ok(isinstance(body.get("synced"), int),
+                "v2.0.6 empty-rig sync body has integer `synced` "
+                "(SPA signal: skip /sync/status polling)",
+                f"got {body!r}")
+        finally:
+            parent_server._children[:] = before
+
+        c.delete(f"/api/timelines/{tid}")
+        parent_server._bake_result.pop(tid, None)
+
+
+def test_v205_children_duplicate_response_has_type():
+    """v2.0.5 fix — duplicate POST /api/children must return `type` so
+    setup-ui.js's `_submitAddFixture` can tell a re-added DMX bridge
+    from a re-added LED child. Pre-fix the duplicate branch returned
+    only {ok,id,duplicate} and the SPA fell through to auto-creating an
+    LED fixture row for the bridge (the symptom that triggered the
+    v2.0.5 patch series in the first place)."""
+    print("\n-- test_v205_children_duplicate_response_has_type --")
+    with parent_server.app.test_client() as c:
+        c.post("/api/reset", headers={"X-SlyLED-Confirm": "true"})
+        # Seed a fake DMX-typed child so the duplicate path fires.
+        parent_server._children.append({
+            "id": 99, "ip": "10.99.99.99", "hostname": "SLYC-FAKE",
+            "name": "fake-dmx-bridge", "type": "dmx",
+            "boardType": "giga-dmx", "status": 0, "sc": 0, "strings": [],
+        })
+        try:
+            r = c.post("/api/children", json={"ip": "10.99.99.99"})
+            _ok(r.status_code == 200,
+                "duplicate-child POST returns 200",
+                f"got {r.status_code}")
+            body = r.get_json()
+            _ok(body.get("duplicate") is True,
+                "duplicate flag is set",
+                f"got {body!r}")
+            _ok(body.get("type") == "dmx",
+                "duplicate response carries type='dmx' so SPA can skip "
+                "auto-fixture create",
+                f"got type={body.get('type')!r}")
+        finally:
+            parent_server._children[:] = [
+                x for x in parent_server._children if x.get("id") != 99]
+
+
 def main():
     print("=== Show pipeline regressions (#858) ===")
+    test_v205_baked_sync_empty_rig_contract()
+    test_v205_children_duplicate_response_has_type()
     test_835_orphan_track_action_does_not_blackout_dimmer()
     test_840_loop_wrap_no_zero_frame()
     test_848_invariant_1_default_rgb_on_press_start()

@@ -176,9 +176,20 @@ function _rtRewind(){tlRewind();}
 function _rtSyncOne(tid,onDone){
   ra('POST','/api/timelines/'+tid+'/baked/sync',{},function(sr){
     if(!sr||!sr.ok){if(onDone)onDone(sr&&sr.err||'sync failed');return;}
+    // Empty-rig early return: server replied {ok,synced:0,warn} without
+    // ever populating _sync_progress. /sync/status would return
+    // {done:false} forever — never poll.
+    if(typeof sr.synced==='number'){if(onDone)onDone(null);return;}
+    var attempts=0;
     var poll=setInterval(function(){
       ra('GET','/api/timelines/'+tid+'/sync/status',null,function(sp){
-        if(!sp||!sp.done)return;
+        attempts++;
+        if(!sp||!sp.done){
+          // Cap the wait at ~36s. Past that, let the start chain run
+          // rather than hanging the UI on a sync that never completes.
+          if(attempts>90){clearInterval(poll);if(onDone)onDone(null);}
+          return;
+        }
         clearInterval(poll);
         if(onDone)onDone(null);
       });
@@ -234,7 +245,13 @@ function _rtBakeAll(onDone){
       }
       document.getElementById('hs').textContent='Syncing timeline '+(si+1)+'/'+order.length+'...';
       _rtSyncOne(order[si],function(err){
-        if(err){document.getElementById('hs').textContent='Sync failed: '+err;return;}
+        // Sync is best-effort. Halting on error meant a transient sync
+        // failure (no performers reachable, 404, poll timeout) blocked
+        // /api/show/start from ever firing — the show literally did
+        // not start. Surface the warning, continue to the next item,
+        // let the start callback run. Worst case LEDs stay dark, but
+        // Start always does something.
+        if(err){document.getElementById('hs').textContent='Sync warn: '+err+' — continuing';}
         syncAll(si+1);
       });
     }
