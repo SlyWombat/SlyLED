@@ -1,10 +1,14 @@
 package com.slywombat.slyled.viewmodel
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.slywombat.slyled.CrashReporter
 import com.slywombat.slyled.data.repository.ServerPreferences
 import com.slywombat.slyled.data.repository.SlyLedRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,7 +26,8 @@ import javax.inject.Inject
 @HiltViewModel
 class ConnectionViewModel @Inject constructor(
     private val repository: SlyLedRepository,
-    private val serverPrefs: ServerPreferences
+    private val serverPrefs: ServerPreferences,
+    @ApplicationContext private val appContext: Context,
 ) : ViewModel() {
 
     enum class State { DISCONNECTED, CONNECTING, CONNECTED }
@@ -78,6 +83,16 @@ class ConnectionViewModel @Inject constructor(
                             serverPrefs.save(host, port)
                             _savedHost.value = host
                             _savedPort.value = port
+                            // Ship any crash reports captured since the
+                            // last successful connection to the
+                            // orchestrator for debugging. Best-effort,
+                            // off the connect path's critical section.
+                            val base = repository.baseUrl
+                            if (base != null) {
+                                viewModelScope.launch(Dispatchers.IO) {
+                                    CrashReporter.uploadPending(appContext, base)
+                                }
+                            }
                         } else {
                             _errorEvent.emit("Server responded but is not a SlyLED orchestrator")
                             repository.disconnect()

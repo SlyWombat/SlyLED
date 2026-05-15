@@ -8,6 +8,7 @@ import com.slywombat.slyled.data.repository.ServerPreferences
 import com.slywombat.slyled.data.repository.SlyLedRepository
 import com.slywombat.slyled.data.repository.UserPosition
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
@@ -121,19 +122,27 @@ class ControlViewModel @Inject constructor(
         if (initialized) return
         initialized = true
 
-        // Initial fetch
+        // Initial fetch. Each fetch is isolated: pre-fix a single
+        // sequential coroutine meant one fetch throwing a non-Exception
+        // Throwable (Error, etc.) — which `catch (Exception)` misses —
+        // killed the whole coroutine, so every fetch AFTER the failing
+        // one silently never ran. Symptom: getFixtures dies → both
+        // getDmxProfiles and the prefs restores never happen → the Grab
+        // and Fixtures pages are permanently empty with no log.
+        // `_safeLoad` catches Throwable (rethrowing CancellationException
+        // so structured concurrency still works) and logs every failure.
         viewModelScope.launch {
-            try { _timelines.value = repository.getTimelines() } catch (e: Exception) { Log.e(TAG, "getTimelines", e) }
-            try { _playlist.value = repository.getShowPlaylist() } catch (_: Exception) {}
-            try { _fixtures.value = repository.getFixtures() } catch (_: Exception) {}
-            try { _profiles.value = repository.getDmxProfiles() } catch (_: Exception) {}
+            _safeLoad("getTimelines")     { _timelines.value = repository.getTimelines() }
+            _safeLoad("getShowPlaylist")  { _playlist.value = repository.getShowPlaylist() }
+            _safeLoad("getFixtures")      { _fixtures.value = repository.getFixtures() }
+            _safeLoad("getDmxProfiles")   { _profiles.value = repository.getDmxProfiles() }
             // #427 — restore the operator's saved stage position so pointer
             // mode is usable without re-entering it every launch.
-            try { _userPosition.value = serverPrefs.loadUserPosition() } catch (_: Exception) {}
+            _safeLoad("loadUserPosition") { _userPosition.value = serverPrefs.loadUserPosition() }
             // #888 — restore Grab favourites + Shows starred + last-played from prefs.
-            try { _favouriteMovers.value = serverPrefs.loadFavouriteMovers() } catch (_: Exception) {}
-            try { _starredTimelines.value = serverPrefs.loadStarredTimelines() } catch (_: Exception) {}
-            try { _lastPlayedAt.value = serverPrefs.loadLastPlayedAt() } catch (_: Exception) {}
+            _safeLoad("loadFavouriteMovers")  { _favouriteMovers.value = serverPrefs.loadFavouriteMovers() }
+            _safeLoad("loadStarredTimelines") { _starredTimelines.value = serverPrefs.loadStarredTimelines() }
+            _safeLoad("loadLastPlayedAt")     { _lastPlayedAt.value = serverPrefs.loadLastPlayedAt() }
         }
 
         // #888 — Poll fixtures-live every 1.5s for Grab-tile colour + arrow.
@@ -205,6 +214,21 @@ class ControlViewModel @Inject constructor(
     }
 
     fun clearMessage() { _message.value = null }
+
+    /** Run one load step, surviving any failure. Catches Throwable (not
+     *  just Exception) so an Error in one step can't kill the rest of
+     *  the load coroutine; rethrows CancellationException so coroutine
+     *  cancellation still propagates. Failures are logged, never silent. */
+    private suspend fun _safeLoad(name: String, block: suspend () -> Unit) {
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Log.e(TAG, "load step '$name' failed: "
+                       + "${t.javaClass.simpleName}: ${t.message}", t)
+        }
+    }
 
     // #888 — Grab + Shows persistence helpers.
 

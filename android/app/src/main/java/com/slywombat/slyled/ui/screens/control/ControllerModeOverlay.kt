@@ -157,7 +157,16 @@ fun ControllerModeOverlay(
             private var lastSendMs = 0L
 
             override fun onSensorChanged(event: SensorEvent) {
-                SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
+                // Some devices (notably Samsung) report a 5-element
+                // rotation vector (x,y,z,w,heading-accuracy). Passing
+                // that straight into getRotationMatrixFromVector /
+                // getQuaternionFromVector crashes with
+                // ArrayIndexOutOfBoundsException on a number of OEM
+                // builds. Truncate to the canonical 4-element vector
+                // first — this is the documented-safe input length.
+                val rv = if (event.values.size > 4)
+                    event.values.copyOf(4) else event.values
+                SensorManager.getRotationMatrixFromVector(rotationMatrix, rv)
                 // #757 Issue A — remap based on display rotation so
                 // the extracted roll/pitch/yaw is always in the
                 // operator-facing grip frame.
@@ -191,7 +200,7 @@ fun ControllerModeOverlay(
                 val pitch = Math.toDegrees(orientation[1].toDouble()).toFloat()
                 val roll = Math.toDegrees(orientation[2].toDouble()).toFloat()
 
-                SensorManager.getQuaternionFromVector(quat, event.values)
+                SensorManager.getQuaternionFromVector(quat, rv)
 
                 // Store latest for calibrate callbacks
                 latestRoll.set(roll)

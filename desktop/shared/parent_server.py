@@ -16598,6 +16598,34 @@ def api_show_status():
     })
 
 
+#  "  "  Android crash intake  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
+
+@app.post("/api/android/crash")
+def api_android_crash():
+    """Receive a crash / non-fatal report from the Android app and
+    persist it under DATA/android-crashes/. The app uploads any pending
+    reports on its next successful connection, so a field crash surfaces
+    here without the operator hand-fishing files off the phone.
+
+    Body is the raw report text (Content-Type text/plain). Kept
+    deliberately dumb — no parsing, no schema — so a malformed report
+    still lands on disk for a human to read."""
+    body = request.get_data(as_text=True) or ""
+    if not body.strip():
+        return jsonify(err="empty report"), 400
+    if len(body) > 256 * 1024:
+        body = body[:256 * 1024] + "\n...[truncated]"
+    crash_dir = DATA / "android-crashes"
+    crash_dir.mkdir(parents=True, exist_ok=True)
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    # Disambiguate same-second uploads with a short random suffix.
+    suffix = f"{int(time.time() * 1000) % 1000:03d}"
+    (crash_dir / f"crash-{ts}-{suffix}.txt").write_text(body, encoding="utf-8")
+    log.warning("Android crash report received (%d bytes) — saved to %s",
+                len(body), crash_dir)
+    return jsonify(ok=True)
+
+
 #  "  "  Settings  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
 @app.get("/api/settings")

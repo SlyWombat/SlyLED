@@ -127,7 +127,12 @@ fun PointerModeOverlay(
             private var lastSendMs = 0L
 
             override fun onSensorChanged(event: SensorEvent) {
-                SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
+                // Truncate to a 4-element rotation vector — some OEM
+                // builds report 5 elements and crash the SensorManager
+                // helpers with ArrayIndexOutOfBoundsException.
+                val rv = if (event.values.size > 4)
+                    event.values.copyOf(4) else event.values
+                SensorManager.getRotationMatrixFromVector(rotationMatrix, rv)
                 // #757 Issue A — pick the matrix already aligned to
                 // the operator's grip.
                 val rotation = display?.rotation ?: Surface.ROTATION_0

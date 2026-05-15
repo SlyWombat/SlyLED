@@ -116,7 +116,11 @@ fun AimWizardDialog(
             val listener = object : SensorEventListener {
                 override fun onSensorChanged(event: SensorEvent) {
                     val quat = FloatArray(4)
-                    SensorManager.getQuaternionFromVector(quat, event.values)
+                    // Truncate to 4 — some OEM builds report a
+                    // 5-element rotation vector and crash here.
+                    val rv = if (event.values.size > 4)
+                        event.values.copyOf(4) else event.values
+                    SensorManager.getQuaternionFromVector(quat, rv)
                     // Android quat = [w, x, y, z] — matches the wizard's
                     // wire format expectation.
                     currentQuat.value = quat
