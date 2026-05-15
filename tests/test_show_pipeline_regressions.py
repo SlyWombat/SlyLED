@@ -1220,10 +1220,97 @@ def test_v205_children_duplicate_response_has_type():
                 x for x in parent_server._children if x.get("id") != 99]
 
 
+def test_v206_led_only_show_keeps_runnerRunning_true():
+    """v2.0.6 regression — a single-item loop_all playlist with ONLY LED
+    fixtures (no DMX, no Track actions) starts cleanly via
+    `/api/show/start`, but `_dmx_playback_loop` early-returned at the
+    `not dmx_fixtures and not has_track_actions` branch, which let
+    `_show_playback_loop`'s post-call cleanup clear `runnerRunning`
+    back to False within milliseconds.
+
+    Symptom: operator presses Start, SPA flashes "Show started — 1
+    timeline(s)" then immediately reverts to "no show running". Bars
+    DO play (LED children run autonomously from preloaded LOAD_STEPs),
+    but the orchestrator state is wrong and the SPA's runtime tab
+    misreports.
+
+    Fix: idle for the timeline's duration (or until stop) instead of
+    returning, so the playback thread keeps the runner-state True for
+    the show's nominal length.
+    """
+    print("\n-- test_v206_led_only_show_keeps_runnerRunning_true --")
+    with parent_server.app.test_client() as c:
+        c.post("/api/reset", headers={"X-SlyLED-Confirm": "true"})
+        # LED-only fixture (childId is required-ish but we don't need a
+        # child — the playback path checks fixtureType, not childId, so
+        # an LED fixture with no childId still hits the "no DMX, no
+        # Track" branch).
+        r = c.post("/api/fixtures", json={
+            "name": "led-bar", "type": "linear", "fixtureType": "led",
+            "rotation": [0, 0, 0],
+        })
+        fid = r.get_json()["id"]
+
+        r = c.post("/api/actions", json={
+            "name": "solid red", "type": 1, "r": 255, "g": 0, "b": 0,
+        })
+        aid = r.get_json()["id"]
+
+        r = c.post("/api/timelines", json={
+            "name": "led-only", "durationS": 10, "loop": True,
+        })
+        tid = r.get_json()["id"]
+        c.put(f"/api/timelines/{tid}", json={
+            "name": "led-only", "durationS": 10, "loop": True,
+            "tracks": [{"fixtureId": fid,
+                        "clips": [{"actionId": aid, "startS": 0,
+                                    "durationS": 10}]}],
+        })
+
+        # Synthetic bake: minimal LED segments so `_bake_result[tid]`
+        # exists and the start endpoint passes its unbaked check.
+        parent_server._bake_result[tid] = {
+            "timelineId": tid, "bakedAt": int(time.time()),
+            "fixtures": {fid: {"segments": [{
+                "startS": 0.0, "durationS": 10.0, "type": 1,
+                "params": {"r": 255, "g": 0, "b": 0},
+            }]}},
+            "totalFrames": 0, "fps": 40,
+        }
+        c.post("/api/show/playlist", json={"order": [tid], "loopAll": True})
+
+        r = c.post("/api/show/start")
+        _ok(r.status_code == 200 and (r.get_json() or {}).get("ok"),
+            "LED-only /api/show/start returns 200 ok",
+            f"got {r.status_code} {r.get_json()!r}")
+
+        # Wait 1.2s and re-check runnerRunning. Pre-fix the playback
+        # thread cleared it within ~50ms; with the fix it stays True
+        # for the timeline's nominal duration (or until Stop).
+        time.sleep(1.2)
+        with parent_server._lock:
+            still_running = bool(parent_server._settings.get("runnerRunning"))
+        _ok(still_running,
+            "runnerRunning stays True 1.2s after Start (LED-only show)",
+            f"runnerRunning={still_running}; "
+            "fix at _dmx_playback_loop:15540 idle-or-return branch")
+
+        # Cleanup — explicitly stop the show so the next test starts
+        # from a clean slate. Without this the playback thread keeps
+        # the duration sleep going across tests.
+        c.post(f"/api/show/stop")
+        time.sleep(0.2)
+        c.delete(f"/api/timelines/{tid}")
+        c.delete(f"/api/fixtures/{fid}")
+        c.delete(f"/api/actions/{aid}")
+        parent_server._bake_result.pop(tid, None)
+
+
 def main():
     print("=== Show pipeline regressions (#858) ===")
     test_v205_baked_sync_empty_rig_contract()
     test_v205_children_duplicate_response_has_type()
+    test_v206_led_only_show_keeps_runnerRunning_true()
     test_835_orphan_track_action_does_not_blackout_dimmer()
     test_840_loop_wrap_no_zero_frame()
     test_848_invariant_1_default_rgb_on_press_start()

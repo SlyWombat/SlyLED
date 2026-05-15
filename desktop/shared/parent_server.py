@@ -15538,7 +15538,20 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
                              "channels": channels, "segs": segs})
     has_track_actions = any(a.get("type") == 18 for a in _actions)
     if not dmx_fixtures and not has_track_actions:
-        log.warning("DMX playback: no DMX fixtures with segments and no Track actions")
+        # LED-only show: the LED children run autonomously from
+        # preloaded LOAD_STEPs, so the 40Hz playback loop has no DMX
+        # work to do. But the loop is ALSO the timekeeper for
+        # `runnerRunning` — exit here and `_show_playback_loop` clears
+        # it back to False within milliseconds of Start, making the SPA
+        # report "no show running" even while the bars are actually
+        # playing. Idle for the timeline's duration (or until stop) so
+        # the runner-state stays True for the show's nominal length.
+        log.info("DMX playback: LED-only show, idling for duration=%ss loop=%s",
+                 duration, loop)
+        if loop:
+            _dmx_playback_stop.wait()    # wait until Stop / generation change
+        elif duration > 0:
+            _dmx_playback_stop.wait(timeout=duration)
         return
     if not dmx_fixtures:
         log.info("DMX playback: no baked segments but Track actions present — loop will run for tracking")
