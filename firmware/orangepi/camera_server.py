@@ -120,16 +120,32 @@ def _capture_res_for_device(device):
     return _camera_capture_res(idx, cam_entry)
 
 
+# Standard resolutions always offered in the /config dropdown, so the
+# operator can force a resolution even when a camera's V4L2 node
+# under-reports its formats (a secondary /dev/videoN node enumerating
+# only 160×120 can't otherwise be driven to its real native res).
+_STD_RESOLUTIONS = [
+    (1920, 1200), (1920, 1080), (1600, 1200), (1280, 960),
+    (1280, 720), (1024, 768), (800, 600), (640, 480),
+]
+
+
 def _cam_res_options_html(idx, cam):
     """<option> tags for the /config camera card's resolution <select>.
-    Renders Auto + the current override; _loadFormats() fills the rest
-    of the device's advertised resolutions on Settings-tab open."""
+    Renders Auto, the standard resolution set, and the current override;
+    _loadFormats() merges the device's actually-advertised formats on
+    Settings-tab open."""
     cfg = _camera_cfg(idx)
     rw, rh = cfg["resW"], cfg["resH"]
     probe = f'{cam.get("resW", 0)}x{cam.get("resH", 0)}'
+    seen = set()
     html = ('<option value="0x0"' + (' selected' if rw == 0 else '')
             + f'>Auto (probe: {probe})</option>')
-    if rw > 0 and rh > 0:
+    for w, h in _STD_RESOLUTIONS:
+        seen.add((w, h))
+        sel = ' selected' if (rw == w and rh == h) else ''
+        html += f'<option value="{w}x{h}"{sel}>{w} x {h}</option>'
+    if rw > 0 and rh > 0 and (rw, rh) not in seen:
         html += f'<option value="{rw}x{rh}" selected>{rw} x {rh}</option>'
     return html
 

@@ -133,7 +133,7 @@
                          "releaseTag":  "cam-v1.6.6",
                          "file":  "orangepi/camera_server.py",
                          "releaseAsset":  "camera-firmware-v1.6.6.zip",
-                         "sha256":  "ee88e8b876b7854d64b27d5ad2fe1024711ed51392fbf7216b3e91dae9b2d309",
+                         "sha256":  "7adf0e10e3a08a435c9643f9f83ebe0200f1abd4765db5c6c9ccff964b740471",
                          "flashMethod":  "ssh"
                      }
                  ]
