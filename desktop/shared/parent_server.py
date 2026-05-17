@@ -14008,7 +14008,16 @@ if _dmx_settings.get("autoStartEngine", True) and _dmx_settings.get("universeRou
 
 # ── Auto-start show on boot (#390) ────────────────────────────────────────
 def _auto_start_show():
-    """Resume the last active timeline if autoStartShow is enabled."""
+    """Resume the last active timeline if autoStartShow is enabled.
+
+    `_bake_result` is an in-memory runtime dict — it does NOT survive an
+    orchestrator restart. Pre-fix this function bailed with "not baked —
+    staying idle" on every restart, so the auto-show never actually
+    resumed: LED children kept looping autonomously from their own
+    preloaded steps (appearing to work), but the DMX playback loop had
+    no bake to stream and the moving heads stayed dark. So on resume we
+    re-bake + re-sync before starting, and bring the DMX engine up so the
+    movers actually receive Art-Net/sACN output."""
     time.sleep(5)  # wait for children to reconnect
     tid = _settings.get("activeTimeline", -1)
     if tid < 0:
@@ -14019,9 +14028,45 @@ def _auto_start_show():
         log.warning("Auto-start show: timeline %d not found — staying idle", tid)
         return
     has_track = any(a.get("type") == 18 for a in _actions)
-    if tid not in _bake_result and not has_track:
-        log.warning("Auto-start show: timeline %d not baked — staying idle", tid)
-        return
+
+    # Bring the DMX engine up — moving heads receive no output without it.
+    try:
+        proto = _dmx_settings.get("protocol", "artnet")
+        engine = _artnet if proto == "artnet" else _sacn
+        if not engine.running:
+            engine.start()
+            _apply_profile_defaults(engine)
+            log.info("Auto-start show: started %s DMX engine", proto)
+    except Exception as e:
+        log.warning("Auto-start show: could not start DMX engine: %s", e)
+
+    # Re-bake — `_bake_result` is empty after a restart, and the DMX
+    # playback loop streams nothing without it.
+    if tid not in _bake_result:
+        log.info("Auto-start show: baking timeline %d before resume", tid)
+        with app.test_request_context():
+            api_timeline_bake(tid)
+        for _ in range(240):
+            if _bake_progress and _bake_progress.done:
+                break
+            time.sleep(1)
+        if tid not in _bake_result and not has_track:
+            log.warning("Auto-start show: bake did not complete — staying idle")
+            return
+
+    # Re-sync baked steps to LED children (best-effort — a sync failure
+    # must not block the DMX side from starting).
+    with app.test_request_context():
+        try:
+            api_bake_sync(tid)
+        except Exception as e:
+            log.warning("Auto-start show: sync call failed (%s) — continuing", e)
+    time.sleep(2)
+    for _ in range(120):
+        if not _sync_progress or _sync_progress.get("done"):
+            break
+        time.sleep(1)
+
     # Start playback
     log.info("Auto-start show: resuming timeline %d (%s)", tid, tl.get("name", "?"))
     with app.test_request_context():
