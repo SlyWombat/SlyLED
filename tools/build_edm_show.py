@@ -28,6 +28,31 @@ def api(method, path, body=None, timeout=120):
     return json.loads(txt) if txt.strip() else {}
 
 
+def cleanup_old_show():
+    """Delete any previous 'EDM Sky Sweep' timeline and the actions it
+    referenced, so this builder is idempotent — re-run it freely without
+    piling up orphan timelines/actions."""
+    for tl in api("GET", "/api/timelines"):
+        if "EDM Sky Sweep" not in tl.get("name", ""):
+            continue
+        tid = tl["id"]
+        try:
+            api("POST", f"/api/timelines/{tid}/stop")
+        except Exception:
+            pass
+        full = api("GET", f"/api/timelines/{tid}")
+        aids = {cl["actionId"] for tr in full.get("tracks", [])
+                for cl in tr.get("clips", [])
+                if cl.get("actionId") is not None}
+        api("DELETE", f"/api/timelines/{tid}")
+        for aid in aids:
+            try:
+                api("DELETE", f"/api/actions/{aid}")
+            except Exception:
+                pass
+        print(f"  removed old timeline #{tid} + {len(aids)} actions")
+
+
 # ── EDM colour palette ────────────────────────────────────────────────
 CYAN    = (0, 229, 255)
 MAGENTA = (255, 0, 208)
@@ -97,6 +122,9 @@ print(f"  350W   : fid={f350['id']}  pos={f350.get('x'),f350.get('y'),f350.get('
 print(f"  150W-L : fid={f150l['id'] if f150l else '-'}")
 print(f"  150W-R : fid={f150r['id'] if f150r else '-'}")
 print(f"  LED    : fid={led_fx['id']}  ({led_fx.get('name')})")
+
+print("Cleaning up any previous EDM Sky Sweep show...")
+cleanup_old_show()
 
 P350 = [f350.get("x", 0), f350.get("y", 0), f350.get("z", 0)]
 P150L = [f150l.get("x", 0), f150l.get("y", 0), f150l.get("z", 0)] if f150l else None
@@ -202,13 +230,56 @@ def build_mover(fx_pos, name, cx, cy, z, radius, clip_len=22):
     return clips, worst_tilt
 
 
-# 350W — tight ceiling orbit, tilt stays well above 60°.
-m350_clips, m350_tilt = build_mover(
-    P350, "350W", cx=P350[0], cy=P350[1] + 500, z=2800, radius=700, clip_len=20)
-print(f"  350W sweep: {len(m350_clips)} clips, min tilt {m350_tilt:.1f}° "
-      f"(requirement: >60°)")
+def build_350w_nod():
+    """350W choreography — a continuous tilt 'nod' sweeping ~62° up to
+    90° (beam straight up) and back, pan locked stage-forward.
+
+    Every aim point has dx = 0 (x stays on the fixture's x), so
+    compute_pan_tilt yields pan_norm = 0.5 — stage-forward (+Y, toward
+    the audience) — for the whole show. Only dy varies: dy = 0 puts the
+    aim point directly overhead (90°), dy = DY_LOW gives 62°. The beam
+    therefore nods in the stage-forward vertical plane and reaches
+    straight up. Faster nod during the drops."""
+    fx = P350
+    z = 2800
+    dz = z - fx[2]
+    dy_low = round(dz / math.tan(math.radians(62)))   # 62° endpoint
+    clips = []
+    t = 0.0
+    i = 0
+    up = True
+    worst, best = 999.0, 0.0
+    while t < DURATION - 0.5:
+        sec = next(s for s in SECTIONS if s[0] <= t < s[1])
+        base = 9 if sec[2] in ("drop1", "drop2") else 16   # faster in drops
+        dur = min(base, sec[1] - t)
+        if dur < 5:
+            dur = sec[1] - t
+        dy0 = 0 if up else dy_low
+        dy1 = dy_low if up else 0
+        p0 = [fx[0], fx[1] + dy0, z]
+        p1 = [fx[0], fx[1] + dy1, z]
+        for p in (p0, p1):
+            th = _tilt_deg(fx, p)
+            worst, best = min(worst, th), max(best, th)
+        col = MOVER_COLOURS[i % len(MOVER_COLOURS)]
+        ai = act(f"350W nod {i + 1}", 15, ptStartPos=p0, ptEndPos=p1,
+                 dimmer=255, r=col[0], g=col[1], b=col[2])
+        clips.append((ai, round(t, 2), round(dur, 2)))
+        t += dur
+        i += 1
+        up = not up
+    return clips, worst, best
+
+
+# 350W — stage-forward tilt nod, 62° up to vertical (90°).
+m350_clips, m350_tilt, m350_top = build_350w_nod()
+print(f"  350W nod: {len(m350_clips)} clips, tilt {m350_tilt:.1f}°–{m350_top:.1f}° "
+      f"(spec: >60°, reaches 90°), pan locked stage-forward")
 if m350_tilt < 60.0:
     sys.exit(f"ABORT: 350W tilt floor {m350_tilt:.1f}° violates the >60° spec")
+if m350_top < 89.0:
+    sys.exit(f"ABORT: 350W tilt only reaches {m350_top:.1f}° — must hit 90°")
 
 # 150W movers — wider, lower orbits for contrast (no tilt constraint).
 m150r_clips = []

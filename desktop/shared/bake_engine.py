@@ -629,7 +629,14 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
         # Sort by start time, then by priority descending (higher track overrides)
         # Playback uses first matching segment, so higher priority must sort first
         all_segments.sort(key=lambda s: (s.get("startS", 0), -s.get("_pri", 0)))
-        all_segments = all_segments[:64]
+        # The 64-segment cap exists for LED children — they hold baked
+        # steps in a fixed hardware buffer. DMX fixtures are streamed
+        # live by the orchestrator's playback loop and have no buffer
+        # limit, so capping them silently truncated the show: a 5-minute
+        # Pan/Tilt sweep time-slices into hundreds of segments, and the
+        # cap left the moving heads dark after ~50s. Cap LED only.
+        if fdata.get("fixtureType") != "dmx":
+            all_segments = all_segments[:64]
 
         result["fixtures"][fid] = {
             "segments": all_segments,

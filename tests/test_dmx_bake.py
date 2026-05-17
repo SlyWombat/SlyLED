@@ -301,6 +301,40 @@ def test_multi_universe():
                 ok(not overlap, f'No overlap: {n1}({a1_s}-{a1_e}) vs {n2}({a2_s}-{a2_e}) in U{uni}')
 
 
+def test_dmx_segments_not_capped(ids):
+    """A DMX fixture's baked segments must NOT be capped at 64. A long
+    Pan/Tilt Move time-slices into hundreds of segments; the LED-only
+    64-segment cap previously truncated movers, leaving moving heads
+    dark mid-show (#bake-cap)."""
+    section('DMX segment cap — long Pan/Tilt sweep')
+    import parent_server
+    from parent_server import app
+
+    with app.test_client() as c:
+        r = c.post('/api/actions', json={
+            'name': 'CapTest PT', 'type': 15,
+            'panStart': 0.2, 'panEnd': 0.8,
+            'tiltStart': 0.3, 'tiltEnd': 0.5, 'dimmer': 255})
+        pt = r.get_json()['id']
+        r = c.post('/api/timelines', json={'name': 'Cap Test', 'durationS': 200})
+        tlc = r.get_json()['id']
+        clips = [{'actionId': pt, 'startS': s, 'durationS': 20}
+                 for s in range(0, 200, 20)]
+        c.put(f'/api/timelines/{tlc}', json={
+            'name': 'Cap Test', 'durationS': 200,
+            'tracks': [{'fixtureId': ids['mh1'], 'clips': clips}]})
+        baked = bake_and_get(c, tlc)
+
+    fx = baked.get('fixtures', {})
+    mh = fx.get(str(ids['mh1'])) or fx.get(ids['mh1']) or {}
+    segs = mh.get('segments', [])
+    ok(len(segs) > 64, f'DMX mover keeps >64 baked segments (got {len(segs)})')
+    if segs:
+        span = max(s['startS'] + s['durationS'] for s in segs)
+        ok(span >= 190,
+           f'DMX segments span the whole timeline ({span:.0f}s of 200s)')
+
+
 def main():
     print('\033[1m=== DMX Bake & Art-Net Validation Tests ===\033[0m')
     print('Seeding...')
@@ -311,6 +345,7 @@ def main():
     test_preview_has_dmx_data(ids)
     test_beam_width_matters(ids)
     test_multi_universe()
+    test_dmx_segments_not_capped(ids)
 
     total = _pass + _fail
     print(f'\n\033[1m{"="*60}\033[0m')
