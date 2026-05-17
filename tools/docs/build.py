@@ -131,7 +131,9 @@ def build_html(lang: str) -> Path:
         cmd = [sys.executable, str(legacy), '--no-pdf']
         if lang == 'fr':
             cmd.append('--fr')
-        subprocess.run(cmd, check=True)
+        _utf8_env = {**os.environ, 'PYTHONUTF8': '1',
+                     'PYTHONIOENCODING': 'utf-8'}
+        subprocess.run(cmd, check=True, env=_utf8_env)
     return out
 
 
@@ -229,7 +231,10 @@ def build_docx(lang: str) -> Path:
     cmd = [sys.executable, str(legacy), '--no-pdf']
     if lang == 'fr':
         cmd.append('--fr')
-    subprocess.run(cmd, check=True)
+    # Force UTF-8 in the child — the legacy renderer prints non-ASCII
+    # ('→') and crashes on Windows' cp1252 default console codec.
+    _utf8_env = {**os.environ, 'PYTHONUTF8': '1', 'PYTHONIOENCODING': 'utf-8'}
+    subprocess.run(cmd, check=True, env=_utf8_env)
     out = DOCS / ('USER_MANUAL.docx' if lang == 'en' else
                   'USER_MANUAL_fr.docx')
     return out
@@ -355,8 +360,12 @@ def build_website(lang: str) -> Path:
                     lang)
         return site
     sync_content_to_website()
-    log.info('website: npm run build in %s', site)
-    subprocess.run(['npm', 'run', 'build'], cwd=site, check=True)
+    # On Windows the npm shim is `npm.cmd`, not an `npm.exe` — a bare
+    # 'npm' is unresolvable by subprocess (WinError 2). Prefer whatever
+    # `shutil.which` resolves; fall back to the platform shim name.
+    npm = shutil.which('npm') or ('npm.cmd' if os.name == 'nt' else 'npm')
+    log.info('website: %s run build in %s', npm, site)
+    subprocess.run([npm, 'run', 'build'], cwd=site, check=True)
     return site / 'dist'
 
 
