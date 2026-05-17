@@ -1321,6 +1321,13 @@ function saveLoopSetting(){
 // ── Shows tab ────────────────────────────────────────────────────────────────
 function loadShows(){
   loadTimelines();
+  // Sync the grand-master dimmer slider to the live globalBrightness.
+  ra('GET','/api/settings',null,function(s){
+    var gb=(s&&s.globalBrightness!=null)?s.globalBrightness:255;
+    var sl=document.getElementById('rt-bri');if(sl)sl.value=gb;
+    var bv=document.getElementById('rt-bri-val');
+    if(bv)bv.textContent=Math.round(gb*100/255)+'%';
+  });
   // Restore last-opened timeline
   setTimeout(function(){
     var last=localStorage.getItem('slyled-last-timeline');

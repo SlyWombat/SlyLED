@@ -2,15 +2,14 @@
 """Build a 5-minute EDM sky-sweep light show and install it as the auto-show.
 
 Creates a beat-phrased 300s timeline:
-  * 350W BeamLight  — continuous sky sweep, tilt held 60-86° above horizon
-  * 150W movers     — mid-air and crowd sweeps for contrast
+  * 350W BeamLight  — pan locked stage-forward, tilt nods 62°→90° (sky)
+  * 150W movers     — contrasting pan + tilt sweeps
   * ESP LED strings — built-in motion effects (comet/fire/chase/rainbow/…)
 
 Run against a live orchestrator:  python tools/build_edm_show.py [base_url]
 The show is baked, synced, started, and flagged as the auto-start show.
 """
 import json
-import math
 import sys
 import time
 import urllib.request
@@ -77,28 +76,9 @@ def act(name, type_, **params):
     return len(_actions) - 1
 
 
-# ── Moving-head aim geometry ──────────────────────────────────────────
-# A Pan/Tilt Move bakes ptStartPos→ptEndPos through spatial_engine.
-# compute_pan_tilt: tilt = atan2(|dz|, horizontal_dist). Keeping the aim
-# point near the ceiling and within a tight horizontal radius of the
-# fixture holds the beam steeply skyward.
-
-def orbit(phi_deg, cx, cy, z):
-    """A point on a horizontal circle — orbit centre (cx,cy), height z."""
-    r = math.radians(phi_deg)
-    return [round(cx + ORBIT_R * math.cos(r)),
-            round(cy + ORBIT_R * math.sin(r)), z]
-
-
-def _tilt_deg(fx, pt):
-    dx, dy, dz = pt[0] - fx[0], pt[1] - fx[1], pt[2] - fx[2]
-    return math.degrees(math.atan2(abs(dz), math.hypot(dx, dy)))
-
-
 # ── Discover the rig ──────────────────────────────────────────────────
 print(f"Orchestrator: {BASE}")
 fixtures = api("GET", "/api/fixtures")
-by_name = {f.get("name", ""): f for f in fixtures}
 
 
 def find(substr, ftype):
@@ -118,7 +98,7 @@ led_fx = next((f for f in fixtures
 if not (f350 and led_fx):
     sys.exit("Could not find the 350W mover and/or the ESP LED fixture")
 
-print(f"  350W   : fid={f350['id']}  pos={f350.get('x'),f350.get('y'),f350.get('z')}")
+print(f"  350W   : fid={f350['id']}")
 print(f"  150W-L : fid={f150l['id'] if f150l else '-'}")
 print(f"  150W-R : fid={f150r['id'] if f150r else '-'}")
 print(f"  LED    : fid={led_fx['id']}  ({led_fx.get('name')})")
@@ -126,27 +106,22 @@ print(f"  LED    : fid={led_fx['id']}  ({led_fx.get('name')})")
 print("Cleaning up any previous EDM Sky Sweep show...")
 cleanup_old_show()
 
-P350 = [f350.get("x", 0), f350.get("y", 0), f350.get("z", 0)]
-P150L = [f150l.get("x", 0), f150l.get("y", 0), f150l.get("z", 0)] if f150l else None
-P150R = [f150r.get("x", 0), f150r.get("y", 0), f150r.get("z", 0)] if f150r else None
-
 
 # ── EDM section map (128 BPM, 15s phrases) ────────────────────────────
-# (start, end, label, led_speed_mult, mover_pan_speed deg/s)
+# (start, end, label)
 SECTIONS = [
-    (0,   30,  "intro",     1.0, 3.0),
-    (30,  75,  "build1",    0.8, 4.5),
-    (75,  135, "drop1",     0.45, 9.0),
-    (135, 180, "breakdown", 1.1, 3.0),
-    (180, 210, "build2",    0.7, 5.5),
-    (210, 270, "drop2",     0.40, 10.5),
-    (270, 300, "outro",     1.2, 3.0),
+    (0,   30,  "intro"),
+    (30,  75,  "build1"),
+    (75,  135, "drop1"),
+    (135, 180, "breakdown"),
+    (180, 210, "build2"),
+    (210, 270, "drop2"),
+    (270, 300, "outro"),
 ]
 DURATION = 300
 
 # ══════════════════════════════════════════════════════════════════════
 # LED programme — built-in motion effects, colourful, beat-phrased.
-# Each tuple: (start, dur, action). speedMs lower = faster.
 # ══════════════════════════════════════════════════════════════════════
 led_clips = []  # (action_index, startS, durationS)
 
@@ -196,103 +171,87 @@ led_clip(288, 12, act("LED Breathe Purple", 3, r=PURPLE[0], g=PURPLE[1], b=PURPL
                       speedMs=3200, periodMs=3200, minBri=12))
 
 # ══════════════════════════════════════════════════════════════════════
-# Moving-head programmes — continuous Pan/Tilt sweeps.
+# Moving-head programmes — Pan/Tilt Move actions emitted as normalised
+# 0-1 DMX values directly (the bake's panStart/panEnd/tiltStart/tiltEnd
+# path). Deterministic — no dependence on bake-time profile geometry.
+# Convention (compute_pan_tilt): tilt_norm = 0.5 - degAboveHorizon/range;
+# pan_norm = 0.5 is stage-forward (+Y, toward the audience).
 # ══════════════════════════════════════════════════════════════════════
 MOVER_COLOURS = [CYAN, MAGENTA, PURPLE, LIME, ORANGE, PINK, BLUE, WHITE,
                  CYAN, AMBER, MAGENTA, GREEN, PURPLE, PINK]
-
-
-def build_mover(fx_pos, name, cx, cy, z, radius, clip_len=22):
-    """Continuous sweep clips for one mover. Returns [(ai,start,dur)]."""
-    global ORBIT_R
-    ORBIT_R = radius
-    clips = []
-    phi = 0.0
-    t = 0.0
-    i = 0
-    worst_tilt = 999.0
-    while t < DURATION - 0.5:
-        sec = next(s for s in SECTIONS if s[0] <= t < s[1])
-        pan_speed = sec[4]
-        dur = min(clip_len, sec[1] - t)
-        if dur < 6:                       # absorb stub into this clip
-            dur = sec[1] - t
-        phi_end = phi + pan_speed * dur
-        p0 = orbit(phi, cx, cy, z)
-        p1 = orbit(phi_end, cx, cy, z)
-        worst_tilt = min(worst_tilt, _tilt_deg(fx_pos, p0), _tilt_deg(fx_pos, p1))
-        col = MOVER_COLOURS[i % len(MOVER_COLOURS)]
-        ai = act(f"{name} sweep {i + 1}", 15,
-                 ptStartPos=p0, ptEndPos=p1, dimmer=255,
-                 r=col[0], g=col[1], b=col[2])
-        clips.append((ai, round(t, 2), round(dur, 2)))
-        phi, t, i = phi_end, t + dur, i + 1
-    return clips, worst_tilt
+# 350W aim — calibrated DMX values, read back from the AimSphere
+# (POST /api/mover/<fid>/aim {azDeg,elDeg}) which honours the fixture's
+# home anchors. Pure geometry (compute_pan_tilt) does NOT match this
+# fixture: both DMX tilt extremes point down, "up" is mid-range.
+#   azDeg 0 (stage-forward) -> pan DMX 168
+#   elevation 60° -> tilt DMX 94 ; 90° (straight up) -> tilt DMX 131
+PAN_350_FORWARD = round(168 / 255, 4)   # 0.6588 — stage-forward
+TILT_350_60 = round(94 / 255, 4)        # 0.3686 — 60° above horizon
+TILT_350_90 = round(131 / 255, 4)       # 0.5137 — straight up
 
 
 def build_350w_nod():
-    """350W choreography — a continuous tilt 'nod' sweeping ~62° up to
-    90° (beam straight up) and back, pan locked stage-forward.
-
-    Every aim point has dx = 0 (x stays on the fixture's x), so
-    compute_pan_tilt yields pan_norm = 0.5 — stage-forward (+Y, toward
-    the audience) — for the whole show. Only dy varies: dy = 0 puts the
-    aim point directly overhead (90°), dy = DY_LOW gives 62°. The beam
-    therefore nods in the stage-forward vertical plane and reaches
-    straight up. Faster nod during the drops."""
-    fx = P350
-    z = 2800
-    dz = z - fx[2]
-    dy_low = round(dz / math.tan(math.radians(62)))   # 62° endpoint
+    """350W — pan locked stage-forward; tilt nods between 60° and 90°
+    above horizon (the beam reaches straight up). Faster in the drops."""
     clips = []
     t = 0.0
     i = 0
     up = True
-    worst, best = 999.0, 0.0
     while t < DURATION - 0.5:
         sec = next(s for s in SECTIONS if s[0] <= t < s[1])
-        base = 9 if sec[2] in ("drop1", "drop2") else 16   # faster in drops
+        base = 9 if sec[2] in ("drop1", "drop2") else 16
         dur = min(base, sec[1] - t)
         if dur < 5:
             dur = sec[1] - t
-        dy0 = 0 if up else dy_low
-        dy1 = dy_low if up else 0
-        p0 = [fx[0], fx[1] + dy0, z]
-        p1 = [fx[0], fx[1] + dy1, z]
-        for p in (p0, p1):
-            th = _tilt_deg(fx, p)
-            worst, best = min(worst, th), max(best, th)
+        ts = TILT_350_60 if up else TILT_350_90
+        te = TILT_350_90 if up else TILT_350_60
         col = MOVER_COLOURS[i % len(MOVER_COLOURS)]
-        ai = act(f"350W nod {i + 1}", 15, ptStartPos=p0, ptEndPos=p1,
+        ai = act(f"350W nod {i + 1}", 15,
+                 panStart=PAN_350_FORWARD, panEnd=PAN_350_FORWARD,
+                 tiltStart=ts, tiltEnd=te,
                  dimmer=255, r=col[0], g=col[1], b=col[2])
         clips.append((ai, round(t, 2), round(dur, 2)))
         t += dur
         i += 1
         up = not up
-    return clips, worst, best
+    return clips
 
 
-# 350W — stage-forward tilt nod, 62° up to vertical (90°).
-m350_clips, m350_tilt, m350_top = build_350w_nod()
-print(f"  350W nod: {len(m350_clips)} clips, tilt {m350_tilt:.1f}°–{m350_top:.1f}° "
-      f"(spec: >60°, reaches 90°), pan locked stage-forward")
-if m350_tilt < 60.0:
-    sys.exit(f"ABORT: 350W tilt floor {m350_tilt:.1f}° violates the >60° spec")
-if m350_top < 89.0:
-    sys.exit(f"ABORT: 350W tilt only reaches {m350_top:.1f}° — must hit 90°")
+def build_150w(name, pan_a, pan_b, tilt_a, tilt_b, clip_len=18):
+    """150W mover — alternating pan + tilt sweeps (no tilt constraint)."""
+    clips = []
+    t = 0.0
+    i = 0
+    fwd = True
+    while t < DURATION - 0.5:
+        sec = next(s for s in SECTIONS if s[0] <= t < s[1])
+        base = clip_len - 7 if sec[2] in ("drop1", "drop2") else clip_len
+        dur = min(base, sec[1] - t)
+        if dur < 5:
+            dur = sec[1] - t
+        ps, pe = (pan_a, pan_b) if fwd else (pan_b, pan_a)
+        ts, te = (tilt_a, tilt_b) if fwd else (tilt_b, tilt_a)
+        col = MOVER_COLOURS[i % len(MOVER_COLOURS)]
+        ai = act(f"{name} {i + 1}", 15,
+                 panStart=ps, panEnd=pe, tiltStart=ts, tiltEnd=te,
+                 dimmer=255, r=col[0], g=col[1], b=col[2])
+        clips.append((ai, round(t, 2), round(dur, 2)))
+        t += dur
+        i += 1
+        fwd = not fwd
+    return clips
 
-# 150W movers — wider, lower orbits for contrast (no tilt constraint).
-m150r_clips = []
-m150l_clips = []
-if P150R:
-    m150r_clips, _ = build_mover(
-        P150R, "150W-R", cx=P150R[0], cy=P150R[1] + 900, z=2300,
-        radius=1100, clip_len=24)
-if P150L:
-    # Stage-Left mover is ceiling-mounted — sweep down across the crowd.
-    m150l_clips, _ = build_mover(
-        P150L, "150W-L", cx=P150L[0] - 2800, cy=P150L[1] + 4200, z=1600,
-        radius=2600, clip_len=26)
+
+# 350W — stage-forward tilt nod, 60° up to vertical (90°), calibrated.
+m350_clips = build_350w_nod()
+print(f"  350W nod: {len(m350_clips)} clips, tilt 60-90 deg above horizon "
+      f"(DMX 94-131), pan locked stage-forward (DMX 168)")
+
+# 150W movers — contrasting pan + tilt sweeps, opposite phase.
+m150l_clips = build_150w("150W-L", 0.15, 0.85, 0.22, 0.52, clip_len=18) \
+    if f150l else []
+m150r_clips = build_150w("150W-R", 0.85, 0.15, 0.58, 0.30, clip_len=20) \
+    if f150r else []
 
 # ── POST every action, capture real IDs ───────────────────────────────
 print(f"Creating {len(_actions)} actions...")
@@ -354,7 +313,13 @@ for _ in range(120):
 else:
     print("  sync still pending — continuing (LED-only sync is best-effort)")
 
-# ── Start + flag as the auto-show ─────────────────────────────────────
+# ── DMX engine + start + flag as the auto-show ────────────────────────
+# The moving heads need the Art-Net engine running; api_timeline_start
+# deliberately does not auto-start it.
+print("Starting DMX engine...")
+api("POST", "/api/dmx/start", {"protocol": "artnet"})
+time.sleep(1)
+
 print("Starting playback...")
 api("POST", f"/api/timelines/{tid}/start")
 settings = api("GET", "/api/settings")

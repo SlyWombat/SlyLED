@@ -323,6 +323,13 @@
     <div class='prog-bar'><div class='prog-fill' id='rt-prog-fill' style='width:0%'></div></div>
     <div id='rt-now-playing' style='font-size:.72em;color:#64748b;margin-top:.2em'></div>
   </div>
+  <!-- Grand-master dimmer — scales every fixture's intensity at output -->
+  <div style='margin-top:.6em;display:flex;align-items:center;gap:.6em'>
+    <span style='color:#94a3b8;font-size:.82em;text-transform:uppercase;letter-spacing:.06em;font-weight:600' data-tip='rtMaster'>Master</span>
+    <input type='range' id='rt-bri' min='0' max='255' value='255' style='flex:1'
+           oninput='setBrightness(this.value)'>
+    <span id='rt-bri-val' style='color:#e2e8f0;font-size:.82em;font-family:monospace;min-width:3em;text-align:right'>100%</span>
+  </div>
 </div>
 
 <div id='t-settings' class='tab' style='display:none'>
