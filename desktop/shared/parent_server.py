@@ -14019,9 +14019,16 @@ def _auto_start_show():
     re-bake + re-sync before starting, and bring the DMX engine up so the
     movers actually receive Art-Net/sACN output."""
     time.sleep(5)  # wait for children to reconnect
-    tid = _settings.get("activeTimeline", -1)
+    # Resume the persisted auto-show pointer. `activeTimeline` is
+    # transient (cleared to -1 by sync/stop and by the boot reset), so
+    # it cannot be relied on across a restart — `autoShowTimelineId` is
+    # the durable pointer. Fall back to `activeTimeline` for configs
+    # saved before that field existed.
+    tid = _settings.get("autoShowTimelineId")
+    if tid is None or tid < 0:
+        tid = _settings.get("activeTimeline", -1)
     if tid < 0:
-        log.info("Auto-start show: no active timeline saved — staying idle")
+        log.info("Auto-start show: no auto-show timeline saved — staying idle")
         return
     tl = next((t for t in _timelines if t["id"] == tid), None)
     if not tl:
@@ -16024,6 +16031,13 @@ def api_timeline_start(tid):
         _settings["runnerRunning"] = True
         _settings["activeTimeline"] = tid
         _settings["runnerStartEpoch"] = go_epoch
+        # Persisted "this is the auto-show" pointer. Unlike
+        # `activeTimeline` — which is transient runtime state that
+        # `api_bake_sync` and `api_timeline_stop` reset to -1 — this
+        # field is only ever overwritten by the next start, so
+        # `_auto_start_show` always has a timeline to resume after a
+        # restart. Without it the auto-show silently never recovered.
+        _settings["autoShowTimelineId"] = tid
         _save("settings", _settings)
 
     # Start DMX playback thread for DMX fixtures
