@@ -53,7 +53,7 @@ recovery path.
    back live; the device reboots automatically after verification.
 4. New since v1.7.83: when a registry SHA-256 mismatches the on-disk
    binary (a download mid-update or a hand-edited registry), the
-   orchestrator falls back to the GitHub release for that board's
+   orchestrator falls back to the published firmware release for that board's
    `releaseTag` rather than refusing the flash.
 
 The diagnostic / development gyro builds (`esp32s3-gyro-test-firmware.bin`)
@@ -69,14 +69,14 @@ the orchestrator believes ships with each release. Each entry carries:
 - `id` and `name` for the OTA UI label.
 - `version` (3-part semver) — what the operator's device should be
   running.
-- `releaseTag` and `releaseAsset` — the GitHub release tag and the
+- `releaseTag` and `releaseAsset` — the published firmware release tag and the
   asset filename inside it, used by the OTA fallback.
 - `sha256` — verification hash that the orchestrator checks before and
   after flashing.
 
 Editing `registry.json` by hand is not recommended; `build_release.ps1`
 keeps it in sync with the actual binary hashes on every release. The
-Firmware tab refreshes the registry from GitHub on demand from the
+Firmware tab refreshes the registry from the release server on demand from the
 **Refresh** button so a freshly-pulled installer immediately sees the
 versions corresponding to its release tag.
 

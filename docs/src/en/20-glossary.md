@@ -67,7 +67,7 @@ Entries are alphabetised on the **Term** column. For acronyms that cluster aroun
 | **performer** | — | An ESP32, D1 Mini, or Giga-child LED execution node. One of the three tiers. | §1 Getting Started. |
 | **PnP / solvePnP** | Perspective-n-Point | OpenCV algorithm that computes a camera's 3D pose from ≥3 known 2D↔3D point correspondences. `SOLVEPNP_SQPNP` is the preferred solver; `SOLVEPNP_ITERATIVE` is the fallback. | Appendix A §A.4. |
 | **PNG** | Portable Network Graphics | Lossless image format used for screenshots. | §2 Walkthrough. |
-| **PR** | Pull Request | Git/GitHub workflow — a proposed change on a branch, reviewed before merge. | Appendix C §C.4. |
+| **PR** | Pull Request | version-control workflow — a proposed change on a branch, reviewed before merge. | Appendix C §C.4. |
 | **PWM** | Pulse-Width Modulation | Dimming technique where the LED is switched on and off fast. On the Giga R1 this is implemented in software because `analogWrite()` is banned on the onboard RGB pins. | CLAUDE.md hardware quirks. |
 | **QA** | Quality Assurance | Testing role — in SlyLED's workflow, QA runs the Playwright + test suites and files issues rather than patching source. | Appendix C. |
 | **QR** | Quick Response (code) | 2D barcode. Not the same as an ArUco marker — ArUco is designed for solvePnP, QR for data payloads. | — |
@@ -104,7 +104,7 @@ Entries are alphabetised on the **Term** column. For acronyms that cluster aroun
 | **YOLO** | You Only Look Once | Single-pass object-detection neural network. SlyLED camera nodes run YOLOv8n via ONNX Runtime for person/object detection on `POST /scan`. | §14 Camera Nodes. |
 | **ZIP** | — | Archive file format, used for the release bundle. | §15 Firmware Registry. |
 
-> **Not sure what something means?** If a term appears in the manual but isn't in this table, that's a bug in the glossary — open an issue or PR against [#663](https://github.com/SlyWombat/SlyLED/issues/663).
+> **Not sure what something means?** If a term appears in the manual but isn't in this table, that's a gap in the glossary — let the SlyLED team know so it can be added.
 
 ---
 

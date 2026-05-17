@@ -1283,7 +1283,7 @@ recovery path.
    back live; the device reboots automatically after verification.
 4. New since v1.7.83: when a registry SHA-256 mismatches the on-disk
    binary (a download mid-update or a hand-edited registry), the
-   orchestrator falls back to the GitHub release for that board's
+   orchestrator falls back to the published firmware release for that board's
    `releaseTag` rather than refusing the flash.
 
 The diagnostic / development gyro builds (`esp32s3-gyro-test-firmware.bin`)
@@ -1299,14 +1299,14 @@ the orchestrator believes ships with each release. Each entry carries:
 - `id` and `name` for the OTA UI label.
 - `version` (3-part semver) — what the operator's device should be
   running.
-- `releaseTag` and `releaseAsset` — the GitHub release tag and the
+- `releaseTag` and `releaseAsset` — the published firmware release tag and the
   asset filename inside it, used by the OTA fallback.
 - `sha256` — verification hash that the orchestrator checks before and
   after flashing.
 
 Editing `registry.json` by hand is not recommended; `build_release.ps1`
 keeps it in sync with the actual binary hashes on every release. The
-Firmware tab refreshes the registry from GitHub on demand from the
+Firmware tab refreshes the registry from the release server on demand from the
 **Refresh** button so a freshly-pulled installer immediately sees the
 versions corresponding to its release tag.
 
@@ -1354,12 +1354,12 @@ whether to update or work around.
 | **3D viewport not rendering** | Black canvas where the stage should be. | Use Chrome / Firefox / Edge with WebGL support. Check `chrome://gpu` for hardware acceleration. |
 | **Performers not syncing** | A child shows offline in Setup but is powered up. | Check that the orchestrator and the child are on the same WiFi subnet. The Setup tab's **Refresh** rescans via mDNS + UDP broadcast. |
 | **Canvas wrong size** | The Layout canvas is much smaller or larger than the room. | Stage dimensions (Settings → Stage) drive canvas size: `canvasW = stage.w × 1000`. Adjust stage width/height in metres rather than canvas pixels. |
-| **OTA flash refused with SHA mismatch** | Firmware tab refuses to update with `sha256 mismatch`. | Fixed in v1.7.61 (#814). The orchestrator now falls back to the GitHub release for the registered `releaseTag` when the on-disk binary disagrees with the registry. If you still see this, click **Refresh** on the Firmware tab to re-fetch `registry.json` from GitHub. |
+| **OTA flash refused with SHA mismatch** | Firmware tab refuses to update with `sha256 mismatch`. | Fixed in v1.7.61 (#814). The orchestrator now falls back to the published firmware release for the registered `releaseTag` when the on-disk binary disagrees with the registry. If you still see this, click **Refresh** on the Firmware tab to re-fetch `registry.json` from the release server. |
 | **Gyro stale-reason latch never clears** | "Connection lost" stays on a gyro status row even after the gyro resumes streaming. | Fixed in v1.7.62 (#821) and again in v1.7.63 (#823). Press-Start clears the remote stale_reason; cache self-destructs on a transient read failure. |
 
 If you hit something not in this table, the orchestrator's log
 (Settings → Logging → enable file logging) captures every UDP send and
-DMX render decision tagged by issue number — open an issue on GitHub
+DMX render decision tagged by issue number — report it through your support channel
 with the relevant section attached and a description of what the rig
 was doing at the moment.
 
@@ -1893,7 +1893,7 @@ Entries are alphabetised on the **Term** column. For acronyms that cluster aroun
 | **performer** | — | An ESP32, D1 Mini, or Giga-child LED execution node. One of the three tiers. | §1 Getting Started. |
 | **PnP / solvePnP** | Perspective-n-Point | OpenCV algorithm that computes a camera's 3D pose from ≥3 known 2D↔3D point correspondences. `SOLVEPNP_SQPNP` is the preferred solver; `SOLVEPNP_ITERATIVE` is the fallback. | Appendix A §A.4. |
 | **PNG** | Portable Network Graphics | Lossless image format used for screenshots. | §2 Walkthrough. |
-| **PR** | Pull Request | Git/GitHub workflow — a proposed change on a branch, reviewed before merge. | Appendix C §C.4. |
+| **PR** | Pull Request | version-control workflow — a proposed change on a branch, reviewed before merge. | Appendix C §C.4. |
 | **PWM** | Pulse-Width Modulation | Dimming technique where the LED is switched on and off fast. On the Giga R1 this is implemented in software because `analogWrite()` is banned on the onboard RGB pins. | CLAUDE.md hardware quirks. |
 | **QA** | Quality Assurance | Testing role — in SlyLED's workflow, QA runs the Playwright + test suites and files issues rather than patching source. | Appendix C. |
 | **QR** | Quick Response (code) | 2D barcode. Not the same as an ArUco marker — ArUco is designed for solvePnP, QR for data payloads. | — |
@@ -1930,7 +1930,7 @@ Entries are alphabetised on the **Term** column. For acronyms that cluster aroun
 | **YOLO** | You Only Look Once | Single-pass object-detection neural network. SlyLED camera nodes run YOLOv8n via ONNX Runtime for person/object detection on `POST /scan`. | §14 Camera Nodes. |
 | **ZIP** | — | Archive file format, used for the release bundle. | §15 Firmware Registry. |
 
-> **Not sure what something means?** If a term appears in the manual but isn't in this table, that's a bug in the glossary — open an issue or PR against [#663](https://github.com/SlyWombat/SlyLED/issues/663).
+> **Not sure what something means?** If a term appears in the manual but isn't in this table, that's a gap in the glossary — let the SlyLED team know so it can be added.
 
 ---
 
@@ -1938,7 +1938,7 @@ Entries are alphabetised on the **Term** column. For acronyms that cluster aroun
 
 ## Appendix A — Camera Calibration Pipeline (DRAFT)
 
-> ⚠ **DRAFT — assumes all in-flight work is merged.** This appendix describes the camera-calibration pipeline under the assumption that issues #610, #651–#661, and #357 are fully implemented. Some features documented below are **partially merged** today (notably full intrinsic calibration of every camera, dark-reference integration into the mover pipeline per #651, and the floor-view polygon target filter per #659). See `docs/DOCS_MAINTENANCE.md` for the current merge status and the criteria for removing this banner. Issue [#662](https://github.com/SlyWombat/SlyLED/issues/662).
+> ⚠ **DRAFT — assumes all in-flight work is merged.** This appendix describes the camera-calibration pipeline under the assumption that issues #610, #651–#661, and #357 are fully implemented. Some features documented below are **partially merged** today (notably full intrinsic calibration of every camera, dark-reference integration into the mover pipeline per #651, and the floor-view polygon target filter per #659). See `docs/DOCS_MAINTENANCE.md` for the current merge status and the criteria for removing this banner. Issue #662.
 
 Camera calibration runs as a one-time setup per camera node and must be repeated whenever a camera is physically moved or re-aimed. It produces, per camera: an [intrinsic](#glossary) matrix **K** (focal length + principal point + distortion), an [extrinsic](#glossary) pose (stage-space position + rotation), and — for stages that will run point-cloud scans — a depth-anchor fit that corrects monocular depth to stage metric.
 
@@ -2573,7 +2573,7 @@ Phase time budgets (from `CAL_TUNING_SPEC` in `desktop/shared/parent_server.py`,
 
 ## Appendix C — Documentation Maintenance
 
-> This appendix describes the contract between the calibration appendices above and the source code that implements them. It exists for issue [#662](https://github.com/SlyWombat/SlyLED/issues/662) and is kept short — full details are in `docs/DOCS_MAINTENANCE.md`.
+> This appendix describes the contract between the calibration appendices above and the source code that implements them. It exists for issue #662 and is kept short — full details are in `docs/DOCS_MAINTENANCE.md`.
 
 ### C.1 Source-of-truth files
 
@@ -2599,17 +2599,17 @@ The full checklist, including render verification for the Mermaid diagrams under
 
 - Canonical source: `docs/USER_MANUAL.md` (this file).
 - `docs/SlyLED_User_Manual.docx` + `.pdf` are **built separately** by `tests/build_manual.py`, which constructs the document from scratch rather than parsing this markdown. The docx/PDF path does not yet include these appendices — follow-up work.
-- Diagram sources live in `docs/diagrams/*.mmd`. Mermaid blocks are embedded inline in the markdown so GitHub renders them directly; external renderers like Kroki can generate SVG/PNG from the standalone files for PDF inclusion.
+- Diagram sources live in `docs/diagrams/*.mmd`. Mermaid blocks are embedded inline in the markdown so Markdown viewers render them directly; external renderers like Kroki can generate SVG/PNG from the standalone files for PDF inclusion.
 
 ### C.4 Enforcement
 
 No automatic drift-check is wired up yet. Proposed options, in order of cost:
 
-1. PR-template checkbox (`.github/pull_request_template.md`)
-2. GitHub Actions grep: fail PRs that touch the source-of-truth list without touching `docs/USER_MANUAL.md`, with a skip-override label
+1. PR-template checkbox in the pull-request template
+2. A CI grep: fail PRs that touch the source-of-truth list without touching `docs/USER_MANUAL.md`, with a skip-override label
 3. Scheduled drift agent (weekly)
 
-These require `.github/` changes and are tracked as follow-ups under #662.
+These require CI-configuration changes and are tracked as follow-ups under #662.
 
 ### C.5 DRAFT banner removal
 

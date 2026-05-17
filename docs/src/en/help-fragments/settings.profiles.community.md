@@ -41,7 +41,7 @@ Side-by-side is safe by default — your local edits aren't clobbered.
   movers, run the calibration wizard after import; for hybrid
   RGB+wheel fixtures, double-check the wheel slot map matches your
   hardware's gel sequence.
-- A failed download (network, GitHub rate limit) leaves no local
+- A failed download (network error or rate limit) leaves no local
   state — re-trying is safe.
 
 **More info →** chapter 12, *DMX Fixture Profiles*.

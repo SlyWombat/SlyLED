@@ -1,6 +1,6 @@
 ## Annexe C — Maintenance de la documentation
 
-> Cette annexe décrit le contrat entre les annexes d'étalonnage ci-dessus et le code source qui les implémente. Elle existe pour l'issue [#662](https://github.com/SlyWombat/SlyLED/issues/662) et reste volontairement concise — les détails complets se trouvent dans `docs/DOCS_MAINTENANCE.md`.
+> Cette annexe décrit le contrat entre les annexes d'étalonnage ci-dessus et le code source qui les implémente. Elle existe pour l'issue #662 et reste volontairement concise — les détails complets se trouvent dans `docs/DOCS_MAINTENANCE.md`.
 
 ### C.1 Fichiers faisant autorité
 
@@ -26,17 +26,17 @@ La liste de contrôle complète, y compris la vérification du rendu des diagram
 
 - Source canonique : `docs/USER_MANUAL.md` (ce fichier).
 - `docs/SlyLED_User_Manual.docx` et `.pdf` sont **construits séparément** par `tests/build_manual.py`, qui reconstruit le document à partir de zéro plutôt que d'analyser ce markdown. La chaîne docx/PDF n'inclut pas encore ces annexes — travail de suivi.
-- Les sources des diagrammes se trouvent dans `docs/diagrams/*.mmd`. Les blocs Mermaid sont intégrés directement dans le markdown afin que GitHub les affiche nativement ; des outils externes comme Kroki peuvent générer des SVG ou PNG à partir des fichiers autonomes pour l'inclusion dans le PDF.
+- Les sources des diagrammes se trouvent dans `docs/diagrams/*.mmd`. Les blocs Mermaid sont intégrés directement dans le markdown afin que les visionneuses Markdown les affichent nativement ; des outils externes comme Kroki peuvent générer des SVG ou PNG à partir des fichiers autonomes pour l'inclusion dans le PDF.
 
 ### C.4 Contrôle d'application
 
 Aucun contrôle de dérive automatique n'est en place pour l'instant. Options proposées, par ordre croissant de coût :
 
-1. Case à cocher du modèle de PR (`.github/pull_request_template.md`)
-2. Grep via GitHub Actions : échoue les PR qui touchent à la liste source sans toucher à `docs/USER_MANUAL.md`, avec une étiquette de dérogation
+1. Case à cocher du modèle de pull-request
+2. Grep via CI : échoue les PR qui touchent à la liste source sans toucher à `docs/USER_MANUAL.md`, avec une étiquette de dérogation
 3. Agent de dérive planifié (hebdomadaire)
 
-Ces mesures nécessitent des modifications dans `.github/` et sont suivies comme éléments connexes sous #662.
+Ces mesures nécessitent des modifications de la configuration CI et sont suivies comme éléments connexes sous #662.
 
 ### C.5 Retrait de la bannière BROUILLON
 

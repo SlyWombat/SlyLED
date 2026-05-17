@@ -745,11 +745,12 @@
   acronym: true
   en:
     short: Pull Request
-    long: Git/GitHub workflow — a proposed change on a branch, reviewed before merge.
+    long: version-control workflow — a proposed change on a branch, reviewed before
+      merge.
   fr:
     short: Pull Request
-    long: Flux de travail Git/GitHub — changement proposé sur une branche, relu avant
-      fusion.
+    long: Flux de travail de contrôle de version — changement proposé sur une branche,
+      relu avant fusion.
   see_also:
   - Appendix C §C.4.
 - term: PWM

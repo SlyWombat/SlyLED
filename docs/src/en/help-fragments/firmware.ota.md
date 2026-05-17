@@ -36,7 +36,7 @@ each performer board over HTTP, no USB cable required.
 ### Asking for OTA freshness
 
 Click **Check for Updates** at the top of the Firmware tab to force a
-GitHub release-list fetch — useful when you've just published a new
+Firmware release-list fetch — useful when you've just published a new
 firmware tag and want the orchestrator to see it without waiting for
 the periodic refresh.
 

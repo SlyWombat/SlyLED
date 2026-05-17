@@ -23,13 +23,13 @@ ainsi décider de mettre à jour ou de contourner.
 | **Visualisation 3D ne s'affiche pas** | Canevas noir là où le plateau devrait être. | Utilisez Chrome / Firefox / Edge avec le support WebGL. Vérifiez `chrome://gpu` pour l'accélération matérielle. |
 | **Exécutants non synchronisés** | Un nœud enfant apparaît hors-ligne dans Configuration alors qu'il est sous tension. | Vérifiez que l'orchestrateur et le nœud enfant sont sur le même sous-réseau WiFi. Le bouton **Rafraîchir** de l'onglet Configuration relance le scan via mDNS + diffusion UDP. |
 | **Canevas de mauvaise taille** | Le canevas Disposition est beaucoup plus petit ou plus grand que la pièce. | Les dimensions du plateau (Paramètres → Plateau) déterminent la taille du canevas : `canvasW = stage.w × 1000`. Ajustez la largeur / hauteur du plateau en mètres plutôt que les pixels du canevas. |
-| **Flash OTA refusé pour incohérence de SHA** | L'onglet Firmware refuse la mise à jour avec `sha256 mismatch`. | Corrigé en v1.7.61 (#814). L'orchestrateur retombe désormais sur la release GitHub du `releaseTag` enregistré quand le binaire sur disque diffère du registre. Si vous voyez encore l'erreur, cliquez sur **Rafraîchir** dans l'onglet Firmware pour récupérer `registry.json` depuis GitHub. |
+| **Flash OTA refusé pour incohérence de SHA** | L'onglet Firmware refuse la mise à jour avec `sha256 mismatch`. | Corrigé en v1.7.61 (#814). L'orchestrateur retombe désormais sur la release de firmware publiée du `releaseTag` enregistré quand le binaire sur disque diffère du registre. Si vous voyez encore l'erreur, cliquez sur **Rafraîchir** dans l'onglet Firmware pour récupérer `registry.json` depuis le serveur de releases. |
 | **Verrou de stale-reason gyro qui ne s'efface pas** | « Connexion perdue » reste affiché sur la ligne de statut d'un palet alors qu'il a repris l'envoi. | Corrigé en v1.7.62 (#821) puis à nouveau en v1.7.63 (#823). L'appui sur Démarrer efface la stale_reason distante ; le cache s'auto-détruit sur un échec de lecture transitoire. |
 
 Si vous rencontrez quelque chose qui n'est pas dans ce tableau, le
 journal de l'orchestrateur (Paramètres → Journalisation → activer
 le journal fichier) capture chaque envoi UDP et chaque décision de
-rendu DMX taggués par numéro d'issue — ouvrez une issue GitHub avec
+rendu DMX taggués par numéro d'issue — signalez-le via votre canal de support avec
 la section pertinente jointe et une description de ce que faisait
 le rig au moment du symptôme.
 

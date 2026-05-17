@@ -125,8 +125,13 @@ def build_html(lang: str) -> Path:
         if not legacy.exists():
             raise SystemExit('pandoc not found and legacy renderer missing')
         log.warning('html [%s]: pandoc unavailable — using legacy fallback', lang)
-        subprocess.run([sys.executable, str(legacy), '--lang', lang,
-                         '--no-pdf', '--no-docx'], check=True)
+        # build_manual_from_md.py takes `--fr` (build the French variant)
+        # and `--no-pdf`; it has no `--lang` / `--no-docx` flags. Passing
+        # those crashed the fallback path.
+        cmd = [sys.executable, str(legacy), '--no-pdf']
+        if lang == 'fr':
+            cmd.append('--fr')
+        subprocess.run(cmd, check=True)
     return out
 
 

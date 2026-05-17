@@ -1420,7 +1420,7 @@ esptool.
 4. Nouveau depuis v1.7.83 : lorsqu'un SHA-256 du registre ne
    correspond pas au binaire sur disque (téléchargement
    interrompu ou registre édité à la main), l'orchestrateur retombe
-   sur la release GitHub correspondant au `releaseTag` plutôt que
+   sur la release de firmware publiée correspondant au `releaseTag` plutôt que
    de refuser le flash.
 
 Les builds de diagnostic / développement du gyro
@@ -1438,7 +1438,7 @@ entrée porte :
 - `id` et `name` pour le libellé de l'UI OTA.
 - `version` (semver 3 segments) — ce que doit exécuter le
   périphérique de l'opérateur.
-- `releaseTag` et `releaseAsset` — le tag de release GitHub et le
+- `releaseTag` et `releaseAsset` — le tag de release de firmware publiée et le
   nom de fichier de l'asset à l'intérieur, utilisés par le repli
   OTA.
 - `sha256` — hachage de vérification que l'orchestrateur valide
@@ -1447,7 +1447,7 @@ entrée porte :
 L'édition manuelle de `registry.json` n'est pas recommandée ;
 `build_release.ps1` le maintient en synchronisation avec les
 empreintes des binaires à chaque release. L'onglet Firmware
-rafraîchit le registre depuis GitHub à la demande via le bouton
+rafraîchit le registre depuis le serveur de releases à la demande via le bouton
 **Rafraîchir** ; un installateur fraîchement récupéré voit donc
 immédiatement les versions correspondant à son tag de release.
 
@@ -1498,13 +1498,13 @@ ainsi décider de mettre à jour ou de contourner.
 | **Visualisation 3D ne s'affiche pas** | Canevas noir là où le plateau devrait être. | Utilisez Chrome / Firefox / Edge avec le support WebGL. Vérifiez `chrome://gpu` pour l'accélération matérielle. |
 | **Exécutants non synchronisés** | Un nœud enfant apparaît hors-ligne dans Configuration alors qu'il est sous tension. | Vérifiez que l'orchestrateur et le nœud enfant sont sur le même sous-réseau WiFi. Le bouton **Rafraîchir** de l'onglet Configuration relance le scan via mDNS + diffusion UDP. |
 | **Canevas de mauvaise taille** | Le canevas Disposition est beaucoup plus petit ou plus grand que la pièce. | Les dimensions du plateau (Paramètres → Plateau) déterminent la taille du canevas : `canvasW = stage.w × 1000`. Ajustez la largeur / hauteur du plateau en mètres plutôt que les pixels du canevas. |
-| **Flash OTA refusé pour incohérence de SHA** | L'onglet Firmware refuse la mise à jour avec `sha256 mismatch`. | Corrigé en v1.7.61 (#814). L'orchestrateur retombe désormais sur la release GitHub du `releaseTag` enregistré quand le binaire sur disque diffère du registre. Si vous voyez encore l'erreur, cliquez sur **Rafraîchir** dans l'onglet Firmware pour récupérer `registry.json` depuis GitHub. |
+| **Flash OTA refusé pour incohérence de SHA** | L'onglet Firmware refuse la mise à jour avec `sha256 mismatch`. | Corrigé en v1.7.61 (#814). L'orchestrateur retombe désormais sur la release de firmware publiée du `releaseTag` enregistré quand le binaire sur disque diffère du registre. Si vous voyez encore l'erreur, cliquez sur **Rafraîchir** dans l'onglet Firmware pour récupérer `registry.json` depuis le serveur de releases. |
 | **Verrou de stale-reason gyro qui ne s'efface pas** | « Connexion perdue » reste affiché sur la ligne de statut d'un palet alors qu'il a repris l'envoi. | Corrigé en v1.7.62 (#821) puis à nouveau en v1.7.63 (#823). L'appui sur Démarrer efface la stale_reason distante ; le cache s'auto-détruit sur un échec de lecture transitoire. |
 
 Si vous rencontrez quelque chose qui n'est pas dans ce tableau, le
 journal de l'orchestrateur (Paramètres → Journalisation → activer
 le journal fichier) capture chaque envoi UDP et chaque décision de
-rendu DMX taggués par numéro d'issue — ouvrez une issue GitHub avec
+rendu DMX taggués par numéro d'issue — signalez-le via votre canal de support avec
 la section pertinente jointe et une description de ce que faisait
 le rig au moment du symptôme.
 
@@ -2038,7 +2038,7 @@ Les entrées sont classées alphabétiquement sur la colonne **Terme**. Pour les
 | **performer** (nœud exécutant) | — | Un nœud exécutant LED ESP32, D1 Mini ou enfant Giga. L'un des trois niveaux. | §1 Premiers pas. |
 | **PnP / solvePnP** | Perspective-n-Point | Algorithme OpenCV qui calcule la pose 3D d'une caméra à partir de ≥3 correspondances 2D↔3D connues. `SOLVEPNP_SQPNP` est le solveur préféré ; `SOLVEPNP_ITERATIVE` est la solution de repli. | Annexe A §A.4. |
 | **PNG** | Portable Network Graphics | Format d'image sans perte utilisé pour les captures d'écran. | §2 Walkthrough. |
-| **PR** | Pull Request | Flux de travail Git/GitHub — changement proposé sur une branche, relu avant fusion. | Annexe C §C.4. |
+| **PR** | Pull Request | Flux de travail de contrôle de version — changement proposé sur une branche, relu avant fusion. | Annexe C §C.4. |
 | **PWM** | Pulse-Width Modulation | Technique de variation où la LED est allumée et éteinte rapidement. Sur la Giga R1, c'est implémenté en logiciel parce que `analogWrite()` est interdit sur les broches RGB embarquées. | Particularités matérielles CLAUDE.md. |
 | **QA** | Quality Assurance | Rôle de test — dans le flux de travail SlyLED, la QA exécute les suites Playwright + tests et ouvre des issues plutôt que de patcher le code source. | Annexe C. |
 | **QR** | Quick Response (code) | Code-barres 2D. Pas la même chose qu'un marqueur ArUco — ArUco est conçu pour solvePnP, QR pour les charges utiles de données. | — |
@@ -2075,7 +2075,7 @@ Les entrées sont classées alphabétiquement sur la colonne **Terme**. Pour les
 | **YOLO** | You Only Look Once | Réseau neuronal de détection d'objets en une seule passe. Les nœuds caméra SlyLED exécutent YOLOv8n via ONNX Runtime pour la détection de personne/objet sur `POST /scan`. | §14 Nœuds caméra. |
 | **ZIP** | — | Format de fichier d'archive, utilisé pour le paquet de version. | §15 Registre firmware. |
 
-> **Pas sûr de la signification d'un terme ?** Si un terme apparaît dans le manuel mais n'est pas dans ce tableau, c'est un bug dans le glossaire — ouvrez une issue ou une PR contre [#663](https://github.com/SlyWombat/SlyLED/issues/663).
+> **Pas sûr de la signification d'un terme ?** Si un terme apparaît dans le manuel mais n'est pas dans ce tableau, c'est une lacune du glossaire — signalez-le à l'équipe SlyLED pour qu'il y soit ajouté.
 
 ---
 
@@ -2083,7 +2083,7 @@ Les entrées sont classées alphabétiquement sur la colonne **Terme**. Pour les
 
 ## Annexe A — Pipeline d'étalonnage de caméra (EBAUCHE)
 
-> ⚠ **EBAUCHE — suppose que tout le travail en vol est fusionné.** Cette annexe décrit le pipeline d'étalonnage caméra en supposant que les issues #610, #651–#661 et #357 sont entièrement implémentées. Certaines fonctionnalités documentées ci-dessous sont **partiellement fusionnées** aujourd'hui (notamment l'étalonnage intrinsèque complet de chaque caméra, l'intégration de la référence obscure dans le pipeline des projecteurs motorisés par #651 et le filtre polygonal de vue sol par #659). Voir `docs/DOCS_MAINTENANCE.md` pour le statut de fusion actuel et les critères de retrait de cette bannière. Issue [#662](https://github.com/SlyWombat/SlyLED/issues/662).
+> ⚠ **EBAUCHE — suppose que tout le travail en vol est fusionné.** Cette annexe décrit le pipeline d'étalonnage caméra en supposant que les issues #610, #651–#661 et #357 sont entièrement implémentées. Certaines fonctionnalités documentées ci-dessous sont **partiellement fusionnées** aujourd'hui (notamment l'étalonnage intrinsèque complet de chaque caméra, l'intégration de la référence obscure dans le pipeline des projecteurs motorisés par #651 et le filtre polygonal de vue sol par #659). Voir `docs/DOCS_MAINTENANCE.md` pour le statut de fusion actuel et les critères de retrait de cette bannière. Issue #662.
 
 L'étalonnage caméra s'exécute comme une configuration unique par nœud caméra et doit être répété chaque fois qu'une caméra est physiquement déplacée ou réorientée. Il produit, par caméra : une matrice [intrinsèque](#glossary) **K** (distance focale + point principal + distorsion), une pose [extrinsèque](#glossary) (position + rotation dans l'espace scène) et — pour les scènes qui exécuteront des scans de nuage de points — un ajustement d'ancre de profondeur qui corrige la profondeur monoculaire vers la métrique de la scène.
 
@@ -2720,7 +2720,7 @@ Budgets de temps par phase (depuis `CAL_TUNING_SPEC` dans `desktop/shared/parent
 
 ## Annexe C — Maintenance de la documentation
 
-> Cette annexe décrit le contrat entre les annexes d'étalonnage ci-dessus et le code source qui les implémente. Elle existe pour l'issue [#662](https://github.com/SlyWombat/SlyLED/issues/662) et reste volontairement concise — les détails complets se trouvent dans `docs/DOCS_MAINTENANCE.md`.
+> Cette annexe décrit le contrat entre les annexes d'étalonnage ci-dessus et le code source qui les implémente. Elle existe pour l'issue #662 et reste volontairement concise — les détails complets se trouvent dans `docs/DOCS_MAINTENANCE.md`.
 
 ### C.1 Fichiers faisant autorité
 
@@ -2746,17 +2746,17 @@ La liste de contrôle complète, y compris la vérification du rendu des diagram
 
 - Source canonique : `docs/USER_MANUAL.md` (ce fichier).
 - `docs/SlyLED_User_Manual.docx` et `.pdf` sont **construits séparément** par `tests/build_manual.py`, qui reconstruit le document à partir de zéro plutôt que d'analyser ce markdown. La chaîne docx/PDF n'inclut pas encore ces annexes — travail de suivi.
-- Les sources des diagrammes se trouvent dans `docs/diagrams/*.mmd`. Les blocs Mermaid sont intégrés directement dans le markdown afin que GitHub les affiche nativement ; des outils externes comme Kroki peuvent générer des SVG ou PNG à partir des fichiers autonomes pour l'inclusion dans le PDF.
+- Les sources des diagrammes se trouvent dans `docs/diagrams/*.mmd`. Les blocs Mermaid sont intégrés directement dans le markdown afin que les visionneuses Markdown les affichent nativement ; des outils externes comme Kroki peuvent générer des SVG ou PNG à partir des fichiers autonomes pour l'inclusion dans le PDF.
 
 ### C.4 Contrôle d'application
 
 Aucun contrôle de dérive automatique n'est en place pour l'instant. Options proposées, par ordre croissant de coût :
 
-1. Case à cocher du modèle de PR (`.github/pull_request_template.md`)
-2. Grep via GitHub Actions : échoue les PR qui touchent à la liste source sans toucher à `docs/USER_MANUAL.md`, avec une étiquette de dérogation
+1. Case à cocher du modèle de pull-request
+2. Grep via CI : échoue les PR qui touchent à la liste source sans toucher à `docs/USER_MANUAL.md`, avec une étiquette de dérogation
 3. Agent de dérive planifié (hebdomadaire)
 
-Ces mesures nécessitent des modifications dans `.github/` et sont suivies comme éléments connexes sous #662.
+Ces mesures nécessitent des modifications de la configuration CI et sont suivies comme éléments connexes sous #662.
 
 ### C.5 Retrait de la bannière BROUILLON
 

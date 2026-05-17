@@ -64,7 +64,7 @@ esptool.
 4. Nouveau depuis v1.7.83 : lorsqu'un SHA-256 du registre ne
    correspond pas au binaire sur disque (téléchargement
    interrompu ou registre édité à la main), l'orchestrateur retombe
-   sur la release GitHub correspondant au `releaseTag` plutôt que
+   sur la release de firmware publiée correspondant au `releaseTag` plutôt que
    de refuser le flash.
 
 Les builds de diagnostic / développement du gyro
@@ -82,7 +82,7 @@ entrée porte :
 - `id` et `name` pour le libellé de l'UI OTA.
 - `version` (semver 3 segments) — ce que doit exécuter le
   périphérique de l'opérateur.
-- `releaseTag` et `releaseAsset` — le tag de release GitHub et le
+- `releaseTag` et `releaseAsset` — le tag de release de firmware publiée et le
   nom de fichier de l'asset à l'intérieur, utilisés par le repli
   OTA.
 - `sha256` — hachage de vérification que l'orchestrateur valide
@@ -91,7 +91,7 @@ entrée porte :
 L'édition manuelle de `registry.json` n'est pas recommandée ;
 `build_release.ps1` le maintient en synchronisation avec les
 empreintes des binaires à chaque release. L'onglet Firmware
-rafraîchit le registre depuis GitHub à la demande via le bouton
+rafraîchit le registre depuis le serveur de releases à la demande via le bouton
 **Rafraîchir** ; un installateur fraîchement récupéré voit donc
 immédiatement les versions correspondant à son tag de release.
 

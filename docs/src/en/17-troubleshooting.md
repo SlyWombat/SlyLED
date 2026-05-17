@@ -20,12 +20,12 @@ whether to update or work around.
 | **3D viewport not rendering** | Black canvas where the stage should be. | Use Chrome / Firefox / Edge with WebGL support. Check `chrome://gpu` for hardware acceleration. |
 | **Performers not syncing** | A child shows offline in Setup but is powered up. | Check that the orchestrator and the child are on the same WiFi subnet. The Setup tab's **Refresh** rescans via mDNS + UDP broadcast. |
 | **Canvas wrong size** | The Layout canvas is much smaller or larger than the room. | Stage dimensions (Settings → Stage) drive canvas size: `canvasW = stage.w × 1000`. Adjust stage width/height in metres rather than canvas pixels. |
-| **OTA flash refused with SHA mismatch** | Firmware tab refuses to update with `sha256 mismatch`. | Fixed in v1.7.61 (#814). The orchestrator now falls back to the GitHub release for the registered `releaseTag` when the on-disk binary disagrees with the registry. If you still see this, click **Refresh** on the Firmware tab to re-fetch `registry.json` from GitHub. |
+| **OTA flash refused with SHA mismatch** | Firmware tab refuses to update with `sha256 mismatch`. | Fixed in v1.7.61 (#814). The orchestrator now falls back to the published firmware release for the registered `releaseTag` when the on-disk binary disagrees with the registry. If you still see this, click **Refresh** on the Firmware tab to re-fetch `registry.json` from the release server. |
 | **Gyro stale-reason latch never clears** | "Connection lost" stays on a gyro status row even after the gyro resumes streaming. | Fixed in v1.7.62 (#821) and again in v1.7.63 (#823). Press-Start clears the remote stale_reason; cache self-destructs on a transient read failure. |
 
 If you hit something not in this table, the orchestrator's log
 (Settings → Logging → enable file logging) captures every UDP send and
-DMX render decision tagged by issue number — open an issue on GitHub
+DMX render decision tagged by issue number — report it through your support channel
 with the relevant section attached and a description of what the rig
 was doing at the moment.
 

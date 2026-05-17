@@ -67,7 +67,7 @@ Les entrées sont classées alphabétiquement sur la colonne **Terme**. Pour les
 | **performer** (nœud exécutant) | — | Un nœud exécutant LED ESP32, D1 Mini ou enfant Giga. L'un des trois niveaux. | §1 Premiers pas. |
 | **PnP / solvePnP** | Perspective-n-Point | Algorithme OpenCV qui calcule la pose 3D d'une caméra à partir de ≥3 correspondances 2D↔3D connues. `SOLVEPNP_SQPNP` est le solveur préféré ; `SOLVEPNP_ITERATIVE` est la solution de repli. | Annexe A §A.4. |
 | **PNG** | Portable Network Graphics | Format d'image sans perte utilisé pour les captures d'écran. | §2 Walkthrough. |
-| **PR** | Pull Request | Flux de travail Git/GitHub — changement proposé sur une branche, relu avant fusion. | Annexe C §C.4. |
+| **PR** | Pull Request | Flux de travail de contrôle de version — changement proposé sur une branche, relu avant fusion. | Annexe C §C.4. |
 | **PWM** | Pulse-Width Modulation | Technique de variation où la LED est allumée et éteinte rapidement. Sur la Giga R1, c'est implémenté en logiciel parce que `analogWrite()` est interdit sur les broches RGB embarquées. | Particularités matérielles CLAUDE.md. |
 | **QA** | Quality Assurance | Rôle de test — dans le flux de travail SlyLED, la QA exécute les suites Playwright + tests et ouvre des issues plutôt que de patcher le code source. | Annexe C. |
 | **QR** | Quick Response (code) | Code-barres 2D. Pas la même chose qu'un marqueur ArUco — ArUco est conçu pour solvePnP, QR pour les charges utiles de données. | — |
@@ -104,7 +104,7 @@ Les entrées sont classées alphabétiquement sur la colonne **Terme**. Pour les
 | **YOLO** | You Only Look Once | Réseau neuronal de détection d'objets en une seule passe. Les nœuds caméra SlyLED exécutent YOLOv8n via ONNX Runtime pour la détection de personne/objet sur `POST /scan`. | §14 Nœuds caméra. |
 | **ZIP** | — | Format de fichier d'archive, utilisé pour le paquet de version. | §15 Registre firmware. |
 
-> **Pas sûr de la signification d'un terme ?** Si un terme apparaît dans le manuel mais n'est pas dans ce tableau, c'est un bug dans le glossaire — ouvrez une issue ou une PR contre [#663](https://github.com/SlyWombat/SlyLED/issues/663).
+> **Pas sûr de la signification d'un terme ?** Si un terme apparaît dans le manuel mais n'est pas dans ce tableau, c'est une lacune du glossaire — signalez-le à l'équipe SlyLED pour qu'il y soit ajouté.
 
 ---
 

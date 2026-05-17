@@ -1,6 +1,6 @@
 ## Appendix C — Documentation Maintenance
 
-> This appendix describes the contract between the calibration appendices above and the source code that implements them. It exists for issue [#662](https://github.com/SlyWombat/SlyLED/issues/662) and is kept short — full details are in `docs/DOCS_MAINTENANCE.md`.
+> This appendix describes the contract between the calibration appendices above and the source code that implements them. It exists for issue #662 and is kept short — full details are in `docs/DOCS_MAINTENANCE.md`.
 
 ### C.1 Source-of-truth files
 
@@ -26,17 +26,17 @@ The full checklist, including render verification for the Mermaid diagrams under
 
 - Canonical source: `docs/USER_MANUAL.md` (this file).
 - `docs/SlyLED_User_Manual.docx` + `.pdf` are **built separately** by `tests/build_manual.py`, which constructs the document from scratch rather than parsing this markdown. The docx/PDF path does not yet include these appendices — follow-up work.
-- Diagram sources live in `docs/diagrams/*.mmd`. Mermaid blocks are embedded inline in the markdown so GitHub renders them directly; external renderers like Kroki can generate SVG/PNG from the standalone files for PDF inclusion.
+- Diagram sources live in `docs/diagrams/*.mmd`. Mermaid blocks are embedded inline in the markdown so Markdown viewers render them directly; external renderers like Kroki can generate SVG/PNG from the standalone files for PDF inclusion.
 
 ### C.4 Enforcement
 
 No automatic drift-check is wired up yet. Proposed options, in order of cost:
 
-1. PR-template checkbox (`.github/pull_request_template.md`)
-2. GitHub Actions grep: fail PRs that touch the source-of-truth list without touching `docs/USER_MANUAL.md`, with a skip-override label
+1. PR-template checkbox in the pull-request template
+2. A CI grep: fail PRs that touch the source-of-truth list without touching `docs/USER_MANUAL.md`, with a skip-override label
 3. Scheduled drift agent (weekly)
 
-These require `.github/` changes and are tracked as follow-ups under #662.
+These require CI-configuration changes and are tracked as follow-ups under #662.
 
 ### C.5 DRAFT banner removal
 
