@@ -1212,12 +1212,16 @@ function _labPollLive(){
     if(!s)return;
     var m=s.currentMaster!=null?s.currentMaster:0;
     var env=s.envelope!=null?s.envelope:0;
+    // Audio input meter — envelope is a 0-1 post-gain RMS level.
+    var ebar=document.getElementById('lab-env-bar');
+    if(ebar)ebar.style.width=Math.min(100,Math.round(env*100))+'%';
+    var ev=document.getElementById('lab-env-val');
+    if(ev)ev.textContent=Math.round(env*100)+'%';
+    // Master output meter — the brightness the audio is driving (0-255).
     var bar=document.getElementById('lab-vu-bar');
     if(bar)bar.style.width=Math.round((m/255)*100)+'%';
     var mv=document.getElementById('lab-vu-master');
-    if(mv)mv.textContent=m;
-    var ev=document.getElementById('lab-vu-env');
-    if(ev)ev.textContent=env.toFixed(3);
+    if(mv)mv.textContent=m+'  ('+Math.round(m*100/255)+'%)';
     var du=document.getElementById('lab-device-in-use');
     if(du)du.textContent=s.deviceInUse?('on: '+s.deviceInUse):'';
   });

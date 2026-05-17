@@ -435,16 +435,22 @@
           <input id='lab-release' type='range' min='0' max='1500' value='200' style='flex:1' onchange='_labSave()' oninput='_labLiveLbl()'>
           <span id='lab-release-val' style='width:36px;font-size:.78em;text-align:right'>200 ms</span>
         </div>
-        <div style='margin-top:.4em;padding:.4em;border:1px solid #1e293b;border-radius:4px'>
-          <div style='font-size:.72em;color:#94a3b8;margin-bottom:.2em'>Live master</div>
-          <div style='height:8px;background:#0f172a;border-radius:4px;overflow:hidden'>
+        <div style='margin-top:.4em;padding:.5em;border:1px solid #1e293b;border-radius:4px'>
+          <!-- Audio input level (line-in measurement) -->
+          <div style='display:flex;justify-content:space-between;font-size:.72em;color:#94a3b8;margin-bottom:.15em'>
+            <span>Audio input</span><span id='lab-env-val' style='font-family:monospace'>—</span>
+          </div>
+          <div style='height:10px;background:#0f172a;border-radius:4px;overflow:hidden'>
+            <div id='lab-env-bar' style='height:100%;width:0%;background:linear-gradient(90deg,#15803d,#4ade80);transition:width .08s linear'></div>
+          </div>
+          <!-- Output master brightness the audio is driving -->
+          <div style='display:flex;justify-content:space-between;font-size:.72em;color:#94a3b8;margin:.45em 0 .15em'>
+            <span>Master output</span><span id='lab-vu-master' style='font-family:monospace'>—</span>
+          </div>
+          <div style='height:10px;background:#0f172a;border-radius:4px;overflow:hidden;position:relative'>
             <div id='lab-vu-bar' style='height:100%;width:0%;background:linear-gradient(90deg,#0e7490,#22d3ee);transition:width .08s linear'></div>
           </div>
-          <div style='display:flex;justify-content:space-between;font-size:.7em;color:#64748b;margin-top:.2em'>
-            <span>Value: <span id='lab-vu-master'>—</span></span>
-            <span>Envelope: <span id='lab-vu-env'>—</span></span>
-            <span id='lab-device-in-use'></span>
-          </div>
+          <div style='font-size:.68em;color:#64748b;margin-top:.25em' id='lab-device-in-use'></div>
         </div>
       </div>
     </div>
