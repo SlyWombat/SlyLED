@@ -33,15 +33,15 @@ PR #643 is open and ready for review. It bundles:
 
 ## Still open in the review itself
 
-- **§8.3 live-test** — basement-rig walk / gyro sweep / 10-mover wash prototype. Hardware-dependent. Per §7:
+- **§8.3 live-test** — sample-rig walk / gyro sweep / 10-mover wash prototype. Hardware-dependent. Per §7:
   - Fn 1: walk a defined path, capture per-mover aim error vs ArUco-marked walking pose
   - Fn 2: gyro + phone per-axis sweep, look for residual delta asymmetry
-  - Fn 3 live demo: run the wash prototype on the 3-mover basement rig
-- Hardware needed: 3 DMX movers, 2 cameras, ESP32 gyro controller, Android phone. All already on the basement rig per `project_basement_rig.md`.
+  - Fn 3 live demo: run the wash prototype on the 3-mover sample rig
+- Hardware needed: 3 DMX movers, 2 cameras, ESP32 gyro controller, Android phone. All already on the sample rig per `project_sample_rig.md`.
 
 ### Fn 1 attempt — 2026-04-23 — blocked on calibration regression
 
-Current basement rig per issue #533 (fresh layout, 4000×3620×2060, 3 cameras). Loaded `tests/user/new basement/new basement.slyshow` (app v1.5.64, 6 fixtures, 6 surveyed markers). Orchestrator runs on port **5600** (8080 blocked on this machine; UDP 4210 WinError 10013 is non-fatal).
+Current sample rig per issue #533 (fresh layout, 4000×3620×2060, 3 cameras). Loaded `tests/user/new sample/new sample.slyshow` (app v1.5.64, 6 fixtures, 6 surveyed markers). Orchestrator runs on port **5600** (8080 blocked on this machine; UDP 4210 WinError 10013 is non-fatal).
 
 MH1 (fid=17) and MH2 (fid=18) are **uncalibrated** — the 3 mover calibrations in the slyshow are from the previous rig: fids 2 and 7 are orphans, only fid 14 (350W) has a matching current calibration (6 samples, no `model`, no `method`).
 
@@ -86,7 +86,7 @@ open docs/mover-alignment-review.md
 ## What I'd pick up next, in priority order
 
 1. **Run the regression suite locally** before merging PR #643. The sandbox this PR was authored in lacked some dependencies (Chromium headless-shell, cv2); a full local run-through closes the last verification gap.
-2. **Live basement-rig test** for §8.3 — the new bake slice interval (0.05 s vs 1 s) is the main thing to observe. Confirm that movers feel smoother during a colour wash, not worse, and that baked `.lsq` file sizes are still reasonable.
+2. **Live sample-rig test** for §8.3 — the new bake slice interval (0.05 s vs 1 s) is the main thing to observe. Confirm that movers feel smoother during a colour wash, not worse, and that baked `.lsq` file sizes are still reasonable.
 3. **After merge**, start on **#633 (remote gizmo)** — it's the biggest operator UX unlock and unblocks #427 (Android pointer mode).
 4. **#634 (Track-action smoothing)** is a small, independent PR that noticeably improves ensemble-follow feel.
 5. **#641 (Hungarian assignment)** pairs naturally with #634 — "Track actions feel right" PR that can bundle both if ambition allows.
@@ -102,5 +102,5 @@ open docs/mover-alignment-review.md
 
 - [x] No new regression failures introduced vs `main` (verified 2026-04-23) — API suites (Stage Setup, Timeline Bake) pass clean; Playwright 3D-viewport failures are pre-existing and tracked in #645
 - [ ] Playwright full UI coverage in a provisioned environment (blocked on #645)
-- [ ] Basement-rig smoke test post-merge (§8.3)
+- [ ] Sample-rig smoke test post-merge (§8.3)
 - [ ] No objections from code reviewers

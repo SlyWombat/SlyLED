@@ -53,7 +53,7 @@ COLOUR_SLOTS = {
 }
 
 # ── camera-fid → (base_url, cam_idx) map for beam-detect routing ──────
-# Basement rig layout: two Pi nodes, three camera fixtures.
+# Sample rig layout: two Pi nodes, three camera fixtures.
 # Detected at runtime from orchestrator / hardcoded fallbacks.
 CAMERA_ROUTES = {
     12: ("http://192.168.10.235:5000", 0),   # Stage Right

@@ -87,10 +87,10 @@ Four-tier fallback ladder. Operator is never stuck.
 
 ## Next session — planned
 
-**User intent for 2026-04-24:** live-test on the basement rig (§7.1
+**User intent for 2026-04-24:** live-test on the sample rig (§7.1
 protocol). Everything else below is queued behind it.
 
-### Primary — §7.1 live-test (basement rig, hardware)
+### Primary — §7.1 live-test (sample rig, hardware)
 
 Cold-start, all calibrations cleared:
 
@@ -111,7 +111,7 @@ Cold-start, all calibrations cleared:
    re-calibrating. Quantifies brittleness.
 
 Rig assumed ready: 3 movers + 2 cameras + ArUco markers (the
-expanded basement rig from camera-review §8.3 baseline).
+expanded sample rig from camera-review §8.3 baseline).
 
 Output populates **§8.3 (live-test resolution)** of
 `docs/mover-calibration-reliability-review.md` and ratifies the
@@ -119,7 +119,7 @@ Output populates **§8.3 (live-test resolution)** of
 
 ### Queued (after live-test, or if hardware blocks)
 
-- **Draft a live-test runner** — `tests/test_calibration_live_basement.py`
+- **Draft a live-test runner** — `tests/test_calibration_live_sample.py`
   automates the §7.1 protocol against a live orchestrator (QA
   test-script scope; no server code). Safe to start pre-rig; first
   real run reveals tweaks.

@@ -15,7 +15,7 @@
 
 ## What it is
 
-A complete lighting-design and control stack that does the jobs grandMA3, Follow-Me, and Zactrack do — on consumer-price hardware that you can actually carry to a basement rig. It ships with:
+A complete lighting-design and control stack that does the jobs grandMA3, Follow-Me, and Zactrack do — on consumer-price hardware that you can actually carry to a venue. It ships with:
 
 - **3D show design** — arrange fixtures and cameras in a stage model, place spatial effects as objects in 3D space, and watch the preview in real time.
 - **Moving-head calibration from a webcam** — no beacons, no gyros, no wands. Point a USB camera at the stage, hit Calibrate, and every mover knows where to aim within 100 mm at 3 m throw.

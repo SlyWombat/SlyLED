@@ -53,9 +53,9 @@ prioritised fixes.
 
 ## 3. Current architecture — snapshot
 
-### 3.1 Hardware context (basement rig, reference)
+### 3.1 Hardware context (sample rig, reference)
 
-Per `project_basement_rig.md`:
+Per `project_sample_rig.md`:
 
 - Two EMEET 4K cameras on one Orange Pi at `192.168.10.235`, both at
   `(x, 120, 1920) mm`, tilt-down 30°, FOV ≈ 90° (diagonal spec).
@@ -153,7 +153,7 @@ or refuted during the review, not patched yet.
 
 | # | Finding | Evidence | Impact |
 |---|---------|----------|--------|
-| A1 | `api_objects_temporal_create` **does not use** `_pixel_to_stage` / homography. It runs a simple `pos = [sw·(1-cx), sd·(1-cy), 0]` back-wall proportional mapping and ignores camera rotation, FOV, and position. | `parent_server.py:7218-7232` | Wrong stage placement for any camera that isn't back-wall facing audience. On the basement rig (tilt-down 30°), near-field persons are already outside the band y∈[1400,2967] yet the mapping will still place them anywhere in [0, stage_d]. |
+| A1 | `api_objects_temporal_create` **does not use** `_pixel_to_stage` / homography. It runs a simple `pos = [sw·(1-cx), sd·(1-cy), 0]` back-wall proportional mapping and ignores camera rotation, FOV, and position. | `parent_server.py:7218-7232` | Wrong stage placement for any camera that isn't back-wall facing audience. On the sample rig (tilt-down 30°), near-field persons are already outside the band y∈[1400,2967] yet the mapping will still place them anywhere in [0, stage_d]. |
 | A2 | `_pixel_to_stage` exists, supports homography and FOV ground-plane projection, is used by `_evaluate_track_actions` — but the tracker-ingestion endpoint was written before it was wired in. | `parent_server.py:1888` (helper), `parent_server.py:7218` (endpoint doesn't call it) | Dead-but-loaded code; simple fix, need to validate test coverage. |
 | A3 | No multi-camera fusion. Each camera posts its own temporal objects; two cameras seeing one person = two objects. Re-ID is per-camera only (`tracker.py` proximity re-ID, 500 mm). | `tracker.py _tick()` | Trackers double-fire and fight each other when auto-track uses both cameras. |
 | A4 | TTL is fixed (5 s default) and not occlusion-aware. A person re-entering frame gets a new object. | `tracker.py`, `api_objects_temporal_create` | Rapidly spawns/expires objects; auto-track jitters on occlusion. |
@@ -171,8 +171,8 @@ or refuted during the review, not patched yet.
 | B5 | `ParametricFixtureModel` has a real mirror symmetry — different `(pan_sign, tilt_sign)` combinations give identical forward output at sampled points but diverge outside the sample hull (#488 discussion, `feedback_parametric_mirror_ambiguity.md`). LM fits all 4 combos and picks best RMS, but ties are broken by convention `(+1, -1)` within 0.2°. | `parametric_mover.py _lm_solve`, `fit_model` | Fits can flip between sessions; extrapolation outside the marker hull can be wrong direction. Need a canonical way to verify sign choice — probably "does the beam go the expected direction when we nudge pan?" during the cal itself. |
 | B6 | Duplicated numerical-Jacobian logic (`_lm_solve` vs `_condition_number` in `parametric_mover.py`). | `parametric_mover.py:249,388` | Maintenance hazard, not a bug today. |
 | B7 | Beam detection tolerates hybrid RGB+wheel fixtures via `_beam_detect_flash` (ON/OFF diff) per `feedback_cal_algorithm.md`. Good. But `beam_detector.detect_center()` assumes horizontally-arranged multi-beams (median-X sort) — fails for a fixture rotated 90°. | `docs/camera-review.md` §4, `beam_detector.py` | 350 W BeamLight is single-beam so unaffected; verify for any future multi-beam fixture. |
-| B8 | Homography extrapolates badly outside the fit markers' convex hull (`feedback_stage_map_coplanar.md`). On the basement rig, all three markers cluster on the right-back half of the stage — the left-front half has no anchor. v2 target-driven cal trusts the homography wherever the target is placed. | ibid. | Front-of-stage targets are the primary auto-track zone → precisely where the homography is worst. The operator has to be told that surveyed markers must span the target volume. |
-| B9 | `fovType` field is silently dropped by the fixture PUT (#611 open). FOV values from consumer spec sheets are usually **diagonal**, not horizontal — the `_pixel_to_stage` fallback assumes the `fovDeg` is horizontal. | `project_basement_rig.md` | Ground-plane fallback (when no homography) is off by the cos factor. Tracking without calibration = wrong placement. |
+| B8 | Homography extrapolates badly outside the fit markers' convex hull (`feedback_stage_map_coplanar.md`). On the sample rig, all three markers cluster on the right-back half of the stage — the left-front half has no anchor. v2 target-driven cal trusts the homography wherever the target is placed. | ibid. | Front-of-stage targets are the primary auto-track zone → precisely where the homography is worst. The operator has to be told that surveyed markers must span the target volume. |
+| B9 | `fovType` field is silently dropped by the fixture PUT (#611 open). FOV values from consumer spec sheets are usually **diagonal**, not horizontal — the `_pixel_to_stage` fallback assumes the `fovDeg` is horizontal. | `project_sample_rig.md` | Ground-plane fallback (when no homography) is off by the cos factor. Tracking without calibration = wrong placement. |
 | B10 | `_invalidate_mover_model(fid)` must fire on every `_mover_cal` mutation. Easy to miss a call site → stale cached parametric model served for aim. | `project_calibration_v2_phase1.md` | Not observed misbehaving; worth a grep-audit. |
 
 ### Cross-cutting
@@ -249,7 +249,7 @@ until question → method → answer is written down below.**
 
 - **Static reading** (grep, read the function). Fastest; enough for questions
   about whether code paths are reachable, which consumer reads what.
-- **Basement-rig live test.** For questions about UX, extrapolation, multi-
+- **Sample-rig live test.** For questions about UX, extrapolation, multi-
   camera fusion, and marker-placement guidance. Capture screenshots and
   numeric errors into `/mnt/d/temp/live-test-session/` per
   `feedback_screenshot_folder.md`.
@@ -272,7 +272,7 @@ Temporary, review-only additions (revert after):
 - Optional: store last 100 YOLO detections per camera with timestamps — for
   offline replay during review.
 
-### 6.2 Live-test checklist (basement rig)
+### 6.2 Live-test checklist (sample rig)
 
 Run once after instrumentation is in, before any fixes:
 
@@ -546,7 +546,7 @@ Ticket: **P3 (epic)**, six sub-tickets. Do not start until Q7 lands.
    - `_pixel_to_stage` at **1888–1997** uses `fovDeg` directly as
      horizontal half-angle — ignores `fovType` entirely.
 
-   For the basement rig the EMEET 4K spec sheet publishes 90° as
+   For the sample rig the EMEET 4K spec sheet publishes 90° as
    *diagonal*. A horizontal-default consumer treating 90° as horizontal
    overestimates horizontal FOV by cos(diag/2)/cos(horiz/2) ≈ 12–15%.
    That's the cos-factor error flagged in B9.
@@ -558,7 +558,7 @@ Ticket: **P3 (epic)**, six sub-tickets. Do not start until Q7 lands.
 - Make `_pixel_to_stage` read `fovType` and convert to horizontal
   half-angle internally via `camera_math` (add `normalise_fov(fov_deg,
   fov_type, aspect)` if it doesn't exist yet).
-- Update `docs/camera.md` and `project_basement_rig.md` to reflect
+- Update `docs/camera.md` and `project_sample_rig.md` to reflect
   "diagonal is the canonical input; everything else is derived".
 
 Ticket: **P1** (ships with Q1/Q2; Q2 fallback accuracy depends on it).
@@ -673,7 +673,7 @@ def test_probe_catches_flipped_pan_sign():
         fixture_pos=(1500, 0, 3000),
         mount_yaw_deg=30, pan_sign=+1, tilt_sign=-1,
     )
-    # 3 samples (mimics markers-mode on basement rig)
+    # 3 samples (mimics markers-mode on sample rig)
     stage_pts = [(500, 2000, 0), (2500, 2000, 0), (1500, 2500, 0)]
     samples = [
         {"pan": truth.inverse(*p)[0], "tilt": truth.inverse(*p)[1],
@@ -1012,7 +1012,7 @@ Expected ~200 lines, lives at `tests/regression/test_mover_cal_pipeline.py`.
 **Ride-on changes:**
 - Add `tests/regression/fixtures/` with the canonical fixture set
   used by both tests (3 cameras, 3 movers, 3 markers — mirrors the
-  basement rig).
+  sample rig).
 - `tests/regression/run_all.py` (already exists per CLAUDE.md) gets
   the two new entries.
 
@@ -1038,7 +1038,7 @@ requires the Q1 P1 fix to land first so multi-camera fusion has
 accurate placements to cluster on (see §12 for the follow-up
 shortlist).
 
-### 8.3 Q6 live-test resolution (basement rig, 2026-04-22)
+### 8.3 Q6 live-test resolution (sample rig, 2026-04-22)
 
 Full session artifacts in `docs/live-test-sessions/2026-04-22/`.
 Six cal runs executed (3 modes × 2 fixtures — 350W floor-mount fid 14,
@@ -1271,9 +1271,9 @@ Mentioned only to confirm they were reviewed and are not affected:
   endpoint + tracking/beam history fields. Q14: two synthetic-
   pipeline tests (tracking + mover-cal) riding on #277/#280
   infrastructure; #409 becomes Test 1's implementation ticket.
-  Only **Q6** remains open — strictly hardware-bound (basement
+  Only **Q6** remains open — strictly hardware-bound (sample
   rig, live-test step 6).
-- **2026-04-22 (live test)** — basement rig, steps 1/2/3/4+5/6
+- **2026-04-22 (live test)** — sample rig, steps 1/2/3/4+5/6
   executed (steps 7/8 deferred pending Q1 fix). Q6 resolved with
   caveats: **markers-mode is the correct default after the four
   new P1 fixes in §8.5 land** (convergence bracket-and-retry,
@@ -1289,7 +1289,7 @@ Mentioned only to confirm they were reviewed and are not affected:
   `docs/live-test-sessions/2026-04-22/`. Added §12 with follow-up
   exploration shortlist — items that surfaced during the session
   but sit outside §8.5's blocking-fix scope.
-- **2026-04-22 (live test, re-run on expanded rig)** — basement rig
+- **2026-04-22 (live test, re-run on expanded rig)** — sample rig
   reconfigured between runs: **3 cameras** (added Cam 16 "Out Left"
   on RPi-Sly1 deep in the stage at (2350, 1670, 905), rotation 1°),
   **3 movers** (added 150W MH Stage Left using the new
@@ -1439,10 +1439,10 @@ and 148° (cam 13) HFOV at 3840-wide frames, contradicting the advertised
 
 - Root cause unknown. Three hypotheses to test:
   1. Node's `/calibrate/intrinsic` returns stale K from a prior sensor
-     (EMEET 4K swapped in mid-session per `project_basement_rig.md`);
+     (EMEET 4K swapped in mid-session per `project_sample_rig.md`);
      cal data didn't follow the swap.
   2. Advertised `fovDeg` is diagonal (per `#611` comment and
-     `project_basement_rig.md`); horizontal/vertical computations
+     `project_sample_rig.md`); horizontal/vertical computations
      should divide by the aspect-ratio factor, which we're not doing.
   3. Lens has significant barrel distortion that's not modelled, so
      an object 13° off-axis in the real scene is > 30° off-axis in
@@ -1451,7 +1451,7 @@ and 148° (cam 13) HFOV at 3840-wide frames, contradicting the advertised
   test) that places a measured-length target at known distance,
   measures its pixel extent, and back-solves effective HFOV.
   Write into a camera-node `/calibrate/intrinsic/report` endpoint.
-  Useful for any rig, not just basement.
+  Useful for any rig, not just sample.
 
 ### 12.2 Beam detector: brightness-mode as default, per-camera threshold
 
@@ -1488,7 +1488,7 @@ Y=2967 — even on cam 12's 3-marker fit, extrapolation was unreliable.
 - **Recommend:** documentation/UX guidance "minimum 4 markers,
   distributed across the tracking region, all inside the visible
   floor band". Auto-validate against the floor-band formula in
-  `project_basement_rig.md` (Y = camZ / tan(camTilt + halfVFOV)).
+  `project_sample_rig.md` (Y = camZ / tan(camTilt + halfVFOV)).
 - **Recommend:** refuse to save a camera calibration with <3 in-frame
   markers — make `markersMatched == 2` a hard warning the operator
   must acknowledge, not a silent success (step 2 saved cam 13's fit

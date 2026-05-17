@@ -4,7 +4,7 @@
 `claude/review-camera-implementation-pqyfH`, sandbox has no LAN access
 to 192.168.10.x).
 **To:** local Claude Code session (`/remote-control` active on the
-Windows dev machine, direct hands on the orchestrator + basement rig).
+Windows dev machine, direct hands on the orchestrator + sample rig).
 **Date:** 2026-04-22
 **Branch to stay on:** `claude/review-camera-implementation-pqyfH`
 **Primary doc:** `docs/camera-calibration-review.md` (read before
@@ -16,7 +16,7 @@ starting — §2 principles, §8.1 findings, §8.2 Q6 open).
 
 I finished §8.1 of `docs/camera-calibration-review.md` — 13 of 14
 review questions are closed on paper. Only **Q6** (default
-mover-cal mode) remains and it needs the basement rig. While we're
+mover-cal mode) remains and it needs the sample rig. While we're
 in front of the rig, we also want **numeric baselines** for Q1, Q3,
 Q7, Q8, Q12 so the P1/P2 implementation work afterwards has
 before/after comparisons.
@@ -30,7 +30,7 @@ before/after comparisons.
 
 ---
 
-## 2. Rig reference (from `project_basement_rig.md`)
+## 2. Rig reference (from `project_sample_rig.md`)
 
 - Orchestrator: Flask on Windows, **port 8080** (`parent_server.py`
   at 12918, `--port` defaults to 8080). Call it `ORCH=http://127.0.0.1:8080`.
@@ -228,7 +228,7 @@ When the test session ends:
    and any numeric baselines:
 
    ```markdown
-   - **2026-04-22 (live test)** — basement rig, steps 2/3/4/5/6
+   - **2026-04-22 (live test)** — sample rig, steps 2/3/4/5/6
      executed. Q6 closed: default mode = <markers|v2|…>. Q7/Q12
      baselines: stage-map RMS = X px, homography round-trip
      residual = Y mm. Q1 baseline: tracking error = Z mm

@@ -97,7 +97,7 @@ canonical IK primitive (§9). This review builds on top of that primitive.
 
 ### 3.1 Hardware context
 
-Per `project_basement_rig.md`: three DMX moving heads on the basement
+Per `project_sample_rig.md`: three DMX moving heads on the sample
 rig — two ceiling-ish movers and one floor-mounted 350 W BeamLight
 (`beamlight-350w-16ch`, hybrid RGB+colour-wheel, 16-bit pan/tilt). Two
 EMEET 4K cameras feed both tracking (Fn 1) and beam-spot calibration.
@@ -335,7 +335,7 @@ Each question gets an answer from one of these:
 
 - **Static reading** (grep, read the function). Fastest; enough for
   questions about reachable code paths.
-- **Basement-rig live test.** For questions about UX, multi-fixture
+- **Sample-rig live test.** For questions about UX, multi-fixture
   follow, remote-vector feel. Capture screenshots + timing data into
   `/mnt/d/temp/live-test-session/` per `feedback_screenshot_folder.md`.
 - **Synthetic prototype** — especially for Fn 3. Write the response
@@ -346,7 +346,7 @@ Each question gets an answer from one of these:
   (especially "no incumbent has Fn 3"). Document each claim with the
   source URL in §8.
 
-Live-test checklist (basement rig, run once per question batch):
+Live-test checklist (sample rig, run once per question batch):
 
 1. Fn 1: walk a defined path, capture per-mover aim error vs ground
    truth (ArUco-marked walking pose).
@@ -586,7 +586,7 @@ Behavioural changes that survive into production:
 
 ### 8.3 Live-test resolution
 
-To be populated after the next basement-rig session. Per §7:
+To be populated after the next sample-rig session. Per §7:
 Fn 1 walk-path accuracy, Fn 2 gyro/phone per-axis sweep, Fn 3
 synthetic then live demo.
 

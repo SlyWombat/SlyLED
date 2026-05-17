@@ -289,7 +289,7 @@ def sync_content_to_website() -> Path:
     # Marketing surface (#672). Flatten docs/src/marketing/**/*.md into
     # Starlight under a single prefix so Astro routes them at
     # /marketing/<subpath>/ (e.g. /marketing/features/01-...,
-    # /marketing/case-studies/basement-rig, /marketing/press-kit/fact-sheet).
+    # /marketing/case-studies/<slug>, /marketing/press-kit/fact-sheet).
     import re as _re
     marketing_src = ROOT / 'docs' / 'src' / 'marketing'
     if marketing_src.is_dir():

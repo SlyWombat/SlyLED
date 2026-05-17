@@ -558,7 +558,7 @@ def _frame_to_jpeg_b64(frame, max_side=None, quality=None):
 
     #685 follow-up — defaults moved to module-level
     ``_AI_FRAME_LONG_SIDE`` / ``_AI_FRAME_JPEG_QUALITY`` constants
-    (env-tunable) so the basement-rig ingestion-time fix stays visible
+    (env-tunable) so the sample-rig ingestion-time fix stays visible
     in one place. Logs the resize so the orchestrator log proves the
     downsample happened.
     """
@@ -1049,7 +1049,7 @@ def auto_tune_loop(camera_ip, cam_idx, intent,
         else:
             # #685 follow-up — pre-fix the loop stopped on the FIRST flat
             # gradient even when the absolute score was clearly bad
-            # (basement-rig matrix run: heuristic declared aruco "done"
+            # (sample-rig matrix run: heuristic declared aruco "done"
             # at score 49 / 100 with the Sly slot baseline). Now: keep
             # exploring through max_iterations whenever best_score is
             # below the per-intent minimum, so the heuristic can still

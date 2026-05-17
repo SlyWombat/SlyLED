@@ -14,7 +14,13 @@ Usage:
 Output: docs/screenshots/*.png
 """
 
-import sys, os, json, time, threading, argparse, subprocess
+import sys, os, json, time, threading, argparse, subprocess, tempfile
+
+# Isolate parent_server's data dir to a throwaway temp directory BEFORE
+# it is imported anywhere — this tool replaces project state wholesale
+# (it imports the sample stage), and must never touch a live project.
+os.environ.setdefault("SLYLED_DATA",
+                       tempfile.mkdtemp(prefix="slyled-screenshots-"))
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))
 
@@ -36,160 +42,26 @@ def out(name):
 # ── 1. Populate test data via Flask test client ─────────────────────────────
 
 def populate_data():
-    """Create realistic test data for screenshots."""
+    """Load the checked-in sample stage so every screenshot run uses the
+    same documented rig: docs/samples/sample-stage.slyshow — 3 moving
+    heads, 8 RGBW back-wall wash lights, and an LED fixture of 8
+    vertical bars. Replaces the old ad-hoc inline fixture seeding."""
     import parent_server
     from parent_server import app
 
+    sample = os.path.join(PROJ, 'docs', 'samples', 'sample-stage.slyshow')
+    with open(sample, encoding='utf-8') as f:
+        project = json.load(f)
     with app.test_client() as c:
-        c.post('/api/reset', headers={'X-SlyLED-Confirm': 'true'})
-
-        # Clean up custom profiles from previous test runs
-        r = c.get('/api/dmx-profiles')
-        for p in (r.get_json() or []):
-            if not p.get('builtin'):
-                c.delete(f'/api/dmx-profiles/{p["id"]}')
-
-        # Settings
-        c.post('/api/settings', json={'name': 'Main Stage', 'darkMode': 1,
-                                       'canvasW': 10000, 'canvasH': 5000})
-
-        # Stage
-        c.post('/api/stage', json={'w': 10.0, 'h': 5.0, 'd': 10.0})
-
-        # LED children + fixtures — realistic venue names
-        r = c.post('/api/children', json={'ip': '192.168.10.50'})
-        cid1 = r.get_json().get('id')
-        r = c.post('/api/fixtures', json={
-            'name': 'FOH Truss Left', 'type': 'linear', 'fixtureType': 'led', 'childId': cid1,
-            'strings': [{'leds': 60, 'mm': 3000, 'sdir': 0}]
-        })
-        fix1 = r.get_json().get('id')
-
-        r = c.post('/api/children', json={'ip': '192.168.10.51'})
-        cid2 = r.get_json().get('id')
-        r = c.post('/api/fixtures', json={
-            'name': 'FOH Truss Right', 'type': 'linear', 'fixtureType': 'led', 'childId': cid2,
-            'strings': [{'leds': 60, 'mm': 3000, 'sdir': 2}]
-        })
-        fix2 = r.get_json().get('id')
-
-        # DMX moving heads — realistic product names
-        r = c.post('/api/fixtures', json={
-            'name': 'Beam 200 Stage Left', 'type': 'point', 'fixtureType': 'dmx',
-            'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 16,
-            'dmxProfileId': 'generic-moving-head-16bit',
-            'rotation': [-20, 0, 0]
-        })
-        dmx1 = r.get_json().get('id')
-
-        r = c.post('/api/fixtures', json={
-            'name': 'Beam 200 Stage Right', 'type': 'point', 'fixtureType': 'dmx',
-            'dmxUniverse': 1, 'dmxStartAddr': 17, 'dmxChannelCount': 16,
-            'dmxProfileId': 'generic-moving-head-16bit',
-            'rotation': [-20, 0, 0]
-        })
-        dmx2 = r.get_json().get('id')
-
-        # RGB Par — realistic name
-        r = c.post('/api/fixtures', json={
-            'name': 'SlimPAR Center Wash', 'type': 'point', 'fixtureType': 'dmx',
-            'dmxUniverse': 1, 'dmxStartAddr': 33, 'dmxChannelCount': 3,
-            'dmxProfileId': 'generic-rgb',
-            'rotation': [0, 0, 0]
-        })
-        dmx3 = r.get_json().get('id')
-
-        # Layout positions (cameras added below after camera fixture creation)
-
-        # Actions library
-        actions = [
-            {'name': 'Warm Solid', 'type': 1, 'r': 255, 'g': 160, 'b': 40},
-            {'name': 'Cool Fade', 'type': 2, 'r': 0, 'g': 100, 'b': 255, 'r2': 100, 'g2': 0, 'b2': 200, 'speedMs': 3000},
-            {'name': 'Rainbow Chase', 'type': 4, 'r': 255, 'g': 0, 'b': 0, 'speedMs': 40, 'spacing': 5, 'tailLen': 3},
-            {'name': 'Ocean Rainbow', 'type': 5, 'r': 0, 'g': 100, 'b': 200, 'speedMs': 60, 'paletteId': 1},
-            {'name': 'Campfire', 'type': 6, 'r': 255, 'g': 80, 'b': 0, 'cooling': 50, 'sparking': 100},
-            {'name': 'Blue Comet', 'type': 7, 'r': 0, 'g': 80, 'b': 255, 'speedMs': 30, 'tailLen': 8},
-            {'name': 'Starlight', 'type': 8, 'r': 200, 'g': 200, 'b': 255, 'spawnMs': 80, 'density': 4},
-            {'name': 'Flash Strobe', 'type': 9, 'r': 255, 'g': 255, 'b': 255, 'periodMs': 100},
-        ]
-        for a in actions:
-            c.post('/api/actions', json=a)
-
-        # Spatial effects
-        c.post('/api/spatial-effects', json={
-            'name': 'Blue Sweep', 'category': 'spatial-field', 'shape': 'sphere',
-            'r': 0, 'g': 80, 'b': 220, 'size': {'radius': 2000},
-            'motion': {'startPos': [0, 2500, 5000], 'endPos': [10000, 2500, 5000],
-                       'durationS': 8, 'easing': 'ease-in-out'},
-            'blend': 'add'
-        })
-        c.post('/api/spatial-effects', json={
-            'name': 'Golden Wash', 'category': 'spatial-field', 'shape': 'plane',
-            'r': 255, 'g': 180, 'b': 40, 'size': {'normal': [0, 1, 0], 'thickness': 1500},
-            'motion': {'startPos': [5000, 5000, 5000], 'endPos': [5000, 0, 5000],
-                       'durationS': 12, 'easing': 'ease-out'},
-            'blend': 'screen'
-        })
-
-        # Install a moving-head preset show
-        r = c.post('/api/show/preset', json={'id': 'spotlight-sweep'})
-        tl_id = r.get_json().get('timelineId')
-
-        # Camera fixtures — for calibration screenshots (#329, #330)
-        r = c.post('/api/fixtures', json={
-            'name': 'Stage Left Cam', 'type': 'point', 'fixtureType': 'camera',
-            'fovDeg': 90, 'resolutionW': 1920, 'resolutionH': 1080,
-            'trackClasses': ['person', 'chair', 'backpack'],
-            'trackFps': 3, 'trackThreshold': 0.35, 'trackTtl': 8, 'trackReidMm': 600
-        })
-        cam1 = r.get_json().get('id')
-        c.put(f'/api/fixtures/{cam1}', json={
-            'cameraIp': '192.168.10.235', 'cameraIdx': 0
-        })
-
-        r = c.post('/api/fixtures', json={
-            'name': 'Stage Right Cam', 'type': 'point', 'fixtureType': 'camera',
-            'fovDeg': 60, 'resolutionW': 1920, 'resolutionH': 1080
-        })
-        cam2 = r.get_json().get('id')
-        c.put(f'/api/fixtures/{cam2}', json={
-            'cameraIp': '192.168.10.109', 'cameraIdx': 0
-        })
-
-        # Place cameras in layout — mounted high on side walls
-        c.post('/api/layout', json={'children': [
-            {'id': fix1, 'x': 1000, 'y': 4500, 'z': 0},
-            {'id': fix2, 'x': 9000, 'y': 4500, 'z': 0},
-            {'id': dmx1, 'x': 2000, 'y': 5000, 'z': 2000},
-            {'id': dmx2, 'x': 8000, 'y': 5000, 'z': 2000},
-            {'id': dmx3, 'x': 5000, 'y': 4800, 'z': 5000},
-            {'id': cam1, 'x': 500, 'y': 0, 'z': 2500},
-            {'id': cam2, 'x': 9500, 'y': 0, 'z': 2500},
-        ]})
-
-        # Synthetic point cloud data — simulates a scanned venue
-        import parent_server as _ps
-        _ps._point_cloud = {
-            'points': [[x * 100, y * 100, 0, 128, 128, 128]
-                       for x in range(60) for y in range(40)],
-            'totalPoints': 2400,
-            'floorNormalized': True,
-            'floorOffset': 0,
-            'surfaces': {
-                'floor': {'z': 0, 'normal': [0, 0, 1], 'inliers': 1800},
-                'walls': [{'normal': [0, 1, 0], 'd': 0}],
-                'obstacles': [],
-            },
-        }
-
-        # Objects — proper transform format
-        c.post('/api/objects', json={
-            'name': 'Back Wall', 'objectType': 'wall', 'color': '#1e293b', 'opacity': 30,
-            'transform': {'pos': [0, 0, 0], 'rot': [0, 0, 0], 'scale': [10000, 5000, 100]}
-        })
-
-    print(f'  Data populated: 7 fixtures (5+2 cameras), 8 actions, 2 effects, 1 preset show')
-    return tl_id
+        r = c.post('/api/project/import', json=project)
+        if r.status_code != 200:
+            print('  WARNING: sample stage import failed \u2014 '
+                  f'{r.status_code}: {r.get_data(as_text=True)[:200]}')
+        else:
+            print(f'  loaded sample stage ({project.get("name")}) \u2014 '
+                  f'{len(project.get("fixtures", []))} fixtures')
+        tls = c.get('/api/timelines').get_json() or []
+    return tls[0]['id'] if tls else None
 
 
 # ── 2. Start Flask server in background ──────────────────────────────────────

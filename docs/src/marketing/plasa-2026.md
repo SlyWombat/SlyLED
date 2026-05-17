@@ -162,7 +162,6 @@ include:
   first vision AI.
 - "Engineering quality" → test coverage, reliability review series,
   code-doc drift CI.
-- "Real-world application" → basement-rig + (pending) theatre case
-  study.
+- "Real-world application" → (pending) theatre case study.
 - "Presentation of submission" → this site, PDF/DOCX manuals,
   Mermaid-rendered architecture diagrams.

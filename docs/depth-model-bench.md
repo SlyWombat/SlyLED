@@ -2,7 +2,7 @@
 
 Evaluating AI monocular / multi-view depth models against the current `Depth-Anything-V2` baseline on the SlyLED point-cloud pipeline.
 
-**Scene:** basement rig, both cameras on Orange Pi at `192.168.10.235`, tilts 30°/30°, positions `(1275, 120, 1930)` and `(830, 120, 1930)`, DMX blackout during capture.
+**Scene:** sample rig, both cameras on Orange Pi at `192.168.10.235`, tilts 30°/30°, positions `(1275, 120, 1930)` and `(830, 120, 1930)`, DMX blackout during capture.
 
 **Harness:** `/mnt/d/temp/live-test-session/bench/`. Each model consumes the same 1920×1080 synchronous frame pair, produces a depth map, back-projects to cam-local 3D via the pinhole model (`z = depth`, `x = (px-cx)*z/fx`, `y = (py-cy)*z/fy`), transforms to stage coords through the known camera poses via the shared `camera_math.build_camera_to_stage` matrix. Floor-plane fit is restricted to points with stage-Z < 500 mm so RANSAC targets the floor, not the back wall.
 
@@ -76,4 +76,4 @@ Open a follow-up issue / PR that:
 2. Adds a `ZoeDepthEstimator` class in `firmware/orangepi/depth_estimator.py` that loads the ONNX via `onnxruntime.InferenceSession` and emits metric mm depth
 3. Selects model via `/camera/config.json` flag (`depth_model: "zoedepth" | "dav2"`, default `zoedepth`)
 4. Exposes the same flag on `/api/space/scan` so operators can A/B
-5. Deploys to `192.168.10.235`, measures on-Pi latency, rescans the basement rig, compares metrics
+5. Deploys to `192.168.10.235`, measures on-Pi latency, rescans the sample rig, compares metrics

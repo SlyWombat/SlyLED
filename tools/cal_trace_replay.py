@@ -24,7 +24,7 @@ that names a cal failure mode at a glance:
 Usage:
     python tools/cal_trace_replay.py \\
         --trace /path/to/cal_traces/fid17-...ndjson \\
-        --project tests/user/basement/basement.slyshow \\
+        --project docs/samples/sample-stage.slyshow \\
         --out /tmp/cal-trace-fid17.png
 
     # Or pull stage/cameras/markers from a running orchestrator:

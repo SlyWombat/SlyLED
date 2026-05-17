@@ -1,6 +1,6 @@
 # Live test plan — 2026-04-24 — mover calibration
 
-**Session lead:** user (on basement rig, Windows host orchestrator, port 8080)
+**Session lead:** user (on sample rig, Windows host orchestrator, port 8080)
 **Session support:** QA agent (this machine, WSL2, monitoring + screenshots + issue updates)
 **Rig:** 2 movers + 1 floor-mount BeamLight, 3 ArUco markers (DICT_4X4_50 150 mm, floor), Orange Pi camera node at `192.168.10.235:5000` (2× EMEET 4K).
 
@@ -118,7 +118,7 @@ Pull from the T1 log:
 
 ## Handshake — what I need from the operator before starting
 
-- **Orchestrator URL reachable from WSL.** From WSL2 the Windows host is at `192.168.10.1` on the basement LAN or at the host.docker.internal mapping. Confirm one works: `curl http://<host>:8080/api/settings`. If neither does (firewall), we can proxy via a camera-ready Pi or run the monitor on Windows side with `cmd.exe`.
+- **Orchestrator URL reachable from WSL.** From WSL2 the Windows host is at `192.168.10.1` on the sample LAN or at the host.docker.internal mapping. Confirm one works: `curl http://<host>:8080/api/settings`. If neither does (firewall), we can proxy via a camera-ready Pi or run the monitor on Windows side with `cmd.exe`.
 - **Fixture IDs** for mover A + mover B (so I can pre-bake URLs for the scripts).
 - **The two movers should be on the same DMX universe** for the #679 P1 #2 test to fire. Verify via `/api/fixtures` — same `dmxUniverse` field on both.
 - **Which mover is 540°/270° range?** (Makes T1 T6 "adaptive grid 8×6" test meaningful.)
@@ -126,7 +126,7 @@ Pull from the T1 log:
 
 ## Not in scope today
 
-- Bracket-floor 16-bit fixture bug (#679 P1 #1) — needs a specific 16-bit fixture the basement doesn't have.
+- Bracket-floor 16-bit fixture bug (#679 P1 #1) — needs a specific 16-bit fixture the sample doesn't have.
 - Pixel-scoring 1080p centre bug (#679 P2 #4) — empirically verifiable but needs targeted tooling; skip in favour of field observations.
 - `_median` n=2 bug (#679 P2 #3) — observable only in degraded scenarios; skip.
 - Building docs/Gemini review flows — this session is QA, not dev.

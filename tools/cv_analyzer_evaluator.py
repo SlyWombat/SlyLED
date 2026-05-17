@@ -125,7 +125,7 @@ def propose_delta(diag, suggestions, current_controls):
     gain, white_balance_automatic, white_balance_temperature, with
     {name: (min, max)} ranges discoverable in CONTROL_RANGES below.
     """
-    # Hardcoded ranges for our basement rig (matches /camera/controls
+    # Hardcoded ranges for our sample rig (matches /camera/controls
     # output for both EMEET 4K + the rpi cam used).
     ranges = {
         "exposure_time_absolute": (1, 5000),

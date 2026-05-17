@@ -77,7 +77,7 @@ def _aim_at(fx_pos, marker_xyz, rotation_deg, pan_range, tilt_range):
 
 # ── Round-trip: known pose → synthetic observations → recover pose ─────
 
-section('Solver round-trip — basement-rig geometry')
+section('Solver round-trip — sample-rig geometry')
 
 true_pose = (600.0, 0.0, 1500.0)   # operator-validated true Z ≈ 1500
 markers = [

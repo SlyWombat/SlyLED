@@ -3,7 +3,7 @@
 
 Companion to `tools/cal_status_summarize.py` (which prints exploratory stats
 and a softer VERDICT line). This tool produces a CI-style one-line-per-check
-report, intended for the basement-rig live-test sign-off and for pasting
+report, intended for the sample-rig live-test sign-off and for pasting
 into the #707 verification table.
 
 Reads the NDJSON written by `tools/cal_status_poller.py` plus, optionally,

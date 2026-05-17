@@ -460,7 +460,7 @@ def camera_floor_polygon(cam_pos, rotation, fov_deg, aspect=16.0 / 9.0,
     large y (we observed (0, +182093 mm) for cam #12), and the
     per-vertex clamp pulled that to (0, stage_d) — producing a
     polygon that included huge swaths of stage X the lens cone
-    doesn't actually cover. Operator eye-test on basement rig:
+    doesn't actually cover. Operator eye-test on sample rig:
     the polygon claimed 4 of 4 first-cal probes were in cam FOV but
     only 1 was physically visible.
 

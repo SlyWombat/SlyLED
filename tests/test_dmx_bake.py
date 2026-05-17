@@ -12,7 +12,12 @@ Usage:
     python tests/test_dmx_bake.py -v
 """
 
-import sys, os, json, time, threading
+import sys, os, json, time, threading, tempfile
+
+# Isolate parent_server's data dir before importing it — seed() resets
+# project state, which must never reach a live operator project.
+os.environ.setdefault("SLYLED_DATA",
+                      tempfile.mkdtemp(prefix="slyled-test-dmxbake-"))
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))
 

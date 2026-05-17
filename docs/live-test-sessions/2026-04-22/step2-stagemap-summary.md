@@ -1,7 +1,7 @@
 # Step 2 — Stage-map all 3 cameras
 
 **Date:** 2026-04-22  
-**Rig:** basement (post-move, 3 cams, 6 surveyed markers)  
+**Rig:** sample (post-move, 3 cams, 6 surveyed markers)  
 **Call:** `POST /api/cameras/<fid>/stage-map` with marker registry in body, maxSnapshots=6
 
 ## Results

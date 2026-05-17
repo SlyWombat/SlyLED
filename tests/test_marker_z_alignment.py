@@ -41,7 +41,7 @@ from parent_server import app, _apply_marker_z_alignment
 
 def _seed_floor_markers():
     """Seed the in-memory ArUco registry with five floor-level markers
-    matching the basement-rig trace from the issue body."""
+    matching the sample-rig trace from the issue body."""
     parent_server._aruco_markers[:] = [
         {"id": 0, "x": 500.0,  "y": 2280.0, "z": 0.0,
          "rx": 0.0, "ry": 0.0, "rz": 0.0},
@@ -92,7 +92,7 @@ ok(abs(post_median) < 25.0,
 section('Marker disagreement — RANSAC fallback (#692)')
 
 _seed_floor_markers()
-# Synthesize the basement-rig pattern: half the floor at z=-435 (cameras
+# Synthesize the sample-rig pattern: half the floor at z=-435 (cameras
 # disagree on tilt), half at z=+433. Median of offsets ≈ 0 even though
 # the RANSAC plane sits well below z=0.
 import random

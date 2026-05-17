@@ -1,7 +1,7 @@
 # Step 3 — Tracking placement baseline (pre-fix, broken ingest)
 
 **Date:** 2026-04-22  
-**Rig:** basement (post-move)  
+**Rig:** sample (post-move)  
 **Method:** Chair placed centred on each ArUco floor-marker; `POST /api/cameras/<fid>/scan` on cam 12 + cam 13 (cam 16 excluded — #620 RPi-Sly1 /scan broken). Chair bbox centre sent through `POST /api/objects/temporal` with `cameraId`/`pixelBox`/`frameSize` — the broken proportional ingest path at `parent_server.py:7218-7232`.
 
 **Ground truth:** marker XY from `/api/aruco/markers` registry (matches issue #533 exactly).  

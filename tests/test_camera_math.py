@@ -346,7 +346,7 @@ print("\n=== #583 stereo triangulation (feature-matched) ===")
 
 from stereo_engine import StereoEngine
 
-# Two cameras at the basement rig's surveyed positions.
+# Two cameras at the sample rig's surveyed positions.
 eng = StereoEngine()
 eng.add_camera_from_fov("a", 90, 1920, 1080, (830, 120, 1930), [22, 0, 0])
 eng.add_camera_from_fov("b", 90, 1920, 1080, (1275, 120, 1930), [15, 0, 0])

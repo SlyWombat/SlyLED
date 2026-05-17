@@ -64,7 +64,7 @@ Replacing `cv2.solvePnP` with `cv2.findHomography` using only the 5 **floor** ma
 2. Bring cam 12/13's residuals to the same regime as cam 16's at-fit readings (~10-30 mm).
 3. Cam 16 itself likely improves modestly (5 floor markers instead of 2 fitted).
 
-If post-P1 residuals are **not** <50 mm on the same basement rig, the fix is incomplete and we need to revisit the intrinsic calibration step (cam 12 reports `intrinsicSource=calibrated` but the fit behaviour suggests the intrinsics are stale).
+If post-P1 residuals are **not** <50 mm on the same sample rig, the fix is incomplete and we need to revisit the intrinsic calibration step (cam 12 reports `intrinsicSource=calibrated` but the fit behaviour suggests the intrinsics are stale).
 
 ## Data files
 

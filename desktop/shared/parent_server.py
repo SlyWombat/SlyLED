@@ -161,8 +161,13 @@ else:
     DOCS_ROOT = BASE.parent.parent / "docs"
     DOCS_HELP = DOCS_ROOT / "help"
 
-# Persist data under %APPDATA%\SlyLED on Windows; fall back to BASE/data elsewhere
-if os.name == "nt" and os.environ.get("APPDATA"):
+# Persist data under %APPDATA%\SlyLED on Windows; fall back to BASE/data
+# elsewhere. SLYLED_DATA overrides both — tests and the screenshot tools
+# set it to a throwaway directory so importing this module (and its
+# `app.test_client()` writes) can never clobber a live operator project.
+if os.environ.get("SLYLED_DATA"):
+    DATA = Path(os.environ["SLYLED_DATA"])
+elif os.name == "nt" and os.environ.get("APPDATA"):
     DATA = Path(os.environ["APPDATA"]) / "SlyLED" / "data"
 else:
     DATA = BASE / "data"
@@ -5016,7 +5021,7 @@ def api_camera_stage_map(fid):
         if mid is not None:
             marker_map[int(mid)] = m
     # Multi-snapshot aggregation (#stage-map-flaky). ArUco detection is
-    # frame-to-frame noisy; on the basement rig each camera reliably
+    # frame-to-frame noisy; on the sample rig each camera reliably
     # misses one of the three surveyed markers per frame, but across
     # ~5 snapshots every marker gets seen at least once. Accumulate
     # by marker-id, keeping the single cleanest detection per id
@@ -5143,7 +5148,7 @@ def api_camera_stage_map(fid):
     # solvePnP strategy:
     # - Floor markers (all z=0) are coplanar, which creates a pose
     #   ambiguity — SQPNP and ITERATIVE can both converge to a mirror
-    #   solution with the camera under the floor. On the basement rig
+    #   solution with the camera under the floor. On the sample rig
     #   this produced cam z=-58mm from a camera layout-recorded at
     #   z=1920mm. The ITERATIVE solver with a good initial guess avoids
     #   the mirror branch.
@@ -6233,7 +6238,7 @@ def api_camera_settings_auto_tune(fid):
         # sensitive on the orchestrator side — client XHR timeout is 5 min.
         # One-shot retry covers transient V4L2 device hangs that the Pi's
         # driver recovers from after a short release pause (empirically
-        # 1-5 s is enough on the basement rig).
+        # 1-5 s is enough on the sample rig).
         # #685 — hold the per-camera device lock across the snapshot so
         # the 1 Hz live-preview poller can't race the iteration. Lock
         # release sits in `finally` so a snapshot exception still hands
@@ -8397,7 +8402,7 @@ def _apply_marker_z_alignment(cloud, radius_mm=400, min_pts=3, force=False):
     sit at z=0.
 
     Monocular depth models (ZoeDepth, MiDaS, mono-fallback) place the
-    floor wherever their training set's prior puts it — on the basement
+    floor wherever their training set's prior puts it — on the sample
     rig that's a consistent ~250 mm above reality. The surveyed ArUco
     registry gives us the ground truth: every floor-level marker is by
     construction at z=0. For each such marker, gather the cloud points
@@ -9504,7 +9509,7 @@ def api_space_scan_stereo():
     # correction instead of the raw FOV fallback. Surveyed-marker
     # anchoring corrects mount-angle miscalibration that the layout
     # alone can't capture (consumer USB cams + hand-placed tripods
-    # routinely drift 5-10°), which on the basement rig is the
+    # routinely drift 5-10°), which on the sample rig is the
     # difference between 350mm median reprojection error (FOV-only,
     # 500mm threshold needed to get any points) and <50mm.
     want_aruco = bool(body.get("arucoMarkers", False))
@@ -9762,7 +9767,7 @@ def api_space_scan():
     # #591 — open a lighting window before starting the scan. The
     # status endpoint closes it when the scan completes. Without this
     # the monocular depth model's output was being corrupted by DMX
-    # hotspots on walls (see Cam13 r=0.127 in the basement rig test).
+    # hotspots on walls (see Cam13 r=0.127 in the sample rig test).
     lighting_mode = body.get("lighting", "blackout")
     _scan_lighting_window = _ScanLightingWindow(lighting_mode)
     _scan_lighting_window.__enter__()

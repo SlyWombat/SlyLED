@@ -9,7 +9,7 @@
 
 The alignment review assumed calibration worked. It doesn't. The
 beam-spot auto-calibration has never completed reliably on the
-basement rig — discovery misses, BFS chases reflections, the fit
+sample rig — discovery misses, BFS chases reflections, the fit
 is mirror-ambiguous, the fitted model is never verified, and no
 manual fallback is wired. This review's job is to make calibration
 robust enough that Fn 1–3 from the alignment review actually behave
@@ -81,7 +81,7 @@ Two production-relevant jobs for this subsystem:
 Accuracy target (proposed, to be ratified in §8):
 
 - **Camera-assisted auto (tier 1):** aim within 100 mm of a commanded
-  stage-mm point at 3 m throw, 95th percentile, on the basement rig.
+  stage-mm point at 3 m throw, 95th percentile, on the sample rig.
 - **Manual tiers (2–3):** aim within 200 mm at 3 m throw — good
   enough for Fn 1 tracking where the target is itself ±300 mm.
 - **GDTF-trust (tier 4):** aim within the declared `panRange` /
@@ -442,7 +442,7 @@ question(s) it answers.
 16. **Acceptance test as the calibration gate.** Proposal: aim at
     10 known stage points, assert max-error < 100 mm (tier 1), 200
     mm (tier 2–3), no assertion (tier 4). This is what "works"
-    means on the basement rig. Should this be the test that blocks
+    means on the sample rig. Should this be the test that blocks
     "Calibrated" status from being written?
 
 ---
@@ -461,7 +461,7 @@ Each question resolves via one of:
   synthetic samples; assert the fit recovers the known mount. This
   is the math-level verification for §6 Q3 (sign verification), Q6
   (backlash median filtering), Q11 (3-point minimum fit).
-- **Basement-rig live test.** The only way to settle §6 Q1–Q2, Q4,
+- **Sample-rig live test.** The only way to settle §6 Q1–Q2, Q4,
   Q10, Q14–Q16. Rig already has 3 movers + 2 cameras + ArUco
   markers (camera-review §8.3 baseline).
 
@@ -547,7 +547,7 @@ is where the §7.2 pinhole simulation lives.
   consumes it.
 - **Cost / risk.** Worst case 16 × 5 s = 80 s urlopen-stall on a
   wedged camera — must land with Q4's phase timeout.
-- **Open for live-test.** Correct `coarse_steps` for basement coverage
+- **Open for live-test.** Correct `coarse_steps` for sample coverage
   (4 vs 5 vs 6) — tuning question, not a code finding.
 
 #### Q2 — Mandatory dark-reference + per-session re-capture
@@ -571,7 +571,7 @@ is where the §7.2 pinhole simulation lives.
   cameras). Dark frame is per-camera — adding / moving a camera
   mid-session invalidates it, but that's a future concern (§12).
 - **Open for live-test.** Auto-re-capture trigger on ambient change
-  needs the basement-rig ambient-delta distribution to set the
+  needs the sample-rig ambient-delta distribution to set the
   threshold — §7.1.
 
 #### Q3 — Sign-verification probe
@@ -658,7 +658,7 @@ is where the §7.2 pinhole simulation lives.
   narrow lobe, "outside" can exceed camera FOV — fallback rule
   needed (e.g., sample BFS-interior if outside-region is
   camera-invisible). Flag for §7.1.
-- **Open for live-test.** Realistic pass thresholds on basement rig.
+- **Open for live-test.** Realistic pass thresholds on sample rig.
   100 mm is aspirational — §7.1 verification data sets the floor.
 
 #### Q6 — Backlash / oversampling
@@ -681,7 +681,7 @@ is where the §7.2 pinhole simulation lives.
   Median-of-3 tolerates one outlier per probe — strengthens the
   outlier-resistance behaviour already tested at
   `test_parametric_mover.py:248`.
-- **Open for live-test.** Actual backlash magnitude on basement
+- **Open for live-test.** Actual backlash magnitude on sample
   movers — §7.1 drift retest (#7). The synthetic test validates the
   median-filter math under simulated noise.
 
@@ -740,7 +740,7 @@ unless noted.
 - **Cost / risk.** Backend: trivial — an endpoint that flips the flag.
   Frontend: adds operator-facing state to the cal wizard. Low risk.
 - **Open for live-test (§7.1).** Operator's intuition for when to drop
-  to tier 2 on the basement rig — timeout threshold vs "I can see from
+  to tier 2 on the sample rig — timeout threshold vs "I can see from
   the camera frame it's not converging." §7.1 observations set the
   defaults.
 
@@ -839,7 +839,7 @@ unless noted.
   ("3/4 samples captured, next: marker 17").
 - **Cost / risk.** ~40 LOC of validation. The PCA colinearity check
   needs NumPy, which is already a dependency.
-- **Open for live-test.** Pass rate with 3 vs 4 samples on the basement
+- **Open for live-test.** Pass rate with 3 vs 4 samples on the sample
   rig — whether the 4th sample meaningfully reduces fit RMS error.
 
 #### Q12 — Tier-4 GDTF / geometric-only trust
@@ -874,7 +874,7 @@ unless noted.
   banner + badge (~60 LOC). The extraction of #635 (shared IK helper)
   naturally lands this at the same time — the tier enum is what the
   helper returns.
-- **Open for live-test.** Tier-4 residuals on the basement rig (§7.1
+- **Open for live-test.** Tier-4 residuals on the sample rig (§7.1
   step 2, tier-4 baseline). Expected: 200–500 mm error at 3 m throw
   per the review's §1 prior; §7.1 confirms the real number and whether
   that's tolerable for Fn 1 tracking's ±300 mm targets.
@@ -896,7 +896,7 @@ unless noted.
   for this review's implementation phase; file as a separate feature
   ticket.
 - **Open for live-test.** None until a designer actually exports an MVR
-  for the basement rig.
+  for the sample rig.
 
 #### Cross-cutting readiness
 
@@ -911,7 +911,7 @@ unless noted.
 
 ### 8.3 Live-test resolution — placeholder
 
-To be populated after a §7.1 protocol run on the basement rig.
+To be populated after a §7.1 protocol run on the sample rig.
 
 ---
 

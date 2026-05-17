@@ -1,12 +1,12 @@
 # Code review: commit 82320c8 — `fix(#701, #702, #703)`
 
-Reviewed against the basement-rig live-test session (fixture #17, mountedInverted=true) and the operator-pinned IK conventions in `~/.claude/projects/-home-sly-slyled2/memory/project_mover_cal_livetest_2026_04_26.md`.
+Reviewed against the sample-rig live-test session (fixture #17, mountedInverted=true) and the operator-pinned IK conventions in `~/.claude/projects/-home-sly-slyled2/memory/project_mover_cal_livetest_2026_04_26.md`.
 
 Empirical reproductions saved at `/tmp/ik_compare.py` and `/tmp/ik_band_test.py` — both run against the live `mover_calibrator` module + `tools/probe_coverage_3d.py` reference IK.
 
 ---
 
-## P1 — Bug B fix is geometrically wrong; the new code REGRESSES the basement rig
+## P1 — Bug B fix is geometrically wrong; the new code REGRESSES the sample rig
 
 `desktop/shared/mover_calibrator.py:815-829`. `_effective_mount_rotation` returns `[180.0, 0.0, 0.0]` for a `mountedInverted=True` fixture with zero rotation. Downstream this becomes an `Rx(180°)` rotation in `pan_tilt_to_ray` (`euler_xyz_deg_to_matrix` in `desktop/shared/remote_math.py:180`), which **flips both `dy` and `dz`** in mount-local space. The operator-pinned convention is explicit:
 
@@ -24,7 +24,7 @@ Empirical comparison (fixture #17: pos=(600, 0, 1760), home_pan=0.6770, panRange
 
 Operator confirmed in yesterday's session that beam @ home_pan, tilt-down lands at Y > 0 (toward the audience). New IK puts the beam at **Y < 600** for every downward tilt — i.e. behind the fixture's mount point, into the back wall — with x trending toward stage-left as tilt increases. Reference IK puts the beam where the operator saw it.
 
-Repro for `_camera_visible_tilt_band` with realistic basement-rig camera polygons (cameras at front, FOVs cover Y ∈ [2000, 3700] mm; `/tmp/ik_band_test.py`):
+Repro for `_camera_visible_tilt_band` with realistic sample-rig camera polygons (cameras at front, FOVs cover Y ∈ [2000, 3700] mm; `/tmp/ik_band_test.py`):
 
 ```
 Test 1: tilt_range=180 with inverted=True
@@ -34,7 +34,7 @@ Test 2: tilt_range=270 (legacy default) with inverted=True
   RAISED: <same message>
 ```
 
-The IK error means even with the legacy 540/270 defaults preserved, the band still can't be computed. **Cal cannot start at all on the basement rig** with this branch. The combination of (1) Bug B's wrong-direction IK and (2) #703's new fail-loud raise turns a previously-silent miscalibration into a hard cal-start failure.
+The IK error means even with the legacy 540/270 defaults preserved, the band still can't be computed. **Cal cannot start at all on the sample rig** with this branch. The combination of (1) Bug B's wrong-direction IK and (2) #703's new fail-loud raise turns a previously-silent miscalibration into a hard cal-start failure.
 
 Fix sketch: mirror `tools/probe_coverage_3d.py:floor_hit` — flip `dz` only when inverted (in mount-local space, before any pan rotation) instead of injecting `rx=180`. The reference implementation also uses pan-relative-to-home (`delta_pan_deg = (pan_norm - home_pan_norm) * pan_range`), which is why home_pan=0.6770 doesn't land 95° off-axis in that path.
 
@@ -136,4 +136,4 @@ The four `CalibrationError` raises in `_camera_visible_tilt_band` (lines 882-921
 
 ## Recommended action
 
-Roll back the `rx=180` substitution in `_effective_mount_rotation` and replace with a dz-only flip in mount-local space (mirror `tools/probe_coverage_3d.py:floor_hit`). Add a regression test that asserts `_ray_floor_hit(fx_pos=(600,0,1760), fx_rot=[0,0,0], home_pan=0.5, tilt=0.7, pan_range=540, tilt_range=180, mounted_inverted=True)` lands **+Y** (forward of the fixture), not -Y. Update `tests/test_battleship_camera_visible.py:126-142` to assert the new raise behaviour. Re-test against the basement rig before declaring #702 closed.
+Roll back the `rx=180` substitution in `_effective_mount_rotation` and replace with a dz-only flip in mount-local space (mirror `tools/probe_coverage_3d.py:floor_hit`). Add a regression test that asserts `_ray_floor_hit(fx_pos=(600,0,1760), fx_rot=[0,0,0], home_pan=0.5, tilt=0.7, pan_range=540, tilt_range=180, mounted_inverted=True)` lands **+Y** (forward of the fixture), not -Y. Update `tests/test_battleship_camera_visible.py:126-142` to assert the new raise behaviour. Re-test against the sample rig before declaring #702 closed.

@@ -8,7 +8,7 @@ emulator's exit code so a corpus failure breaks the regression run.
 
 The emulator runs offline against ``tests/fixtures/cal/corpus.json`` —
 no orchestrator, no camera node, no rig required. Cheap to run
-weekly; cheaper than catching the same regression on the basement
+weekly; cheaper than catching the same regression on the sample
 rig.
 """
 

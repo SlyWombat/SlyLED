@@ -327,7 +327,7 @@ first and then fits affine — see PR-5 for details.
   synthetic fixtures (downward-mounted, sideways, asymmetric tilt range).
   IK + `solve_dmx_per_degree` tests already exist from PR-1.5.
 - `tests/test_parent.py` — `GET /api/fixtures/<fid>/coverage` returns a sane
-  polygon for the basement fid 14 fixture.
+  polygon for the sample fid 14 fixture.
 - `tests/test_unified_3d.py` (Playwright) — opening the calibration card with
   a fid that has Home+Secondary shows the 3D viewport and a non-empty floor
   overlay.
@@ -422,13 +422,13 @@ to proceed with fewer probes — solver handles >=8 points).
 - `tests/test_coverage_math.py` — `working_area` clip and `sample_grid` margin
   enforcement (synthetic polygons).
 - `tests/test_parent.py` — `/smart/preview` returns `abortReason: "no_overlap"`
-  when fixture cone misses every camera; returns 16 points for the basement
+  when fixture cone misses every camera; returns 16 points for the sample
   test layout.
 
 ### Merge gate
 
 - Live-test: SMART preview on fid 14 and fid 17 shows a working area and 16
-  points that look correct against the basement floor.
+  points that look correct against the sample floor.
 
 ---
 
@@ -680,7 +680,7 @@ This is a deletion-only PR — no new behavior, no regressions.
 - All tests pass. CI green.
 - `grep -r "all-auto\|markers-only\|_mover_cal_thread_v2\|battleship" desktop/ spa/`
   returns nothing.
-- All fixtures in the basement test stage produce a `method:"smart"`
+- All fixtures in the sample test stage produce a `method:"smart"`
   record with `confidence: "high"`.
 
 ---

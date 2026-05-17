@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """test_cal_home_anchor.py — #691.
 
-Three independent fixes from the basement-rig trace 2026-04-26:
+Three independent fixes from the sample-rig trace 2026-04-26:
 
   Bug 1 — cal warm-start reads f["orientation"]["homePan"] (pre-#687
           field). The actual Set Home anchor lives at top-level

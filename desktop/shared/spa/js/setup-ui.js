@@ -542,7 +542,7 @@ function _pcAdvancedScan(){
   // scan cloud feeds the mover calibration wizard's stage-geometry model,
   // so *coverage + accuracy* directly drives beam-aim quality.
   //
-  // Empirically measured 2026-04-21 on the basement rig (2 ArUco-cal
+  // Empirically measured 2026-04-21 on the sample rig (2 ArUco-cal
   // cameras, textureless walls):
   //   ZoeDepth (host):  4976 pts / 24s   metric, dense coverage
   //   Mono DA-V2 Metric: 2622 pts / 22s   metric, ok coverage
@@ -692,7 +692,7 @@ function _pcAdvRefresh(){
   });
   // #594 — probe ZoeDepth availability once per modal open. When the
   // host has torch + transformers, promote ZoeDepth to Recommended.
-  // Empirical 2026-04-21 basement rig: ZoeDepth 4976 pts vs mono 2622
+  // Empirical 2026-04-21 sample rig: ZoeDepth 4976 pts vs mono 2622
   // vs stereo 52 pts — ZoeDepth dominates on coverage AND accuracy, so
   // it's the default pick whenever it's available.
   if(!_pcAdvZoeProbed){
