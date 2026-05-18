@@ -69,11 +69,11 @@ powershell -File desktop\windows\run.ps1
 
 Open `http://localhost:8080` in Chrome or Edge. The SPA loads on the Dashboard tab.
 
-![SPA at launch showing Dashboard tab](screenshots/walkthrough-533/01-launch.png)
+![SPA at launch showing Dashboard tab](screenshots/walkthrough/01-launch.png)
 
 Go to **Settings** tab → **Project** → click **New Project**, then name it (e.g. "Walkthrough Show").
 
-![New project dialog](screenshots/walkthrough-533/02-new-project.png)
+![New project dialog](screenshots/walkthrough/02-new-project.png)
 
 ---
 
@@ -92,7 +92,7 @@ Click **Save**. The layout canvas will resize to match these dimensions.
 
 Go to the **Setup** tab. In the **DMX Nodes** section, click **Discover Nodes**. SlyLED broadcasts an ArtPoll packet; Art-Net bridges on the network reply within 3 seconds.
 
-![Setup tab after hardware discovery — Art-Net node shown](screenshots/walkthrough-533/03a-discover-hardware.png)
+![Setup tab after hardware discovery — Art-Net node shown](screenshots/walkthrough/03a-discover-hardware.png)
 
 Any discovered nodes appear in the list with their IP, port, and universe count. If your bridge is not found:
 - Confirm it is powered and on the same LAN subnet
@@ -108,8 +108,8 @@ Go to **Settings** → **DMX**:
 1. **Universe Routing**: Set Universe 1 → your Art-Net node IP (or leave as broadcast `255.255.255.255` to reach all nodes on the subnet).
 2. Click **Start Engine**. The status indicator turns green ("Running").
 
-![DMX engine configuration — universe routing and start](screenshots/walkthrough-533/03b-dmx-engine.png)
-![DMX routing — universe 1 assigned to bridge](screenshots/walkthrough-533/03-dmx-routing.png)
+![DMX engine configuration — universe routing and start](screenshots/walkthrough/03b-dmx-engine.png)
+![DMX routing — universe 1 assigned to bridge](screenshots/walkthrough/03-dmx-routing.png)
 
 > **Important:** The engine must be running before adding DMX fixtures or running calibration. If you stop and restart the orchestrator, re-start the engine here.
 
@@ -131,7 +131,7 @@ Go to the **Setup** tab → click **+ DMX Fixture**. The fixture wizard opens.
 - Profile: your moving head profile
 - Click **Create Fixture**
 
-![Moving head 1 added to Setup tab](screenshots/walkthrough-533/04a-mh1-sly-added.png)
+![Moving head 1 added to Setup tab](screenshots/walkthrough/04a-mh1-sly-added.png)
 
 **Fixture 2 (stage right):**
 - Name: `MH2 SR`
@@ -139,7 +139,7 @@ Go to the **Setup** tab → click **+ DMX Fixture**. The fixture wizard opens.
 - Profile: same profile
 - Click **Create Fixture**
 
-![Moving head 2 added to Setup tab](screenshots/walkthrough-533/04b-mh2-sly-added.png)
+![Moving head 2 added to Setup tab](screenshots/walkthrough/04b-mh2-sly-added.png)
 
 ---
 
@@ -150,7 +150,7 @@ Add any additional fixtures (e.g. a 350W wash spot):
 - Universe: 1, Start Address: 33
 - Profile: your spot/wash profile
 
-![350W spot added to Setup tab](screenshots/walkthrough-533/05-350w-spot-added.png)
+![350W spot added to Setup tab](screenshots/walkthrough/05-350w-spot-added.png)
 
 ---
 
@@ -168,12 +168,12 @@ Alternatively, enter the camera's IP manually and click **Add**.
 - IP: your second camera's IP
 - Name: `Cam Right`
 
-![Two cameras added to Setup tab](screenshots/walkthrough-533/06-cameras-added.png)
+![Two cameras added to Setup tab](screenshots/walkthrough/06-cameras-added.png)
 
 Each camera appears with online/offline status. Click **Snap** to verify the live feed.
 
-![Camera 1 snapshot — left-side view](screenshots/walkthrough-533/06-cam1_left_hires.png)
-![Camera 2 snapshot — right-side view](screenshots/walkthrough-533/06-cam2_right.png)
+![Camera 1 snapshot — left-side view](screenshots/walkthrough/06-cam1_left_hires.png)
+![Camera 2 snapshot — right-side view](screenshots/walkthrough/06-cam2_right.png)
 
 > **Note:** Camera discover sometimes returns 0 nodes on the first broadcast due to UDP timing. If no cameras are found, wait 3 seconds and click **Discover** again. This is a known intermittency (#542) being addressed in a future release.
 
@@ -199,9 +199,9 @@ Switch to the **Layout** tab. All added fixtures appear in the left sidebar as "
 
 Click **Save** after entering coordinates for each fixture.
 
-![Layout tab — fixtures placed at initial positions](screenshots/walkthrough-533/04c-layout-initial.png)
-![Layout tab — all fixtures positioned](screenshots/walkthrough-533/04d-layout-positions.png)
-![Camera fixtures positioned on layout](screenshots/walkthrough-533/06c-cameras-positioned.png)
+![Layout tab — fixtures placed at initial positions](screenshots/walkthrough/04c-layout-initial.png)
+![Layout tab — all fixtures positioned](screenshots/walkthrough/04d-layout-positions.png)
+![Camera fixtures positioned on layout](screenshots/walkthrough/06c-cameras-positioned.png)
 
 > **Tip:** Use 3D view (toggle in the layout toolbar) to visually verify that movers are elevated on the truss and aimed downward toward the stage floor.
 
@@ -218,7 +218,7 @@ Go to the **Layout** tab → click **+ Object** in the toolbar.
 
 Click **Save**. The object appears as a labeled rectangle on the canvas.
 
-![Music stand object on layout](screenshots/walkthrough-533/08-music-object.png)
+![Music stand object on layout](screenshots/walkthrough/08-music-object.png)
 
 ---
 
@@ -228,8 +228,8 @@ Before the moving heads can accurately track positions, calibrate each one. This
 
 In the **Layout** tab, double-click `MH1 SL`. Click **Calibrate**.
 
-![Calibration buttons in fixture edit dialog](screenshots/walkthrough-533/07-calibrate-buttons.png)
-![Calibration wizard UI](screenshots/walkthrough-533/07-calibrate-ui.png)
+![Calibration buttons in fixture edit dialog](screenshots/walkthrough/07-calibrate-buttons.png)
+![Calibration wizard UI](screenshots/walkthrough/07-calibrate-ui.png)
 
 - Select **Green** as the beam color (good contrast on dark floors)
 - Click **Start Calibration**
@@ -252,7 +252,7 @@ Go to the **Actions** tab. You'll create two actions: a static aim and a figure-
 5. **Dimmer:** 255
 6. Click **Save Action**
 
-![Aim Red action — aimed at stage center](screenshots/walkthrough-533/09-aim-red.png)
+![Aim Red action — aimed at stage center](screenshots/walkthrough/09-aim-red.png)
 
 **Action 2: Figure Eight (dynamic sweep)**
 1. Click **+ New Action**
@@ -262,7 +262,7 @@ Go to the **Actions** tab. You'll create two actions: a static aim and a figure-
 5. **Cycle Time:** 4000 ms
 6. Click **Save Action**
 
-![Figure Eight track action](screenshots/walkthrough-533/11d-figure8-action.png)
+![Figure Eight track action](screenshots/walkthrough/11d-figure8-action.png)
 
 ---
 
@@ -272,7 +272,7 @@ Go to the **Runtime** tab (labeled **Shows** in some versions). Click **+ New Ti
 
 A dialog prompts for the name — enter `Walkthrough Show`. A second dialog prompts for duration — enter `120` (seconds). Click OK.
 
-![Timeline editor with tracks](screenshots/walkthrough-533/11e-timeline.png)
+![Timeline editor with tracks](screenshots/walkthrough/11e-timeline.png)
 
 **Add tracks:**
 
@@ -296,12 +296,12 @@ Watch the **Runtime** view:
 - The figure-eight pattern moves through the stage space
 - DMX output is sent via Art-Net to the physical fixtures
 
-![Runtime view with animated beam cones](screenshots/walkthrough-533/11f-runtime.png)
+![Runtime view with animated beam cones](screenshots/walkthrough/11f-runtime.png)
 
 To test a blackout:
 - Click **Stop**, then fire a **Blackout** action from the Settings → Group Control panel
 
-![Blackout state — all beams off](screenshots/walkthrough-533/10-blackout.png)
+![Blackout state — all beams off](screenshots/walkthrough/10-blackout.png)
 
 ---
 
@@ -311,7 +311,7 @@ Go to **Settings** → **Project** → click **Export**. A `.slyshow` file is do
 
 To reload: Settings → Project → **Import** → select the `.slyshow` file.
 
-![Project saved — all state bundled in .slyshow file](screenshots/walkthrough-533/12-saved.png)
+![Project saved — all state bundled in .slyshow file](screenshots/walkthrough/12-saved.png)
 
 ---
 

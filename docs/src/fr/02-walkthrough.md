@@ -20,11 +20,11 @@ powershell -File desktop\windows\run.ps1
 
 Ouvrez `http://localhost:8080` dans Chrome ou Edge. Le SPA se charge sur l'onglet Tableau de bord.
 
-![SPA au lancement affichant l'onglet Tableau de bord](screenshots/walkthrough-533/01-launch.png)
+![SPA au lancement affichant l'onglet Tableau de bord](screenshots/walkthrough/01-launch.png)
 
 Allez dans l'onglet **Paramètres** → **Projet** → cliquez sur **Nouveau projet**, puis nommez-le (p. ex. « Walkthrough Show »).
 
-![Boîte de dialogue de nouveau projet](screenshots/walkthrough-533/02-new-project.png)
+![Boîte de dialogue de nouveau projet](screenshots/walkthrough/02-new-project.png)
 
 ---
 
@@ -43,7 +43,7 @@ Cliquez sur **Enregistrer**. Le canevas de disposition se redimensionnera pour c
 
 Allez dans l'onglet **Setup**. Dans la section **DMX Nodes**, cliquez sur **Discover Nodes**. SlyLED diffuse un paquet ArtPoll ; les ponts Art-Net du réseau répondent sous 3 secondes.
 
-![Onglet Setup après la découverte matérielle — nœud Art-Net affiché](screenshots/walkthrough-533/03a-discover-hardware.png)
+![Onglet Setup après la découverte matérielle — nœud Art-Net affiché](screenshots/walkthrough/03a-discover-hardware.png)
 
 Tous les nœuds découverts apparaissent dans la liste avec leur IP, leur port et leur nombre d'univers. Si votre pont n'est pas trouvé :
 - Confirmez qu'il est alimenté et sur le même sous-réseau LAN
@@ -59,8 +59,8 @@ Allez dans **Paramètres** → **DMX** :
 1. **Routage des univers :** réglez l'univers 1 → votre IP de nœud Art-Net (ou laissez en diffusion `255.255.255.255` pour atteindre tous les nœuds du sous-réseau).
 2. Cliquez sur **Start Engine**. L'indicateur d'état devient vert (« Running »).
 
-![Configuration du moteur DMX — routage des univers et démarrage](screenshots/walkthrough-533/03b-dmx-engine.png)
-![Routage DMX — univers 1 assigné au pont](screenshots/walkthrough-533/03-dmx-routing.png)
+![Configuration du moteur DMX — routage des univers et démarrage](screenshots/walkthrough/03b-dmx-engine.png)
+![Routage DMX — univers 1 assigné au pont](screenshots/walkthrough/03-dmx-routing.png)
 
 > **Important :** le moteur doit être en marche avant d'ajouter des appareils DMX ou de lancer un étalonnage. Si vous arrêtez et redémarrez l'orchestrateur, redémarrez le moteur ici.
 
@@ -82,7 +82,7 @@ Allez dans l'onglet **Setup** → cliquez sur **+ DMX Fixture**. L'assistant d'a
 - Profil : votre profil de projecteur motorisé
 - Cliquez sur **Create Fixture**
 
-![Projecteur motorisé 1 ajouté à l'onglet Setup](screenshots/walkthrough-533/04a-mh1-sly-added.png)
+![Projecteur motorisé 1 ajouté à l'onglet Setup](screenshots/walkthrough/04a-mh1-sly-added.png)
 
 **Appareil 2 (côté jardin, stage right) :**
 - Nom : `MH2 SR`
@@ -90,7 +90,7 @@ Allez dans l'onglet **Setup** → cliquez sur **+ DMX Fixture**. L'assistant d'a
 - Profil : même profil
 - Cliquez sur **Create Fixture**
 
-![Projecteur motorisé 2 ajouté à l'onglet Setup](screenshots/walkthrough-533/04b-mh2-sly-added.png)
+![Projecteur motorisé 2 ajouté à l'onglet Setup](screenshots/walkthrough/04b-mh2-sly-added.png)
 
 ---
 
@@ -101,7 +101,7 @@ Ajoutez tout appareil supplémentaire (p. ex. un spot wash 350 W) :
 - Univers : 1, adresse de départ : 33
 - Profil : votre profil spot/wash
 
-![Spot 350 W ajouté à l'onglet Setup](screenshots/walkthrough-533/05-350w-spot-added.png)
+![Spot 350 W ajouté à l'onglet Setup](screenshots/walkthrough/05-350w-spot-added.png)
 
 ---
 
@@ -119,12 +119,12 @@ Sinon, entrez l'IP de la caméra manuellement et cliquez sur **Add**.
 - IP : l'IP de votre seconde caméra
 - Nom : `Cam Right`
 
-![Deux caméras ajoutées à l'onglet Setup](screenshots/walkthrough-533/06-cameras-added.png)
+![Deux caméras ajoutées à l'onglet Setup](screenshots/walkthrough/06-cameras-added.png)
 
 Chaque caméra apparaît avec un statut en ligne/hors ligne. Cliquez sur **Snap** pour vérifier le flux en direct.
 
-![Capture caméra 1 — vue côté gauche](screenshots/walkthrough-533/06-cam1_left_hires.png)
-![Capture caméra 2 — vue côté droit](screenshots/walkthrough-533/06-cam2_right.png)
+![Capture caméra 1 — vue côté gauche](screenshots/walkthrough/06-cam1_left_hires.png)
+![Capture caméra 2 — vue côté droit](screenshots/walkthrough/06-cam2_right.png)
 
 > **Remarque :** la découverte caméra renvoie parfois 0 nœud à la première diffusion à cause du timing UDP. Si aucune caméra n'est trouvée, attendez 3 secondes et cliquez de nouveau sur **Discover**. C'est une intermittence connue (#542) en cours de correction dans une prochaine version.
 
@@ -150,9 +150,9 @@ Passez à l'onglet **Layout**. Tous les appareils ajoutés apparaissent dans la 
 
 Cliquez sur **Enregistrer** après avoir entré les coordonnées de chaque appareil.
 
-![Onglet Layout — appareils placés aux positions initiales](screenshots/walkthrough-533/04c-layout-initial.png)
-![Onglet Layout — tous les appareils positionnés](screenshots/walkthrough-533/04d-layout-positions.png)
-![Appareils caméra positionnés sur la disposition](screenshots/walkthrough-533/06c-cameras-positioned.png)
+![Onglet Layout — appareils placés aux positions initiales](screenshots/walkthrough/04c-layout-initial.png)
+![Onglet Layout — tous les appareils positionnés](screenshots/walkthrough/04d-layout-positions.png)
+![Appareils caméra positionnés sur la disposition](screenshots/walkthrough/06c-cameras-positioned.png)
 
 > **Astuce :** utilisez la vue 3D (bascule dans la barre d'outils de disposition) pour vérifier visuellement que les projecteurs motorisés sont élevés sur le pont et dirigés vers le sol de la scène.
 
@@ -169,7 +169,7 @@ Allez dans l'onglet **Layout** → cliquez sur **+ Object** dans la barre d'outi
 
 Cliquez sur **Enregistrer**. L'objet apparaît comme un rectangle étiqueté sur le canevas.
 
-![Objet pupitre sur la disposition](screenshots/walkthrough-533/08-music-object.png)
+![Objet pupitre sur la disposition](screenshots/walkthrough/08-music-object.png)
 
 ---
 
@@ -179,8 +179,8 @@ Avant que les projecteurs motorisés puissent suivre des positions avec précisi
 
 Dans l'onglet **Layout**, double-cliquez sur `MH1 SL`. Cliquez sur **Calibrate**.
 
-![Boutons d'étalonnage dans la boîte de dialogue d'édition d'appareil](screenshots/walkthrough-533/07-calibrate-buttons.png)
-![Interface de l'assistant d'étalonnage](screenshots/walkthrough-533/07-calibrate-ui.png)
+![Boutons d'étalonnage dans la boîte de dialogue d'édition d'appareil](screenshots/walkthrough/07-calibrate-buttons.png)
+![Interface de l'assistant d'étalonnage](screenshots/walkthrough/07-calibrate-ui.png)
 
 - Sélectionnez **Green** comme couleur de faisceau (bon contraste sur les sols sombres)
 - Cliquez sur **Start Calibration**
@@ -203,7 +203,7 @@ Allez dans l'onglet **Actions**. Vous allez créer deux actions : une visée sta
 5. **Dimmer :** 255
 6. Cliquez sur **Save Action**
 
-![Action Aim Red — visée au centre de la scène](screenshots/walkthrough-533/09-aim-red.png)
+![Action Aim Red — visée au centre de la scène](screenshots/walkthrough/09-aim-red.png)
 
 **Action 2 : Figure Eight (balayage dynamique)**
 1. Cliquez sur **+ New Action**
@@ -213,7 +213,7 @@ Allez dans l'onglet **Actions**. Vous allez créer deux actions : une visée sta
 5. **Cycle Time :** 4000 ms
 6. Cliquez sur **Save Action**
 
-![Action de suivi Figure Eight](screenshots/walkthrough-533/11d-figure8-action.png)
+![Action de suivi Figure Eight](screenshots/walkthrough/11d-figure8-action.png)
 
 ---
 
@@ -223,7 +223,7 @@ Allez dans l'onglet **Runtime** (libellé **Shows** dans certaines versions). Cl
 
 Une boîte de dialogue demande le nom — entrez `Walkthrough Show`. Une seconde boîte de dialogue demande la durée — entrez `120` (secondes). Cliquez sur OK.
 
-![Éditeur de chronologie avec pistes](screenshots/walkthrough-533/11e-timeline.png)
+![Éditeur de chronologie avec pistes](screenshots/walkthrough/11e-timeline.png)
 
 **Ajouter des pistes :**
 
@@ -247,12 +247,12 @@ Observez la vue **Runtime** :
 - Le motif en huit se déplace dans l'espace de la scène
 - La sortie DMX est envoyée via Art-Net aux appareils physiques
 
-![Vue Runtime avec cônes de faisceau animés](screenshots/walkthrough-533/11f-runtime.png)
+![Vue Runtime avec cônes de faisceau animés](screenshots/walkthrough/11f-runtime.png)
 
 Pour tester un blackout :
 - Cliquez sur **Stop**, puis déclenchez une action **Blackout** depuis le panneau Paramètres → Contrôle de groupe
 
-![État blackout — tous les faisceaux éteints](screenshots/walkthrough-533/10-blackout.png)
+![État blackout — tous les faisceaux éteints](screenshots/walkthrough/10-blackout.png)
 
 ---
 
@@ -262,7 +262,7 @@ Allez dans **Paramètres** → **Projet** → cliquez sur **Export**. Un fichier
 
 Pour recharger : Paramètres → Projet → **Import** → sélectionnez le fichier `.slyshow`.
 
-![Projet enregistré — tout l'état groupé dans le fichier .slyshow](screenshots/walkthrough-533/12-saved.png)
+![Projet enregistré — tout l'état groupé dans le fichier .slyshow](screenshots/walkthrough/12-saved.png)
 
 ---
 
