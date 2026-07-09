@@ -1,0 +1,195 @@
+# Issue #904 — CI that actually runs the Python test suites.
+#
+# Two jobs:
+#
+#  1. "unit" — every PR + push to main. Fast, no browser: the flask
+#     test-client suites, the aim/ IK gates, the wire-parity suites,
+#     and the docs validators. ~5 min.
+#
+#  2. "regression" — weekly cron (+ manual dispatch). Installs
+#     Playwright chromium and runs tests/regression/run_all.py (the
+#     stage-setup → layout → bake → 3D-runtime end-to-end flow). NOT
+#     --live-rig: those suites need a calibrated physical mover + two
+#     camera nodes and self-skip when SLYLED_LIVE_RIG is unset.
+#
+# Data isolation (#907): SLYLED_DATA is set at the job level so no
+# spawned parent_server can ever touch a real project dir. The suites
+# below also self-isolate (tests/conftest.py, run_all.py), but the job
+# env is what covers direct `python3 tests/test_foo.py` script runs.
+
+name: python-tests
+
+on:
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - 'tests/**'
+      - 'main/**'          # UDP protocol headers — wire-parity suites read these
+      - 'tools/docs/**'
+      - '.github/workflows/python-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - 'tests/**'
+      - 'main/**'
+      - 'tools/docs/**'
+      - '.github/workflows/python-tests.yml'
+  schedule:
+    - cron: '0 5 * * 0'    # Sunday 05:00 UTC — weekly regression sweep
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# Keyed on event_name too so a push to main never cancels a running
+# weekly regression sweep (both would otherwise share refs/heads/main).
+concurrency:
+  group: python-tests-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  unit:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SLYLED_DATA: ${{ runner.temp }}/slyled-data
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history: git restore-mtime needs commit dates
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        # No single requirements.txt covers the test surface —
+        # desktop/windows/requirements.txt includes Windows-only deps
+        # (pystray, sounddevice) that fail headless, and the docker
+        # image installs only flask+qrcode. This is the verified set the
+        # suites below pass with (mirrors a dev machine minus hardware
+        # extras); pyserial/paramiko/cryptography gate optional
+        # parent_server paths that test_parent.py exercises.
+        run: |
+          pip install "flask>=3.0" "qrcode>=7.0" requests numpy \
+            opencv-python-headless "cryptography>=41.0" pyyaml \
+            "paramiko>=3.0" "pyserial>=3.5"
+
+      - name: Restore commit-time file mtimes
+        # tools/docs/validate_screenshots.py's freshness check and
+        # drift_check.py's review-freshness check compare file mtimes.
+        # A fresh checkout stamps every file with checkout time (order
+        # effectively random), which makes both checks meaningless/
+        # flaky. git restore-mtime resets each file to its last-commit
+        # time, which is the semantic the checks want in CI.
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q git-restore-mtime
+          git restore-mtime
+
+      - name: Core unit suites
+        run: |
+          python3 -X utf8 tests/test_persistence_atomic.py
+          python3 -X utf8 tests/test_893_cors.py
+          python3 -X utf8 tests/test_896_fused_id_rebind.py
+          python3 -X utf8 tests/test_mmwave_wire_parity.py
+
+      - name: Aim gates (tests/aim/)
+        run: |
+          python3 -X utf8 tests/aim/test_sphere.py
+          python3 -X utf8 tests/aim/test_stage_frame.py
+          python3 -X utf8 tests/aim/test_profile_mechanics.py
+          python3 -X utf8 tests/aim/test_routes.py
+
+      - name: Wire-parity suites (tests/test_parity_*.py)
+        # Glob loop must tolerate matching nothing — the parity corpus
+        # is still being added to.
+        run: |
+          for f in tests/test_parity_*.py; do
+            [ -e "$f" ] || continue
+            echo "== $f"
+            python3 -X utf8 "$f"
+          done
+
+      - name: test_parent.py (known-failure allowlist)
+        # test_parent.py currently has exactly 2 known-red assertions
+        # out of 777 (775 pass as of 2026-07-09):
+        #   - "#739 import → fixtures.json matches memory" — open bug
+        #     #739 (import → persist), red until that bug is fixed.
+        #   - "OTA trigger returns version" — expects the pre-#832
+        #     mocked release-cache version ('6.1.0'); the endpoint now
+        #     reads firmware/registry.json (with an outbound fetch of
+        #     GitHub-main's registry attempted first), so the expected
+        #     value is stale regardless of network.
+        # Policy (option a from #904): run the full suite unmodified and
+        # fail this step if EITHER the pass count regresses below 775
+        # or any failure appears that is not on the allowlist. When
+        # #739 / the OTA expectation are fixed, shrink the allowlist.
+        run: |
+          python3 -X utf8 tests/test_parent.py | tee "$RUNNER_TEMP/test_parent.out" || true
+          python3 - "$RUNNER_TEMP/test_parent.out" <<'EOF'
+          import io, re, sys
+          out = io.open(sys.argv[1], encoding="utf-8").read()
+          ALLOW = {
+              "#739 import → fixtures.json matches memory",
+              "OTA trigger returns version",
+          }
+          fails = [m.group(1).rstrip()
+                   for m in re.finditer(r"^\s*\[FAIL\] (.+?)(?:  \(.*)?$", out, re.M)]
+          summary = re.search(r"(\d+) passed, (\d+) failed out of (\d+) tests", out)
+          if not summary:
+              sys.exit("test_parent.py produced no summary line — suite crashed?")
+          passed, failed, total = map(int, summary.groups())
+          unexpected = [f for f in fails if f not in ALLOW]
+          print(f"summary: {passed}/{total} passed, {failed} failed; "
+                f"allowlisted failures seen: {sorted(set(fails) & ALLOW)}")
+          if unexpected:
+              sys.exit("UNEXPECTED failures (not on #739/#832 allowlist):\n  "
+                       + "\n  ".join(unexpected))
+          if passed < 775:
+              sys.exit(f"pass count regressed: {passed} < 775")
+          print("test_parent.py OK (known failures only)")
+          EOF
+
+      - name: Docs — screenshot validation
+        run: python3 tools/docs/validate_screenshots.py
+
+      - name: Docs — drift parity checks
+        # --mode parity = EN↔FR filename parity + FR review freshness
+        # (deterministic; needs the restored mtimes above). The PR-diff
+        # drift nudge already runs in docs-drift.yml — not duplicated
+        # here.
+        run: python3 tools/docs/drift_check.py --mode parity
+
+  regression:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    continue-on-error: false
+    env:
+      SLYLED_DATA: ${{ runner.temp }}/slyled-data
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install "flask>=3.0" "qrcode>=7.0" requests numpy \
+            opencv-python-headless "cryptography>=41.0" pyyaml \
+            "paramiko>=3.0" "pyserial>=3.5" playwright
+          playwright install --with-deps chromium
+
+      - name: Regression suite (stage setup → layout → bake → 3D runtime)
+        # run_all.py spawns one parent_server per suite and the
+        # Playwright suites drive headless chromium against it — fully
+        # self-managed, no external display or rig needed. Live-rig
+        # suites self-skip (no --live-rig / SLYLED_LIVE_RIG here).
+        run: python3 -X utf8 tests/regression/run_all.py

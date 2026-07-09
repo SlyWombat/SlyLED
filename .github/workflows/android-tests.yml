@@ -1,0 +1,55 @@
+# Issue #904 — Android JVM unit tests on every PR / push that touches
+# android/**. Unit tests only (android/app/src/test/ — JUnit4 +
+# coroutines-test + mockwebserver): no emulator, no instrumented tests.
+# Release builds stay on the operator-driven build_release.ps1 path.
+
+name: android-tests
+
+on:
+  pull_request:
+    paths:
+      - 'android/**'
+      - '.github/workflows/android-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - '.github/workflows/android-tests.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Run unit tests
+        working-directory: android
+        # gradlew is committed without the executable bit (Windows-first
+        # repo), so restore it before invoking.
+        run: |
+          chmod +x gradlew
+          ./gradlew test --no-daemon
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-unit-test-reports
+          path: android/app/build/reports/tests/
+          if-no-files-found: ignore
+          retention-days: 7
