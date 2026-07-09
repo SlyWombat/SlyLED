@@ -1,0 +1,33 @@
+# arduino-cli config for the MMwave (ESP32-C61) build ONLY.
+#
+# Isolated-toolchain decision (docs/design/mmwave_tracking.md §4.2, #902):
+# the C61 needs arduino-esp32 core >= 3.3.5, and the stable boards' core
+# installation must never move. This config keeps the C61 core in its own
+# data directory so `arduino-cli --config-file arduino-cli-mmwave.yaml ...`
+# cannot touch the default toolchain the stable targets build with.
+#
+# Usage (from repo root):
+#   arduino-cli --config-file arduino-cli-mmwave.yaml core update-index
+#   arduino-cli --config-file arduino-cli-mmwave.yaml core install esp32:esp32
+#   <graft esp32c61-libs — see below; no index publishes it as of 2026-07>
+#   arduino-cli --config-file arduino-cli-mmwave.yaml compile \
+#     --fqbn "esp32:esp32:esp32c61:FlashSize=8M,PartitionScheme=default_8MB" mmwave
+#
+# esp32c61-libs graft (design doc §2.4): no package index ships the C61
+# prebuilt libs. Download c61_a9de5ec5b9_compile_skeleton.zip from
+# https://github.com/pioarduino/platform-espressif32/releases/tag/c61-skeleton
+# and copy its esp32-arduino-libs/esp32c61/* into
+#   .arduino-mmwave/data/packages/esp32/tools/esp32c61-libs/<core version>/
+# Replace with the official tool when Espressif publishes one.
+
+directories:
+  user: .
+  data: .arduino-mmwave/data
+  downloads: .arduino-mmwave/downloads
+
+# Espressif's own index — required: the copy of esp32:esp32 in Arduino's
+# default index omits the esp32c61-libs tool dependency (observed 2026-07
+# with 3.3.10: every chip's libs installed except the C61's).
+board_manager:
+  additional_urls:
+    - https://espressif.github.io/arduino-esp32/package_esp32_index.json

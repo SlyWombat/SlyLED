@@ -70,6 +70,8 @@ The C61 is fresh silicon. What that means concretely:
 
 - **Arduino core support only landed in arduino-esp32 v3.3.5 (Dec 2025)**; ESP-IDF needs ≥5.4. The FQBN will be `esp32:esp32:esp32c61` once a ≥3.3.5 core is installed.
 - The repo does **not** pin a core version — every stable ESP32 target (`esp32`, `esp32s3` gyro, `esp32-dmx`) builds against whatever core is installed on the build box, and those targets are stable and shall stay that way. **Decision (v2): the C61 core lives in an isolated arduino-cli installation** (separate `ARDUINO_DIRECTORIES_DATA`, own `arduino-cli-mmwave.yaml`) so the stable targets' core never moves. MMwave carries its own toolchain the way the Giga targets already carry `arduino:mbed_giga` — a different platform that happens to share the repo. Setting this up is Issue 1 in §12.
+- **Toolchain gotcha found 2026-07-09 (the "newer board" risk made concrete):** the C61 board definition ships in core 3.3.x, but **no package index — Arduino's, Espressif's stable, or dev — publishes the `esp32c61-libs` prebuilt-libraries tool**, so an out-of-the-box `esp32:esp32:esp32c61` compile fails with `bootloader_qio_80m.elf does not exist`. Working recipe (proven, sketch compiles clean): install core 3.3.10 into the isolated data dir, then graft the C61 libs from pioarduino's compile skeleton — download `c61_a9de5ec5b9_compile_skeleton.zip` from `pioarduino/platform-espressif32` releases (tag `c61-skeleton`; contents are the standard per-chip layout built against IDF 5.5) and copy `esp32-arduino-libs/esp32c61/*` into `.arduino-mmwave/data/packages/esp32/tools/esp32c61-libs/3.3.10/`. Replace with the official tool the moment Espressif publishes one; a self-built alternative is `esp32-arduino-lib-builder` master (Docker), which lists `esp32c61` as a target.
+- **Board options:** compile with `esp32:esp32:esp32c61:FlashSize=8M,PartitionScheme=default_8MB` — the N8R2 has 8 MB flash and the default 4 MB scheme leaves the sketch at 78% of a 1.2 MB app slot with no dual-OTA headroom.
 - Ecosystem mileage is low. Its sibling C6 shipped a WiFi FTM errata (couldn't act as initiator) — a cautionary tale about assuming listed features work on fresh silicon. Every C61 feature this design touches gets bench-validated before the design relies on it (§10).
 - Upside of the new chip: WiFi 6 OFDMA/TWT helps precisely when many small nodes share one AP, and the node's workload (UART parse + UDP) is core-level, so library maturity barely matters. No FastLED involvement on this board.
 
@@ -129,7 +131,7 @@ Unknown CMDs are ignored by old firmware/orchestrators, so this is back-compat-s
 
 | Cmd | Name | Direction | Payload |
 |---|---|---|---|
-| 0x70 | MMW_TARGETS | node→parent | 26 bytes: `seq(u16) count(u8) flags(u8)` + 3 × `{x i16 mm, y i16 mm, speed i16 cm/s, res u16}` — fixed 3 slots, matching the protocol's fixed-size-struct style; unused slots zeroed |
+| 0x70 | MMW_TARGETS | node→parent | 28 bytes: `seq(u16) count(u8) flags(u8)` + 3 × `{x i16 mm, y i16 mm, speed i16 cm/s, res u16}` — fixed 3 slots, matching the protocol's fixed-size-struct style; unused slots zeroed. Source of truth: `mmwave/MmwProtocol.h::MmwTargetsPayload` |
 | 0x71 | MMW_CONFIG | parent→node | reserved (mode switch, report-rate cap) — not in v1 unless bench validation shows a need |
 
 Coordinates in MMW_TARGETS are **sensor-frame** (Rd-03D local axes, MSB-sign already decoded to two's-complement by the node). Sent only when `count > 0`, plus a 1 Hz empty heartbeat frame; node health otherwise rides the existing STATUS_REQ/RESP.

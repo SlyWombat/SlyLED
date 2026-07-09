@@ -112,3 +112,6 @@ tests/regression/runtime_3d_stopped.png
 tests/regression/view-toggle-shots/
 tests/user/
 
+
+# MMwave isolated arduino-cli toolchain (cores/downloads — never commit)
+.arduino-mmwave/
