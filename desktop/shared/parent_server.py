@@ -722,6 +722,14 @@ _nxt_a = max((a["id"] for a in _actions),  default=-1) + 1
 _nxt_fix = max((f["id"] for f in _fixtures),   default=-1) + 1
 _nxt_obj = max((f["id"] for f in _objects),    default=-1) + 1
 _temporal_objects = []  # in-memory only, never saved
+# #896 — fused-away temporal id → {"to": surviving id, "at": timestamp}.
+# _fuse_temporal_objects collapses a cluster into the lowest id; the
+# other ids vanish from _temporal_objects, but the cameras that created
+# them keep PUTting /api/objects/<old id>/pos. This map forwards those
+# updates to the survivor (and the response's "objectId" lets the
+# camera rebind). Chains are collapsed at insert; pruned on reap.
+_fused_id_map = {}
+_FUSED_ID_TTL_S = 60.0
 _nxt_tmp = 10000       # temporal IDs start at 10000 to avoid collision
 _nxt_sfx = max((f["id"] for f in _spatial_fx),  default=-1) + 1
 _nxt_tl  = max((t["id"] for t in _timelines),  default=-1) + 1
@@ -10877,6 +10885,13 @@ def _reap_temporal_objects():
     global _temporal_objects
     _temporal_objects = [o for o in _temporal_objects if o.get("_expiresAt", 0) > now]
     _fuse_temporal_objects()
+    # #896 — prune fused-id forwardings whose survivor has itself
+    # expired, or that are simply old (cameras rebind within a tick or
+    # two; anything older is a leak).
+    live_ids = {o.get("id") for o in _temporal_objects}
+    for old_id in [k for k, ent in _fused_id_map.items()
+                   if ent["to"] not in live_ids or now - ent["at"] > _FUSED_ID_TTL_S]:
+        del _fused_id_map[old_id]
 
 
 # Q3/#629/#630 — multi-camera fusion.
@@ -11004,6 +11019,19 @@ def _fuse_temporal_objects():
         # a brief blind-zone between cameras doesn't break the identity.
         merged["_lastXyMm"] = [px / total_w, py / total_w]
         merged["_lastSeenAt"] = now
+        # #896 — the non-surviving cluster members' ids vanish from
+        # _temporal_objects here, but their cameras keep addressing
+        # them via PUT /api/objects/<old id>/pos. Record a forwarding
+        # so those updates land on the survivor instead of 404ing
+        # until TTL. Collapse chains at insert so lookups are one hop.
+        merged_id = merged.get("id")
+        fused_away = {obj.get("id") for _i, obj in cluster
+                      if obj.get("id") is not None and obj.get("id") != merged_id}
+        for oid in fused_away:
+            _fused_id_map[oid] = {"to": merged_id, "at": now}
+        for ent in _fused_id_map.values():
+            if ent["to"] in fused_away:
+                ent["to"] = merged_id
         fused.append(merged)
     _temporal_objects = fused
 
@@ -11081,9 +11109,19 @@ def api_object_pos(oid):
             else:
                 pos = list(anchors["center"])
     with _lock:
+        target_id = oid
         obj = next((o for o in _objects if o["id"] == oid), None)
         if not obj:
             obj = next((o for o in _temporal_objects if o["id"] == oid), None)
+        if not obj:
+            # #896 — the id may have been fused away by
+            # _fuse_temporal_objects. Forward the update to the
+            # surviving object and report its id back so the camera
+            # can rebind its track instead of 404-flogging until TTL.
+            fwd = _fused_id_map.get(oid)
+            if fwd:
+                target_id = fwd["to"]
+                obj = next((o for o in _temporal_objects if o["id"] == target_id), None)
         if not obj:
             return jsonify(err="not found"), 404
         obj.setdefault("transform", {"pos": [0,0,0], "rot": [0,0,0], "scale": [2000,1500,1]})["pos"] = [float(p) for p in pos]
@@ -11097,7 +11135,10 @@ def api_object_pos(oid):
             }
         if obj.get("_temporal") and obj.get("ttl"):
             obj["_expiresAt"] = time.time() + obj["ttl"]
-    return jsonify(ok=True, method=method_tier)
+    # #896 — "objectId" is included on every success (not just fused
+    # forwards) so callers can uniformly rebind to whatever id the
+    # orchestrator now tracks this object under.
+    return jsonify(ok=True, method=method_tier, objectId=target_id)
 
 @app.post("/api/objects/temporal")
 def api_objects_temporal_create():
