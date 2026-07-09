@@ -138,32 +138,16 @@ console.log(JSON.stringify(out));
         if vec_close(js, py):
             strict += 1
             continue
-        # Tolerate ONLY the documented pan-mirror drift: JS(panNorm) must
-        # equal the reference evaluated at the mirrored pan deviation
-        # (homePanNorm is fixed at 0.5 here, so mirror = 1 - panNorm).
-        py_mirror = server_aim(case["rot"], 1.0 - case["pan"], case["tilt"],
-                               case["panRange"], case["tiltRange"])
-        if case["pan"] != 0.5 and vec_close(js, py_mirror):
-            drift += 1
-            continue
+        # #918 fixed the pan-mirror drift this gate once tolerated — the gate
+        # now runs strict: any divergence at all is a failure.
         failures.append(
             f"rot={case['rot']} pan={case['pan']} tilt={case['tilt']} "
             f"ranges=({case['panRange']},{case['tiltRange']}): "
-            f"js={js} py={py} (not the documented pan-mirror either)")
+            f"js={js} py={py}")
 
     total = len(cases)
-    print(f"_aimUnitVector parity: {total} cases — {strict} strict matches, "
-          f"{drift} matched only under the documented pan-mirror drift.")
-    if drift:
-        print()
-        print("*** KNOWN DRIFT (#906): app.js _aimUnitVector pan deviation is")
-        print("*** sign-flipped vs parent_server.py /api/fixtures/live and the")
-        print("*** #783 convention (pan>0 must sweep toward +X). Currently")
-        print("*** harmless — the helper has no SPA callers — but the fix is")
-        print("*** one line at app.js ~269:")
-        print("***   var dx1 = dx*cp + dy*sp;  var dy1 = -dx*sp + dy*cp;")
-        print("*** After fixing, this gate flips to all-strict automatically.")
-        print()
+    print(f"_aimUnitVector parity: {total} cases — {strict} strict matches "
+          f"(strict mode since #918; drift counter retired: {drift}).")
     if failures:
         print(f"FAILED ({len(failures)}):")
         for f in failures[:25]:

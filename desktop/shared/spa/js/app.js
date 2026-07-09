@@ -261,13 +261,15 @@ function _aimUnitVector(rotation, panNorm, tiltNorm, panRange, tiltRange, invert
     dy = Math.cos(dt);
     dz = -Math.sin(dt);
   }
-  // Pan deviation about local Z (CCW from above; matches mover_
-  // calibrator._ray_floor_hit: dx = -dy_local * sin_p, dy = dy_local * cos_p).
+  // Pan deviation about local Z. #918: pan>0 sweeps toward +X per the #783
+  // convention (matches _canonical_aim_from_pan_tilt, camera_math.
+  // pan_tilt_to_ray, aim/stage_frame.py). The previous direction (citing
+  // mover_calibrator, deleted in #784) swept -X — a dormant sign flip.
   var hp = (homePanNorm != null) ? homePanNorm : 0.5;
   var dp = (panNorm - hp) * panRange * Math.PI / 180;
   var cp = Math.cos(dp), sp = Math.sin(dp);
-  var dx1 = dx * cp - dy * sp;
-  var dy1 = dx * sp + dy * cp;
+  var dx1 = dx * cp + dy * sp;
+  var dy1 = -dx * sp + dy * cp;
   var dz1 = dz;
   // Mount rotation [rx, ry, rz] as Rx * Ry * Rz applied to (dx1, dy1, dz1).
   // Match `remote_math.euler_xyz_deg_to_matrix` exactly so the SPA's

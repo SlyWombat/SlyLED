@@ -6,7 +6,7 @@
 //      uv type → UV_TOGGLE).
 //   3. Name-match fallback for dimmer / intensity / speed / reset types.
 //
-// The shared snapshot-test corpus (tests/fixtures/profiles/) must produce
+// The shared snapshot-test corpus (tests/fixtures/shortcut_corpus/) must produce
 // identical output across the SPA JS, Android Kotlin, and this Swift port.
 
 import Foundation
