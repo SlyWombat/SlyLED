@@ -38,6 +38,11 @@ volatile uint16_t childActSt[MAX_STR_PER_CHILD];
 volatile uint16_t childActEn[MAX_STR_PER_CHILD];
 volatile uint8_t  childBrightness = 255;
 
+// #897 — /test/pin request state: written by the HTTP handler, consumed by
+// the ESP32 LED task so only one core ever drives FastLED.show().
+volatile uint8_t  childPinTestIdx = 0;
+volatile uint8_t  childPinTestSeq = 0;
+
 ChildRunnerStep   childRunner[MAX_CHILD_STEPS];
 volatile uint8_t  childStepCount    = 0;
 volatile uint32_t childRunnerStart  = 0;

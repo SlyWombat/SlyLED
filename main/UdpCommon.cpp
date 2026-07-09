@@ -390,28 +390,18 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
 
 #if defined(BOARD_ESP32) && !defined(BOARD_DMX_BRIDGE)
   } else if (strstr(req, " /test/pin")) {
-    // Pin test: /test/pin?s=0 — flashes ONLY the selected string via FastLED
-    // Uses string index (not GPIO pin) to address the correct LED range
+    // Pin test: /test/pin?s=0 — flashes ONLY the selected string via FastLED.
+    // Uses string index (not GPIO pin) to address the correct LED range.
+    // #897 — routed through ledTask like /test (childActSeq pattern): this
+    // handler runs on core 1 and calling FastLED.show() here raced ledTask's
+    // show() on core 0 (two unsynchronized RMT users → corrupted WS2812B
+    // timing). Set the request state, respond immediately; ledTask performs
+    // the R/G/B flash sequence.
     uint8_t si = 0;
     char* pp = strstr(req, "?s=");
     if (pp) si = (uint8_t)atoi(pp + 3);
-    // Compute LED range for this string
-    uint16_t st = 0, en = 0;
-    for (uint8_t j = 0; j < childCfg.stringCount && j <= si; j++) {
-      if (j == si) { en = st + childCfg.strings[j].ledCount - 1; break; }
-      st += childCfg.strings[j].ledCount;
-    }
-    if (en >= NUM_LEDS) en = NUM_LEDS - 1;
-    // Flash R/G/B on just this string's LEDs
-    fill_solid(leds, NUM_LEDS, CRGB::Black);
-    for (uint16_t i = st; i <= en; i++) leds[i] = CRGB(255, 0, 0);
-    FastLED.show(); delay(500);
-    for (uint16_t i = st; i <= en; i++) leds[i] = CRGB(0, 255, 0);
-    FastLED.show(); delay(500);
-    for (uint16_t i = st; i <= en; i++) leds[i] = CRGB(0, 0, 255);
-    FastLED.show(); delay(500);
-    fill_solid(leds, NUM_LEDS, CRGB::Black);
-    FastLED.show();
+    childPinTestIdx = si;
+    childPinTestSeq++;
     sendJsonOk(client);
 #endif
 #ifdef BOARD_DMX_BRIDGE

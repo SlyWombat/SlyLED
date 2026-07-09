@@ -102,6 +102,12 @@ extern volatile uint16_t childActSt[MAX_STR_PER_CHILD];
 extern volatile uint16_t childActEn[MAX_STR_PER_CHILD];
 extern volatile uint8_t  childBrightness; // global brightness 0-255
 
+// #897 — /test/pin request: HTTP handler sets the string index then bumps
+// childPinTestSeq; the ESP32 LED task snapshots and runs the R/G/B flash.
+// Keeps FastLED.show() single-user — the handler must never call it directly.
+extern volatile uint8_t  childPinTestIdx;
+extern volatile uint8_t  childPinTestSeq;
+
 // Runner execution state — written by UDP handler, read by LED task
 extern ChildRunnerStep   childRunner[MAX_CHILD_STEPS];
 extern volatile uint8_t  childStepCount;

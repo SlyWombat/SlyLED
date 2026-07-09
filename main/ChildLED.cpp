@@ -598,6 +598,7 @@ void ledTask(void* parameter) {
   bool          offRendered = false;
   uint8_t       prevRunStep = 0xFF;
   unsigned long stepStartMs = 0;
+  uint8_t       prevPinSeq  = 0;
 
   while (true) {
 
@@ -611,6 +612,34 @@ void ledTask(void* parameter) {
         fill_solid(leds, NUM_LEDS, CRGB::Black);
         showSafe(); delay(SYNC_BLINK_MS);
       }
+      offRendered = true;
+      continue;
+    }
+
+    // ── 0b. Pin test (#897) — seq-then-snapshot, same pattern as the
+    // immediate-action block below. The /test/pin HTTP handler used to call
+    // FastLED.show() itself from core 1 while this task showed from core 0:
+    // two unsynchronized RMT users. Now the handler only sets the request
+    // state and this task performs the R/G/B flash sequence.
+    if (childPinTestSeq != prevPinSeq) {
+      prevPinSeq = childPinTestSeq;
+      uint8_t si = childPinTestIdx;
+      // Compute LED range for this string (string index, not GPIO pin)
+      uint16_t st = 0, en = 0;
+      for (uint8_t j = 0; j < childCfg.stringCount && j <= si; j++) {
+        if (j == si) { en = st + childCfg.strings[j].ledCount - 1; break; }
+        st += childCfg.strings[j].ledCount;
+      }
+      if (en >= NUM_LEDS) en = NUM_LEDS - 1;
+      static const CRGB pinCols[3] = { CRGB(255, 0, 0), CRGB(0, 255, 0),
+                                       CRGB(0, 0, 255) };
+      for (uint8_t ci = 0; ci < 3; ci++) {
+        fill_solid(leds, NUM_LEDS, CRGB::Black);
+        for (uint16_t i = st; i <= en; i++) leds[i] = pinCols[ci];
+        showSafe(); delay(500);
+      }
+      fill_solid(leds, NUM_LEDS, CRGB::Black);
+      showSafe();
       offRendered = true;
       continue;
     }
