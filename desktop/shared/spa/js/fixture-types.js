@@ -362,8 +362,15 @@ function _ftDmxRuntimeUpdate(grp, ctx){
   // matches the wire while a claim/track is running. Fall back to
   // the baked preview when no live entry exists yet.
   var liveEntry=_emuLive&&_emuLive.data?_emuLive.data[String(fid)]:null;
+  if(liveEntry&&typeof liveEntry!=='object')liveEntry=null;
+  // #920 — only let the live entry shadow the baked preview when it is
+  // actually driving output (claim held, active wire output, or a
+  // canonical live aim). /api/fixtures/live returns an entry for EVERY
+  // fixture; with no Art-Net/sACN engine writing it is all zeros and
+  // would otherwise mask the baked-preview tint (idle cone forever, #810).
+  var liveDriving=!!(liveEntry&&(liveEntry.active||liveEntry.source==='claim'||Array.isArray(liveEntry.aim)));
   var src=null;
-  if(liveEntry&&typeof liveEntry==='object')src=liveEntry;
+  if(liveDriving)src=liveEntry;
   else if(pd&&typeof pd==='object')src=pd;
 
   // Update sphere + cone color

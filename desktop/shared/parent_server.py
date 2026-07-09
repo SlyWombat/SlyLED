@@ -1616,12 +1616,12 @@ def _udp_listener():
 # (precedent: _handle_autobri_push / _handle_gyro_start_packet). `hdr` is
 # the parsed (magic, ver, cmd) header triple; `data` is the FULL datagram,
 # payload at offset 8 — struct offsets are unchanged from the wire.
-# Each docstring carries its legacy dispatch line verbatim: the source-
-# inspection contract suites (tests/test_819_gyro_stop_split.py,
-# test_825_gyro_handshake.py, test_867_gyro_off.py, test_869_gyro_aim_
-# wizard.py, test_872_claim_lifecycle.py) slice handler bodies by those
-# lines, and the `and len(data) >= N` text doubles as documentation of the
-# _UDP_DISPATCH minimum-length gate.
+# Each docstring carries its legacy dispatch line verbatim as documentation
+# of the pre-#901 wire condition (the `and len(data) >= N` text documents
+# the _UDP_DISPATCH minimum-length gate). Historical note: these lines were
+# briefly load-bearing anchors for the source-inspection contract suites
+# (test_819/825/867/869/872), which #920 migrated to
+# inspect.getsource(_handle_*) — the docstrings are documentation only now.
 
 
 def _handle_action_event(ip, port, hdr, data):
