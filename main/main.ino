@@ -61,6 +61,7 @@
 #include "GyroIMU.h"
 #include "GyroUdp.h"
 #include "GyroUI.h"
+#include "OtaUpdate.h"   // #895 — gyro OTA needs the rollback-confirm hooks too
 #ifdef GYRO_TEST_BOARD
 #include "TestGyro.h"
 #endif
@@ -108,6 +109,11 @@ void setup() {
 #endif
   connectWiFi();     // blocking — LOGO visible during connect
   gyroUdpInit();
+  // #895 — without this a gyro OTA image stays ESP_OTA_IMG_PENDING_VERIFY
+  // forever: the bootloader rolls back on the next reset even though the
+  // new build is healthy. Mirrors the ESP32 child (otaConfirmBoot in
+  // setup, otaCheckConfirm in loop).
+  otaConfirmBoot();
 
 #elif defined(BOARD_GIGA)
   memset(children,  0, sizeof(children));
@@ -349,6 +355,7 @@ void loop() {
   gyroUIUpdate();
   gyroUdpUpdate();
 #endif
+  otaCheckConfirm();  // #895 — confirm OTA partition after 60 s stable boot
   yield();  // feed watchdog between heavy operations
   handleClient();
   delay(5);

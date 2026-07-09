@@ -14,7 +14,11 @@
 extern WiFiServer    server;
 extern WiFiUDP       ntpUDP;
 extern WiFiUDP       cmdUDP;
-extern uint8_t       udpBuf[160];   // header(8) + PongPayload(131) = 139 max; 160 for safety
+// #895 — sized for the largest inbound datagram: OTA_UPDATE is header(8) +
+// ver(3) + urlLen(2) + url(≤255) + sha256(64) = 332 max (a 160-byte buffer
+// silently capped OTA URLs at ~83 chars). Next largest is PONG: header(8) +
+// PongPayload(134) = 142.
+extern uint8_t       udpBuf[384];
 extern char          _txbuf[256];   // scratch buffer for sendBuf()
 extern unsigned long ntpEpoch;
 extern unsigned long ntpMillis;

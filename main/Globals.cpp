@@ -9,7 +9,7 @@
 WiFiServer   server(80);
 WiFiUDP      ntpUDP;
 WiFiUDP      cmdUDP;
-uint8_t      udpBuf[160];
+uint8_t      udpBuf[384];   // #895 — see Globals.h for sizing
 char         _txbuf[256];
 unsigned long ntpEpoch  = 0;
 unsigned long ntpMillis = 0;

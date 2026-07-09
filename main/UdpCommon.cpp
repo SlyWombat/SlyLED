@@ -28,6 +28,7 @@
 
 #ifdef BOARD_GYRO
 #include "GyroUdp.h"
+#include "OtaUpdate.h"   // #895 — gyro exposes POST /ota too
 #endif
 
 // ── handleUdpPacket ───────────────────────────────────────────────────────────
@@ -165,7 +166,20 @@ void pollUDP() {
 #endif
 
   int plen = cmdUDP.parsePacket();
-  if (plen <= 0 || plen > (int)sizeof(udpBuf)) return;
+  if (plen <= 0) return;
+  if (plen > (int)sizeof(udpBuf)) {
+    // #895 — oversized datagrams used to vanish without a trace (an OTA
+    // command with a long URL just never "arrived"). Still dropped, but
+    // now loudly.
+    if (Serial) {
+      Serial.print(F("UDP: dropped oversized datagram ("));
+      Serial.print(plen);
+      Serial.print(F(" > "));
+      Serial.print((int)sizeof(udpBuf));
+      Serial.println(F(" bytes)"));
+    }
+    return;
+  }
   udpRxCount++;
 
   IPAddress sender = cmdUDP.remoteIP();
@@ -323,7 +337,12 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
     } else {
       sendJsonErr(client, "ssid required");
     }
+#endif  // BOARD_CHILD
 
+#if defined(BOARD_CHILD) || defined(BOARD_GYRO)
+  // #895 — /ota also exposed on the gyro: it is the board where a bricked
+  // build otherwise needs BOOT-button bootloader surgery, so it must not
+  // depend on UDP alone for recovery.
   } else if (isPost && strstr(req, " /ota ")) {
     // OTA update: POST /ota with JSON body {"url":"...","sha256":"...","major":5,"minor":2}
     char otaBody[512] = {0};
@@ -349,16 +368,16 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
       bool ok = otaStartUpdate(otaUrl, otaSha, otaMaj, otaMin, otaPat);
       if (ok) {
         delay(500);
-        #ifdef BOARD_ESP32
-        ESP.restart();
-        #elif defined(BOARD_D1MINI)
+        #if defined(BOARD_ESP32) || defined(BOARD_D1MINI) || defined(BOARD_GYRO)
         ESP.restart();
         #endif
       }
     } else {
       sendJsonErr(client, "url required");
     }
+#endif  // BOARD_CHILD || BOARD_GYRO
 
+#ifdef BOARD_CHILD
   } else if (isPost && strstr(req, " /reboot ")) {
     sendJsonOk(client);
     client.flush();
