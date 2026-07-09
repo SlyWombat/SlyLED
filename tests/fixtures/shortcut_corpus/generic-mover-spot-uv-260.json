@@ -1,0 +1,137 @@
+{
+  "id": "generic-mover-spot-uv-260",
+  "name": "Generic Mover Spot UV 260",
+  "manufacturer": "Generic",
+  "category": "moving-head",
+  "channels": [
+    {
+      "offset": 0,
+      "name": "Pan",
+      "type": "pan",
+      "default": 128,
+      "capabilities": [
+        { "range": [0, 255], "type": "Pan", "label": "Pan 0-540deg" }
+      ]
+    },
+    {
+      "offset": 1,
+      "name": "Pan Fine",
+      "type": "pan-fine",
+      "default": 0,
+      "capabilities": [
+        { "range": [0, 255], "type": "Pan", "label": "Pan fine" }
+      ]
+    },
+    {
+      "offset": 2,
+      "name": "Tilt",
+      "type": "tilt",
+      "default": 128,
+      "capabilities": [
+        { "range": [0, 255], "type": "Tilt", "label": "Tilt 0-270deg" }
+      ]
+    },
+    {
+      "offset": 3,
+      "name": "Tilt Fine",
+      "type": "tilt-fine",
+      "default": 0,
+      "capabilities": [
+        { "range": [0, 255], "type": "Tilt", "label": "Tilt fine" }
+      ]
+    },
+    {
+      "offset": 4,
+      "name": "Color Wheel",
+      "type": "color-wheel",
+      "default": 0,
+      "capabilities": [
+        { "range": [0, 255], "type": "WheelSlot", "label": "Color wheel slots" }
+      ]
+    },
+    {
+      "offset": 5,
+      "name": "Gobo Wheel",
+      "type": "gobo",
+      "default": 0,
+      "capabilities": [
+        { "range": [0, 255], "type": "WheelSlot", "label": "Gobo wheel slots" }
+      ]
+    },
+    {
+      "offset": 6,
+      "name": "Strobe",
+      "type": "strobe",
+      "default": 0,
+      "capabilities": [
+        {
+          "range": [0, 3],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Closed",
+          "label": "Shutter closed"
+        },
+        {
+          "range": [4, 7],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Open",
+          "label": "Open (no strobe)"
+        },
+        {
+          "range": [8, 215],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Strobe",
+          "label": "Strobe slow to fast"
+        },
+        {
+          "range": [216, 255],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Pulse",
+          "label": "Pulse effect"
+        }
+      ]
+    },
+    {
+      "offset": 7,
+      "name": "Dimmer",
+      "type": "dimmer",
+      "default": 0,
+      "capabilities": [
+        { "range": [0, 255], "type": "Intensity", "label": "Dimmer 0-100%" }
+      ]
+    },
+    {
+      "offset": 8,
+      "name": "UV",
+      "type": "uv",
+      "default": 0,
+      "capabilities": [
+        { "range": [0, 255], "type": "ColorIntensity", "label": "UV LED ring 0-100%" }
+      ]
+    },
+    {
+      "offset": 9,
+      "name": "Red",
+      "type": "red",
+      "default": 0,
+      "shortcut": "color-swatch",
+      "capabilities": [
+        { "range": [0, 255], "type": "ColorIntensity", "label": "Red ring 0-100% (no blue channel exists — swatch must be dropped)" }
+      ]
+    },
+    {
+      "offset": 10,
+      "name": "Green",
+      "type": "green",
+      "default": 0,
+      "shortcut": "color-swatch",
+      "capabilities": [
+        { "range": [0, 255], "type": "ColorIntensity", "label": "Green ring 0-100% (second explicit swatch annotation — dedup/gate path)" }
+      ]
+    }
+  ],
+  "channelCount": 11,
+  "colorMode": "wheel",
+  "beamWidth": 14,
+  "panRange": 540,
+  "tiltRange": 270
+}

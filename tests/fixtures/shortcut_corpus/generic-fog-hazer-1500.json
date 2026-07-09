@@ -1,0 +1,102 @@
+{
+  "id": "generic-fog-hazer-1500",
+  "name": "Generic Fog Hazer 1500",
+  "manufacturer": "Generic",
+  "category": "fog",
+  "channels": [
+    {
+      "offset": 0,
+      "name": "Fog Output",
+      "type": "dimmer",
+      "default": 0,
+      "capabilities": [
+        {
+          "range": [0, 5],
+          "type": "NoFunction",
+          "label": "Off"
+        },
+        {
+          "range": [6, 255],
+          "type": "Effect",
+          "label": "Fog output low to high"
+        }
+      ]
+    },
+    {
+      "offset": 1,
+      "name": "Blower Speed",
+      "type": "speed",
+      "default": 128,
+      "capabilities": [
+        {
+          "range": [0, 255],
+          "type": "Speed",
+          "label": "Blower fan speed slow to fast"
+        }
+      ]
+    },
+    {
+      "offset": 2,
+      "name": "Pump Clean",
+      "type": "reset",
+      "default": 0,
+      "capabilities": [
+        {
+          "range": [0, 9],
+          "type": "NoFunction",
+          "label": "No function"
+        },
+        {
+          "range": [10, 255],
+          "type": "Maintenance",
+          "label": "Pump cleaning cycle"
+        }
+      ]
+    },
+    {
+      "offset": 3,
+      "name": "Fog Strobe Macro",
+      "type": "macro",
+      "default": 0,
+      "capabilities": [
+        {
+          "range": [0, 255],
+          "type": "Effect",
+          "label": "Burst patterns (name-heuristic must NOT match: macro type is ineligible)"
+        }
+      ]
+    },
+    {
+      "offset": 4,
+      "name": "Shutter",
+      "type": "strobe",
+      "default": 0,
+      "capabilities": [
+        {
+          "range": [0, 255],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Open",
+          "label": "Open only — no Strobe range, so no strobe shortcut"
+        }
+      ]
+    },
+    {
+      "offset": 5,
+      "name": "Timer Interval",
+      "type": "effect-speed",
+      "default": 0,
+      "capabilities": [
+        {
+          "range": [0, 255],
+          "type": "EffectSpeed",
+          "label": "Timed output interval"
+        }
+      ]
+    }
+  ],
+  "channelCount": 6,
+  "colorMode": "none",
+  "beamWidth": 0,
+  "panRange": 0,
+  "tiltRange": 0
+}

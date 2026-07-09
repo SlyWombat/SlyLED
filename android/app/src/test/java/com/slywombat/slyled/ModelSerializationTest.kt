@@ -175,10 +175,16 @@ class ModelSerializationTest {
 
     @Test
     fun `ActionTypes constants`() {
-        assertEquals(14, ActionTypes.names.size)
+        // #906 — 19 entries, one per wire type 0-18, matching
+        // parent_server.py _ACTION_NAMES (the stale 14 predated the DMX +
+        // Track types; cross-platform gate: tests/test_parity_action_names.py).
+        assertEquals(19, ActionTypes.names.size)
         assertEquals("Blackout", ActionTypes.names[ActionTypes.BLACKOUT])
         assertEquals("Solid", ActionTypes.names[ActionTypes.SOLID])
         assertEquals("Gradient", ActionTypes.names[ActionTypes.GRADIENT])
+        assertEquals("Color Wipe", ActionTypes.names[ActionTypes.WIPE])
+        assertEquals("Color Wheel", ActionTypes.names[ActionTypes.DMX_COLOR_WHEEL])
+        assertEquals("Track", ActionTypes.names[ActionTypes.TRACK])
         assertEquals(4, ActionTypes.directionNames.size)
         assertEquals(8, ActionTypes.paletteNames.size)
     }

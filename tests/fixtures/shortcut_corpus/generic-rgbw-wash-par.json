@@ -1,0 +1,112 @@
+{
+  "id": "generic-rgbw-wash-par",
+  "name": "Generic RGBW Wash Par",
+  "manufacturer": "Generic",
+  "category": "wash",
+  "channels": [
+    {
+      "offset": 0,
+      "name": "Master Dimmer",
+      "type": "dimmer",
+      "default": 255,
+      "capabilities": [
+        {
+          "range": [0, 255],
+          "type": "Intensity",
+          "label": "Dimmer 0-100%"
+        }
+      ]
+    },
+    {
+      "offset": 1,
+      "name": "Red",
+      "type": "red",
+      "default": 0,
+      "shortcut": "color-swatch",
+      "capabilities": [
+        {
+          "range": [0, 255],
+          "type": "ColorIntensity",
+          "label": "Red 0-100%"
+        }
+      ]
+    },
+    {
+      "offset": 2,
+      "name": "Green",
+      "type": "green",
+      "default": 0,
+      "capabilities": [
+        {
+          "range": [0, 255],
+          "type": "ColorIntensity",
+          "label": "Green 0-100%"
+        }
+      ]
+    },
+    {
+      "offset": 3,
+      "name": "Blue",
+      "type": "blue",
+      "default": 0,
+      "capabilities": [
+        {
+          "range": [0, 255],
+          "type": "ColorIntensity",
+          "label": "Blue 0-100%"
+        }
+      ]
+    },
+    {
+      "offset": 4,
+      "name": "White",
+      "type": "white",
+      "default": 0,
+      "capabilities": [
+        {
+          "range": [0, 255],
+          "type": "ColorIntensity",
+          "label": "White 0-100%"
+        }
+      ]
+    },
+    {
+      "offset": 5,
+      "name": "Strobe",
+      "type": "strobe",
+      "default": 0,
+      "capabilities": [
+        {
+          "range": [0, 9],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Open",
+          "label": "Open (no strobe)"
+        },
+        {
+          "range": [10, 255],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Strobe",
+          "label": "Strobe slow to fast"
+        }
+      ]
+    },
+    {
+      "offset": 6,
+      "name": "Color Macro",
+      "type": "macro",
+      "default": 0,
+      "capabilities": [
+        {
+          "range": [0, 255],
+          "type": "Effect",
+          "label": "Built-in color macros"
+        }
+      ]
+    }
+  ],
+  "channelCount": 7,
+  "colorMode": "rgbw",
+  "beamWidth": 25,
+  "panRange": 0,
+  "tiltRange": 0
+}

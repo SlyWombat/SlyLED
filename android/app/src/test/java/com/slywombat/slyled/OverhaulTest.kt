@@ -96,18 +96,20 @@ class OverhaulTest {
 
     @Test
     fun `deserialize ShowPlaylist`() {
-        val input = """{"order":[2,0,1,3],"loop":true}"""
+        // #906 — the wire field is `loopAll` (parent_server.py _show_playlist);
+        // this test predated the model rename and no longer compiled.
+        val input = """{"order":[2,0,1,3],"loopAll":true}"""
         val pl = json.decodeFromString<ShowPlaylist>(input)
         assertEquals(listOf(2, 0, 1, 3), pl.order)
-        assertTrue(pl.loop)
+        assertTrue(pl.loopAll)
     }
 
     @Test
     fun `deserialize ShowPlaylist empty`() {
-        val input = """{"order":[],"loop":false}"""
+        val input = """{"order":[],"loopAll":false}"""
         val pl = json.decodeFromString<ShowPlaylist>(input)
         assertTrue(pl.order.isEmpty())
-        assertFalse(pl.loop)
+        assertFalse(pl.loopAll)
     }
 
     @Test
@@ -186,10 +188,10 @@ class OverhaulTest {
 
     @Test
     fun `GET show playlist`() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"order":[1,0,2],"loop":true}"""))
+        server.enqueue(MockResponse().setBody("""{"order":[1,0,2],"loopAll":true}"""))
         val pl = api.getShowPlaylist()
         assertEquals(3, pl.order.size)
-        assertTrue(pl.loop)
+        assertTrue(pl.loopAll)
         assertEquals("/api/show/playlist", server.takeRequest().path)
     }
 

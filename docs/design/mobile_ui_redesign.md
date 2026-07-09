@@ -352,6 +352,8 @@ The v1 design doc recommended Compose Multiplatform with ad-hoc provisioning. Af
 
 The trade-off is a dual UI codebase: every new control on Android must be ported to Swift, and `FixtureShortcuts.kt` has a literal Swift twin in `FixtureShortcuts.swift`. The mitigation is a shared snapshot-test corpus across Pytest (SPA), JUnit (Android), and XCTest (iOS) — the corpus is the contract; the three implementations must round-trip it identically.
 
+> **Implemented (#906).** The corpus lives at `tests/fixtures/shortcut_corpus/` (profile JSONs + `expected.json`, the latter generated *from* the JS reference resolver — never hand-edited). The three gates: `tests/test_fixture_shortcuts.py` (JS via Node), `android/app/src/test/java/com/slywombat/slyled/FixtureShortcutsTest.kt` (`gradlew test`), and `ios/SlyLEDTests/FixtureShortcutsTests.swift` (the `SlyLEDTests` XCTest target in `ios/project.yml`; corpus bundled as test resources). When a resolver diverges, fix the Kotlin/Swift twin to match the JS.
+
 If the dual-codebase tax ever proves intolerable, re-open the CMP option as a follow-up issue — but only after iOS reaches v0.7 (parity), so we never block parity on a refactor.
 
 ### 7.4 What we considered and rejected
