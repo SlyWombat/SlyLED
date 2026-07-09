@@ -4,6 +4,7 @@
  */
 
 #include <Arduino.h>
+#include <stdarg.h>
 #include "BoardConfig.h"
 
 #ifdef BOARD_GIGA
@@ -905,21 +906,44 @@ void registerChild(IPAddress ip, const PongPayload* pong) {
 
 // ── API: /api/children ────────────────────────────────────────────────────────
 
+// #891 — snprintf returns the WOULD-BE length, not the written length. The
+// raw `p += snprintf(p, end - p, ...)` idiom advances p past `end` on
+// truncation, after which `*p++` writes past the buffer and `end - p`
+// underflows (huge size_t → unbounded write). These helpers clamp p to end
+// after every append and drop single chars that no longer fit: on overflow
+// the JSON is cut short but memory stays intact.
+static void jsonCat(char*& p, char* end, const char* fmt, ...)
+    __attribute__((format(printf, 3, 4)));
+static void jsonCat(char*& p, char* end, const char* fmt, ...) {
+  if (p >= end) return;
+  va_list ap;
+  va_start(ap, fmt);
+  int n = vsnprintf(p, (size_t)(end - p), fmt, ap);
+  va_end(ap);
+  if (n < 0) return;          // encoding error — leave p unchanged
+  p += n;
+  if (p > end) p = end;       // truncated — clamp to the terminator slot
+}
+
+static inline void jsonCh(char*& p, char* end, char ch) {
+  if (p < end) *p++ = ch;
+}
+
 void sendApiChildren(WiFiClient& c) {
-  static char jsonBuf[1400];
+  static char jsonBuf[2048];
   char* p   = jsonBuf;
   char* end = jsonBuf + sizeof(jsonBuf) - 2;
-  *p++ = '[';
+  jsonCh(p, end, '[');
   bool first = true;
   for (uint8_t i = 0; i < MAX_CHILDREN; i++) {
     if (!children[i].inUse) continue;
-    if (!first) *p++ = ',';
+    if (!first) jsonCh(p, end, ',');
     first = false;
     char ipStr[16];
     snprintf(ipStr, sizeof(ipStr), "%u.%u.%u.%u",
              children[i].ip[0], children[i].ip[1],
              children[i].ip[2], children[i].ip[3]);
-    p += snprintf(p, end - p,
+    jsonCat(p, end,
       "{\"id\":%u,\"hostname\":\"%s\",\"name\":\"%s\","
       "\"desc\":\"%s\",\"ip\":\"%s\",\"status\":%u,"
       "\"sc\":%u,\"seen\":%lu}",
@@ -929,32 +953,35 @@ void sendApiChildren(WiFiClient& c) {
       (unsigned)children[i].stringCount,
       (unsigned long)children[i].lastSeenEpoch);
   }
-  *p++ = ']'; *p = '\0';
+  *p++ = ']'; *p = '\0';      // end reserves 2 bytes — always fits
   int blen = (int)(p - jsonBuf);
   sendBuf(c, "HTTP/1.1 200 OK\r\n"
              "Content-Type: application/json\r\n"
              "Connection: close\r\n"
              "Cache-Control: no-cache, no-store\r\n"
              "Content-Length: %d\r\n\r\n", blen);
-  c.print(jsonBuf);
+  spa(c, jsonBuf);   // chunked — WiFiClient::print() truncates > ~280 bytes
   c.flush();
 }
 
 void sendApiChildrenExport(WiFiClient& c) {
-  static char jsonBuf[1800];
+  // #891 — worst case is ~780 bytes per child (8 strings, max-width fields)
+  // × 8 children ≈ 6.2 KB; the old 1800 truncated real exports. The Giga
+  // (Mbed, ~1 MB SRAM) easily affords the static buffer.
+  static char jsonBuf[6400];
   char* p   = jsonBuf;
   char* end = jsonBuf + sizeof(jsonBuf) - 2;
-  *p++ = '[';
+  jsonCh(p, end, '[');
   bool first = true;
   for (uint8_t i = 0; i < MAX_CHILDREN; i++) {
     if (!children[i].inUse) continue;
-    if (!first) *p++ = ',';
+    if (!first) jsonCh(p, end, ',');
     first = false;
     char ipStr[16];
     snprintf(ipStr, sizeof(ipStr), "%u.%u.%u.%u",
              children[i].ip[0], children[i].ip[1],
              children[i].ip[2], children[i].ip[3]);
-    p += snprintf(p, end - p,
+    jsonCat(p, end,
       "{\"id\":%u,\"hostname\":\"%s\",\"name\":\"%s\","
       "\"desc\":\"%s\",\"ip\":\"%s\",\"status\":%u,"
       "\"x\":%d,\"y\":%d,\"sc\":%u,\"seen\":%lu,\"strings\":[",
@@ -965,8 +992,8 @@ void sendApiChildrenExport(WiFiClient& c) {
       (unsigned)children[i].stringCount,
       (unsigned long)children[i].lastSeenEpoch);
     for (uint8_t j = 0; j < children[i].stringCount && j < MAX_STR_PER_CHILD; j++) {
-      if (j > 0) *p++ = ',';
-      p += snprintf(p, end - p,
+      if (j > 0) jsonCh(p, end, ',');
+      jsonCat(p, end,
         "{\"leds\":%u,\"mm\":%u,\"type\":%u,\"cdir\":%u,\"cmm\":%u,\"sdir\":%u}",
         (unsigned)children[i].strings[j].ledCount,
         (unsigned)children[i].strings[j].lengthMm,
@@ -975,16 +1002,16 @@ void sendApiChildrenExport(WiFiClient& c) {
         (unsigned)children[i].strings[j].cableMm,
         (unsigned)children[i].strings[j].stripDir);
     }
-    p += snprintf(p, end - p, "]}");
+    jsonCat(p, end, "]}");
   }
-  *p++ = ']'; *p = '\0';
+  *p++ = ']'; *p = '\0';      // end reserves 2 bytes — always fits
   int blen = (int)(p - jsonBuf);
   sendBuf(c, "HTTP/1.1 200 OK\r\n"
              "Content-Type: application/json\r\n"
              "Content-Disposition: attachment; filename=\"slyled-children.json\"\r\n"
              "Connection: close\r\n"
              "Content-Length: %d\r\n\r\n", blen);
-  c.print(jsonBuf);
+  spa(c, jsonBuf);   // chunked — WiFiClient::print() truncates > ~280 bytes
   c.flush();
 }
 
@@ -1168,18 +1195,18 @@ void handleApiChildrenImport(WiFiClient& c, int contentLen) {
 // ── API: /api/layout ──────────────────────────────────────────────────────────
 
 void sendApiLayout(WiFiClient& c) {
-  static char jsonBuf[900];
+  static char jsonBuf[1024];
   char* p   = jsonBuf;
   char* end = jsonBuf + sizeof(jsonBuf) - 2;
-  p += snprintf(p, end - p,
+  jsonCat(p, end,
     "{\"canvasW\":%u,\"canvasH\":%u,\"children\":[",
     (unsigned)settings.canvasWidthMm, (unsigned)settings.canvasHeightMm);
   bool first = true;
   for (uint8_t i = 0; i < MAX_CHILDREN; i++) {
     if (!children[i].inUse) continue;
-    if (!first) *p++ = ',';
+    if (!first) jsonCh(p, end, ',');
     first = false;
-    p += snprintf(p, end - p,
+    jsonCat(p, end,
       "{\"id\":%u,\"hostname\":\"%s\",\"name\":\"%s\","
       "\"x\":%d,\"y\":%d,\"status\":%u}",
       (unsigned)i,
@@ -1187,14 +1214,14 @@ void sendApiLayout(WiFiClient& c) {
       (int)children[i].xMm, (int)children[i].yMm,
       (unsigned)children[i].status);
   }
-  p += snprintf(p, end - p, "]}");
+  jsonCat(p, end, "]}");
   int blen = (int)(p - jsonBuf);
   sendBuf(c, "HTTP/1.1 200 OK\r\n"
              "Content-Type: application/json\r\n"
              "Connection: close\r\n"
              "Cache-Control: no-cache, no-store\r\n"
              "Content-Length: %d\r\n\r\n", blen);
-  c.print(jsonBuf);
+  spa(c, jsonBuf);   // chunked — WiFiClient::print() truncates > ~280 bytes
   c.flush();
 }
 
@@ -1339,19 +1366,19 @@ void sendApiRunners(WiFiClient& c) {
   static char jsonBuf[512];
   char* p   = jsonBuf;
   char* end = jsonBuf + sizeof(jsonBuf) - 2;
-  *p++ = '[';
+  jsonCh(p, end, '[');
   bool first = true;
   for (uint8_t i = 0; i < MAX_RUNNERS; i++) {
     if (!runners[i].inUse) continue;
-    if (!first) *p++ = ',';
+    if (!first) jsonCh(p, end, ',');
     first = false;
-    p += snprintf(p, end - p,
+    jsonCat(p, end,
       "{\"id\":%u,\"name\":\"%s\",\"steps\":%u,\"computed\":%s}",
       (unsigned)i, runners[i].name,
       (unsigned)runners[i].stepCount,
       runners[i].computed ? "true" : "false");
   }
-  *p++ = ']'; *p = '\0';
+  *p++ = ']'; *p = '\0';      // end reserves 2 bytes — always fits
   int blen = (int)(p - jsonBuf);
   sendBuf(c, "HTTP/1.1 200 OK\r\n"
              "Content-Type: application/json\r\n"
@@ -1366,17 +1393,19 @@ void sendApiRunner(WiFiClient& c, uint8_t id) {
   if (id >= MAX_RUNNERS || !runners[id].inUse) {
     sendJsonErr(c, "not-found"); return;
   }
-  static char jsonBuf[2048];
+  // #891 — worst case is ~150 bytes per step × 16 steps ≈ 2.5 KB; the old
+  // 2048 truncated full runners. Static buffer is cheap on the Giga.
+  static char jsonBuf[3072];
   char* p   = jsonBuf;
   char* end = jsonBuf + sizeof(jsonBuf) - 2;
-  p += snprintf(p, end - p,
+  jsonCat(p, end,
     "{\"id\":%u,\"name\":\"%s\",\"computed\":%s,\"steps\":[",
     (unsigned)id, runners[id].name,
     runners[id].computed ? "true" : "false");
   for (uint8_t s = 0; s < runners[id].stepCount; s++) {
-    if (s > 0) *p++ = ',';
+    if (s > 0) jsonCh(p, end, ',');
     RunnerStep& st = runners[id].steps[s];
-    p += snprintf(p, end - p,
+    jsonCat(p, end,
       "{\"type\":%u,\"r\":%u,\"g\":%u,\"b\":%u,"
       "\"onMs\":%u,\"offMs\":%u,\"wdir\":%u,\"wspd\":%u,"
       "\"x0\":%u,\"y0\":%u,\"x1\":%u,\"y1\":%u,\"durationS\":%u}",
@@ -1388,14 +1417,14 @@ void sendApiRunner(WiFiClient& c, uint8_t id) {
       (unsigned)st.area.x1, (unsigned)st.area.y1,
       (unsigned)st.durationS);
   }
-  p += snprintf(p, end - p, "]}");
+  jsonCat(p, end, "]}");
   int blen = (int)(p - jsonBuf);
   sendBuf(c, "HTTP/1.1 200 OK\r\n"
              "Content-Type: application/json\r\n"
              "Connection: close\r\n"
              "Cache-Control: no-cache, no-store\r\n"
              "Content-Length: %d\r\n\r\n", blen);
-  c.print(jsonBuf);
+  spa(c, jsonBuf);   // chunked — WiFiClient::print() truncates > ~280 bytes
   c.flush();
 }
 
