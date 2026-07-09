@@ -172,8 +172,11 @@ Sinon, entrez l'IP de la caméra manuellement et cliquez sur **Add**.
 
 Chaque caméra apparaît avec un statut en ligne/hors ligne. Cliquez sur **Snap** pour vérifier le flux en direct.
 
-![Capture caméra 1 — vue côté gauche](screenshots/walkthrough/06-cam1_left_hires.png)
-![Capture caméra 2 — vue côté droit](screenshots/walkthrough/06-cam2_right.png)
+![Capture caméra — vue en direct prise via le bouton Snap d'un nœud caméra](screenshots/walkthrough/cam-direct-snapshot.jpg)
+
+<!-- Les captures gauche/droite par caméra (06-cam1_left_hires / 06-cam2_right)
+     exigent un banc réel à deux caméras pour être reprises ; une capture réelle
+     d'un nœud caméra est affichée en attendant. -->
 
 > **Remarque :** la découverte caméra renvoie parfois 0 nœud à la première diffusion à cause du timing UDP. Si aucune caméra n'est trouvée, attendez 3 secondes et cliquez de nouveau sur **Discover**. C'est une intermittence connue (#542) en cours de correction dans une prochaine version.
 

@@ -36,18 +36,65 @@ ROOT = Path(__file__).resolve().parents[2]
 SHOT_DIR = ROOT / "docs" / "screenshots"
 
 # Docs that embed screenshots — the user manual (en + fr), the chapter
-# sources, and the built in-SPA help.
+# sources, the built in-SPA help, the marketing surface, and the README.
 DOC_GLOBS = [
+    "README.md",
     "docs/USER_MANUAL.md",
     "docs/USER_MANUAL_fr.md",
     "docs/src/en/*.md",
     "docs/src/fr/*.md",
     "docs/src/en/help-fragments/*.md",
+    "docs/src/fr/help-fragments/*.md",
+    "docs/src/marketing/**/*.md",
 ]
 
 # SPA sources whose mtime defines "current UI". A screenshot older than
 # the newest of these can't depict the current SPA.
 SPA_DIRS = [ROOT / "desktop" / "shared" / "spa"]
+
+# Capture-session leftovers that predate the recursive orphan check
+# (#898 extended it to subdirectories, 2026-07-09). Nothing references
+# these; they are intermediate frames from the #533 walkthrough capture
+# runs, kept pending a triage pass (delete or reference — see #898
+# follow-up). Do NOT add new entries: a new unreferenced capture is a
+# bug this check exists to catch.
+GRANDFATHERED_ORPHANS = {
+    "walkthrough/02-file-menu.png",
+    "walkthrough/03-dmx-section.png",
+    "walkthrough/03-settings-tab.png",
+    "walkthrough/03a-discover.png",
+    "walkthrough/04-add-fixture-dialog.png",
+    "walkthrough/04-edit-350w-spot-fixed.png",
+    "walkthrough/04-edit-350w-spot.png",
+    "walkthrough/04-edit-mh1-sly-fixed.png",
+    "walkthrough/04-edit-mh1-sly.png",
+    "walkthrough/04-edit-mh2-sly-fixed.png",
+    "walkthrough/04-edit-mh2-sly.png",
+    "walkthrough/04-fixture-type-select.png",
+    "walkthrough/04-setup-before.png",
+    "walkthrough/04c-layout-positions.png",
+    "walkthrough/06-cameras.png",
+    "walkthrough/06b-cam2-added.png",
+    "walkthrough/07-calibrate.png",
+    "walkthrough/09b-red-set.png",
+    "walkthrough/11a-tracking-ui.png",
+    "walkthrough/11a-tracking.png",
+    "walkthrough/11b-track-action.png",
+    "walkthrough/11c-floor-target.png",
+    "walkthrough/4-mh1-sly.png",
+    "walkthrough/4-mh2-sly.png",
+    "walkthrough/5-350w-spot.png",
+    "walkthrough/cam-add-camera-type.png",
+    "walkthrough/cam-add-modal.png",
+    "walkthrough/cam-after-add.png",
+    "walkthrough/cam-ip-filled.png",
+    "walkthrough/cam2-filled.png",
+    "walkthrough/cam3-after-add.png",
+    "walkthrough/positions.png",
+    "walkthrough/profile-search-mh.png",
+    "walkthrough/version-check.png",
+    "walkthrough/version-check2.png",
+}
 
 # Markdown image: ![alt](path)  — capture alt + path.
 IMG_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
@@ -102,9 +149,12 @@ def validate():
                 fails.append(("broken-link",
                               f"{doc} references missing screenshots/{name}"))
 
-    # 2. Orphans
-    on_disk = {p.name for p in SHOT_DIR.glob("*.png")}
-    for name in sorted(on_disk - set(referenced)):
+    # 2. Orphans — recurses subdirectories (walkthrough/, android/, ...).
+    # Names are SHOT_DIR-relative POSIX paths to match how docs reference
+    # them (`screenshots/walkthrough/x.png`).
+    on_disk = {p.relative_to(SHOT_DIR).as_posix()
+               for p in SHOT_DIR.rglob("*.png")}
+    for name in sorted(on_disk - set(referenced) - GRANDFATHERED_ORPHANS):
         fails.append(("orphan",
                        f"screenshots/{name} is not referenced by any doc"))
 

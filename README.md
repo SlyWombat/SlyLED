@@ -32,7 +32,7 @@ A complete lighting-design and control stack that does the jobs grandMA3, Follow
 
 | Calibration wizard | Android operator |
 |---|---|
-| ![Calibration](docs/screenshots/example-c-calibrate-panel.png) | ![Android](docs/screenshots/android-control.png) |
+| ![Calibration](docs/screenshots/example-c-calibrate-panel.png) | ![Android](docs/screenshots/android/android-control.png) |
 
 ## How it compares
 

@@ -172,8 +172,11 @@ Alternatively, enter the camera's IP manually and click **Add**.
 
 Each camera appears with online/offline status. Click **Snap** to verify the live feed.
 
-![Camera 1 snapshot — left-side view](screenshots/walkthrough/06-cam1_left_hires.png)
-![Camera 2 snapshot — right-side view](screenshots/walkthrough/06-cam2_right.png)
+![Camera snapshot — live view captured from a camera node's Snap button](screenshots/walkthrough/cam-direct-snapshot.jpg)
+
+<!-- Per-camera left/right snapshots (06-cam1_left_hires / 06-cam2_right) need
+     a two-camera live rig to recapture; a single real camera-node snapshot is
+     shown until then. -->
 
 > **Note:** Camera discover sometimes returns 0 nodes on the first broadcast due to UDP timing. If no cameras are found, wait 3 seconds and click **Discover** again. This is a known intermittency (#542) being addressed in a future release.
 
