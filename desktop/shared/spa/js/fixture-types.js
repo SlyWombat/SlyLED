@@ -1037,6 +1037,9 @@ var FIXTURE_TYPES={
       h+='<label>FoV (degrees, full width) <span style="color:#64748b;font-size:.75em">(Rd-03D: 120 = ±60°)</span></label>';
       h+='<input id="fx-radar-fov" type="number" value="'+fov+'" min="1" max="180" style="width:100%;margin-bottom:.4em">';
       h+='<label style="display:flex;align-items:center;gap:.4em;margin-top:.2em;cursor:pointer"><input id="fx-radar-enabled" type="checkbox"'+(f.radarEnabled!==false?' checked':'')+' style="width:auto"> <span style="font-size:.82em">Enabled (feeds person tracking)</span></label>';
+      // #913 — position/rotation here are the layer-1 manual survey
+      // (mmwave_tracking.md §6). The calibration walk refines them.
+      h+='<div style="font-size:.75em;color:#64748b;margin-top:.4em">Tip: after placing this radar roughly, refine its pose with the <b>Radar Calibration</b> walk on the Setup tab (one person walks a loop through the radar overlap zones).</div>';
       return h;
     },
     renderEditExtras:function(f,id){return'';},

@@ -410,6 +410,20 @@ function _renderSetup(){
         h+='<p style="color:#555;font-size:.82em">No cameras registered. Click Discover or add via Add Fixture.</p>';
       }
 
+      // ── Radar calibration walk (#913) ──────────────────────────
+      // Deliberately-simple v1 card (mmwave_tracking.md §6 layer 2):
+      // Start walk → Stop → Solve → review proposals → Apply selected.
+      // Full calibration-wizard integration is an open design question
+      // (§11.5) — do not grow this card into a wizard; replace it when
+      // that question is decided.
+      var radarFixtures=(fixtures||[]).filter(function(f){return f.fixtureType==='radar';});
+      if(radarFixtures.length){
+        h+='<h3 style="font-size:.9em;color:#94a3b8;margin:.8em 0 .3em">Radar Calibration'
+          +' <span style="color:#64748b;font-size:.78em">· track-correlation pose solver — one person walks a loop through the radar overlap zones</span>'
+          +'</h3>';
+        h+='<div id="radar-cal-host" class="card" style="padding:.6em;margin-bottom:.5em"><span style="color:#555;font-size:.82em">Loading…</span></div>';
+      }
+
       // ── ArUco marker registry (#596) ───────────────────────────
       // Surveyed tags in stage space. Both this section and the
       // Advanced Scan card render the same editor (_arucoRenderTable).
@@ -419,6 +433,7 @@ function _renderSetup(){
       h+='<div id="aruco-setup-host"><p style="color:#555;font-size:.82em">Loading markers…</p></div>';
 
       document.getElementById('t-setup').innerHTML=h;
+      if(radarFixtures.length)_radarCalRefresh();
       _arucoLoad(function(){_arucoRenderTable('aruco-setup-host', {source:'setup'});});
       // Check firmware updates — add ▲ triangle indicator to outdated devices
       api('GET','/api/firmware/check').then(function(chk){
@@ -478,6 +493,109 @@ function _loadPointCloudMeta(camFixtures){
       }
       el.innerHTML=pill;
     });
+  });
+}
+
+// ── #913 Radar calibration walk — deliberately-simple v1 card ─────────
+// Track-correlation pose solver (mmwave_tracking.md §6 layer 2): Start
+// walk → Stop → Solve → proposals table (Δpos / Δyaw / RMS) → Apply
+// selected. Full calibration-wizard integration is an OPEN design
+// question (§11.5) — this card intentionally stays a flat card until
+// that's decided.
+var _radarCalPollTimer=null;
+function _radarCalRefresh(){
+  var host=document.getElementById('radar-cal-host');
+  if(!host){if(_radarCalPollTimer){clearTimeout(_radarCalPollTimer);_radarCalPollTimer=null;}return;}
+  ra('GET','/api/radar/calibration/status',null,function(st){
+    var el=document.getElementById('radar-cal-host');
+    if(!el)return;
+    if(!st||!st.ok){el.innerHTML='<span style="color:#f66;font-size:.82em">Radar calibration status unavailable</span>';return;}
+    var rec=!!st.recording;
+    var h='<div style="margin-bottom:.4em">'
+      +'<button class="btn btn-on" onclick="_radarCalStart()"'+(rec?' disabled':'')+'>Start walk</button>'
+      +' <button class="btn" onclick="_radarCalStop()"'+(rec?'':' disabled')+' style="background:#92400e;color:#fde68a">Stop</button>'
+      +' <button class="btn" onclick="_radarCalSolve(this)"'+(rec?' disabled':'')+' style="background:#312e81;color:#a5b4fc">Solve</button>';
+    if(rec)h+=' <span class="badge" style="background:#166534;color:#86efac">● Recording — walk a loop covering the radar overlap zones</span>';
+    h+='</div>';
+    // Per-fixture sample counts (live while recording, final after stop)
+    var counts=st.samples||{};
+    var keys=Object.keys(counts);
+    if(keys.length){
+      h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.4em">Samples: '
+        +keys.map(function(k){return escapeHtml(_radarCalFixName(k))+' <b style="color:#e2e8f0">'+counts[k]+'</b>';}).join(' · ')
+        +'</div>';
+    }else if(!rec){
+      h+='<div style="font-size:.78em;color:#64748b;margin-bottom:.4em">No walk recorded yet. Start, walk a loop through zones two or more radars can see (≥5 s of shared coverage), then Stop and Solve.</div>';
+    }
+    // Proposals table from the last solve (server keeps it — survives reload)
+    var solve=st.lastSolve;
+    if(solve&&(solve.proposals||[]).length){
+      h+='<div style="font-size:.78em;color:#64748b;margin-bottom:.2em">Reference: <b style="color:#e2e8f0">'+escapeHtml(_radarCalFixName(solve.referenceFixtureId))+'</b> (pose held fixed)</div>';
+      h+='<table class="tbl" style="font-size:.85em"><tr><th></th><th>Fixture</th><th>Δpos (mm)</th><th>Δyaw (°)</th><th>RMS (mm)</th><th>Samples</th></tr>';
+      solve.proposals.forEach(function(p){
+        if(p.error){
+          h+='<tr><td></td><td><b>'+escapeHtml(_radarCalFixName(p.fixtureId))+'</b></td><td colspan="4" style="color:#f59e0b">'+escapeHtml(p.error)+'</td></tr>';
+          return;
+        }
+        h+='<tr><td><input type="checkbox" class="radar-cal-pick" value="'+p.fixtureId+'" checked style="width:auto"></td>'
+          +'<td><b>'+escapeHtml(_radarCalFixName(p.fixtureId))+'</b></td>'
+          +'<td>'+p.deltaPosMm.toFixed(0)+'</td>'
+          +'<td>'+p.deltaYawDeg.toFixed(1)+'</td>'
+          +'<td>'+p.rmsResidualMm.toFixed(0)+'</td>'
+          +'<td>'+p.samples+'</td></tr>';
+      });
+      h+='</table>';
+      if(solve.proposals.some(function(p){return !p.error;})){
+        h+='<button class="btn btn-on" onclick="_radarCalApply(this)" style="margin-top:.3em">Apply selected</button>';
+      }
+    }
+    el.innerHTML=h;
+    // Poll while recording so sample counts tick up under the operator.
+    if(_radarCalPollTimer){clearTimeout(_radarCalPollTimer);_radarCalPollTimer=null;}
+    if(rec)_radarCalPollTimer=setTimeout(_radarCalRefresh,2000);
+  });
+}
+function _radarCalFixName(fid){
+  var f=(_fixtures||[]).find(function(x){return String(x.id)===String(fid);});
+  return (f&&f.name)||('Radar '+fid);
+}
+function _radarCalStart(){
+  ra('POST','/api/radar/calibration/start',{},function(r){
+    if(r&&r.err)document.getElementById('hs').textContent=r.err;
+    else document.getElementById('hs').textContent='Radar calibration walk recording — walk the loop now';
+    _radarCalRefresh();
+  });
+}
+function _radarCalStop(){
+  ra('POST','/api/radar/calibration/stop',{},function(r){
+    if(r&&r.err)document.getElementById('hs').textContent=r.err;
+    else document.getElementById('hs').textContent='Walk stopped — click Solve to compute pose proposals';
+    _radarCalRefresh();
+  });
+}
+function _radarCalSolve(btn){
+  if(btn)btn.disabled=true;
+  ra('POST','/api/radar/calibration/solve',{},function(r){
+    if(btn)btn.disabled=false;
+    if(r&&r.err){document.getElementById('hs').textContent=r.err;}
+    else if(r&&r.ok){document.getElementById('hs').textContent='Solve complete — review the proposals below';}
+    _radarCalRefresh();
+  });
+}
+function _radarCalApply(btn){
+  var ids=[];
+  document.querySelectorAll('.radar-cal-pick:checked').forEach(function(cb){ids.push(parseInt(cb.value,10));});
+  if(!ids.length){document.getElementById('hs').textContent='Select at least one proposal to apply';return;}
+  if(btn)btn.disabled=true;
+  ra('POST','/api/radar/calibration/apply',{fixtureIds:ids},function(r){
+    if(btn)btn.disabled=false;
+    if(r&&r.ok){
+      document.getElementById('hs').textContent='Radar pose(s) applied for '+r.applied.length+' fixture(s)';
+      loadSetup();  // layout changed — repaint everything
+    }else{
+      document.getElementById('hs').textContent='Apply failed: '+((r&&r.err)||'unknown');
+      _radarCalRefresh();
+    }
   });
 }
 
