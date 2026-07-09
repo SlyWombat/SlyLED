@@ -1,5 +1,50 @@
 # SlyLED tests
 
+## SLYLED_DATA isolation (#907)
+
+`parent_server.py` resolves its persistence directory at **import
+time**: `SLYLED_DATA` env var if set, else `%APPDATA%\SlyLED\data` on
+Windows, else repo-local `desktop/shared/data`. Importing the module
+(or exercising `app.test_client()`) reads and writes that directory —
+so a test run without `SLYLED_DATA` set operates on the live operator
+project on Windows.
+
+Every orchestrated entry point isolates automatically (a fresh temp
+dir, unless you deliberately preset `SLYLED_DATA` yourself):
+
+- **pytest** — `tests/conftest.py` sets it before any test module is
+  imported.
+- **`tests/regression/run_all.py`** — exports one fresh temp dir into
+  every suite subprocess (shared across the run, so the stage-setup →
+  layout → bake → runtime flow still carries state).
+- **`tests/docker/run_tests.sh` / `run_dmx_tests.sh`** — set it inside
+  the containers.
+- **devgui** (`tools/devgui/server.py`) — injects it into every test
+  subprocess it spawns.
+- **CI** (`.github/workflows/python-tests.yml`) — sets it at the job
+  level.
+
+**Residual risk — direct script runs.** `python3 tests/test_foo.py`
+bypasses all of the above. Most test files import parent_server at
+module level, and there is no clean shared hook that runs before a
+directly-executed script's imports (Python only offers
+`sitecustomize`/`usercustomize`, which are machine-global — too
+invasive for a repo to install). A handful of files self-isolate
+(`test_persistence_atomic.py`, `test_893_cors.py`,
+`test_896_fused_id_rebind.py`, `test_dmx_bake.py`,
+`screenshot_capture.py`); the rest do not. **On Windows, never run a
+test file directly without prefixing `SLYLED_DATA`:**
+
+```powershell
+$env:SLYLED_DATA = (New-TemporaryFile).DirectoryName + '\slyled-test'
+python -X utf8 tests\test_parent.py
+```
+
+or run it through pytest / run_all.py / the devgui instead. New tests
+that import parent_server should copy the self-isolation preamble from
+`test_893_cors.py` (set `SLYLED_DATA` to a `tempfile.mkdtemp()` before
+the import, only if not already set).
+
 ## Simulator-coverage policy (#852)
 
 **Every gyro / claim / mover-control bug filed from now on MUST include a

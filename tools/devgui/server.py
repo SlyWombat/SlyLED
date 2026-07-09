@@ -17,6 +17,7 @@ import time
 import signal
 import threading
 import subprocess
+import tempfile
 import argparse
 from datetime import datetime
 
@@ -163,6 +164,17 @@ def api_tests_run():
 
     _broadcast_sse('test_start', {'suite': _test_suite_name})
 
+    # #907 — data isolation. parent_server resolves its persistence dir
+    # at import time (SLYLED_DATA, else %APPDATA%\SlyLED\data on
+    # Windows, else desktop/shared/data), and most tests spawned from
+    # here import it or launch it as a subprocess. Inject a fresh temp
+    # dir per run so a devgui-triggered suite can never read or clobber
+    # the live operator project. An explicit SLYLED_DATA set by whoever
+    # launched the devgui still wins (deliberate-override escape hatch).
+    test_env = {**os.environ, 'PYTHONIOENCODING': 'utf-8', 'PYTHONUNBUFFERED': '1'}
+    if not test_env.get('SLYLED_DATA'):
+        test_env['SLYLED_DATA'] = tempfile.mkdtemp(prefix='slyled-devgui-test-')
+
     try:
         proc = subprocess.Popen(
             cmd,
@@ -171,7 +183,7 @@ def api_tests_run():
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
-            env={**os.environ, 'PYTHONIOENCODING': 'utf-8', 'PYTHONUNBUFFERED': '1'},
+            env=test_env,
         )
     except Exception as e:
         with _test_lock:

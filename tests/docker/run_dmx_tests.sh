@@ -26,7 +26,9 @@ cleanup() {
 trap cleanup EXIT
 
 echo "=== Starting parent server ==="
+# #907 — explicit data isolation (see tests/docker/run_tests.sh).
 docker run -d --name "$SERVER_NAME" --network "$NET_NAME" \
+    -e SLYLED_DATA=/tmp/slyled-test-data \
     "$IMAGE_NAME" \
     python desktop/shared/parent_server.py --port 8080 --no-browser
 

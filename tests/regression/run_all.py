@@ -14,6 +14,7 @@ import argparse
 import os
 import subprocess
 import sys
+import tempfile
 import time
 
 os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
@@ -79,6 +80,27 @@ def main():
         env['SLYLED_LIVE_RIG'] = '1'
     if args.weekly:
         env['SLYLED_WEEKLY'] = '1'
+
+    # #907 — data isolation. Each regression test spawns its own
+    # parent_server subprocess, and parent_server picks its persistence
+    # dir at import time: SLYLED_DATA, else %APPDATA%\SlyLED\data on
+    # Windows, else repo-local desktop/shared/data. Without this, an
+    # ad-hoc run on Windows factory-resets and rewrites the operator's
+    # live project (test_save_restore.py literally documents doing so).
+    # One fresh temp dir per run_all invocation, shared by every suite:
+    # the suites form a flow (stage setup -> layout -> bake -> runtime),
+    # so state must carry across suites within a run while never
+    # touching live data. A caller-provided SLYLED_DATA still wins.
+    #
+    # This applies to the --live-rig suites too, deliberately: they talk
+    # HTTP to an ALREADY-RUNNING orchestrator (SLYLED_ORCH) and never
+    # spawn or import parent_server themselves, so the rig's real data
+    # dir — fixed when that orchestrator was launched — is unaffected by
+    # this env var. Setting it here only protects any locally spawned
+    # helper server a future live-rig suite might add.
+    if not env.get('SLYLED_DATA'):
+        env['SLYLED_DATA'] = tempfile.mkdtemp(prefix='slyled-regression-')
+        print(f'SLYLED_DATA -> {env["SLYLED_DATA"]} (fresh per-run temp dir)')
 
     results = []
     total_passed = 0

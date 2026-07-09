@@ -29,15 +29,16 @@ os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
 env = os.environ.copy()
 env['PYTHONIOENCODING'] = 'utf-8'
 # parent_server picks DATA at import time:
+#   SLYLED_DATA   -> that dir (top precedence)
 #   nt + APPDATA  -> %APPDATA%\SlyLED\data
 #   else          -> desktop/shared/data
-# We want this regression to operate on the live DATA dir for the
-# current platform (so the simulated-restart check is meaningful), but
-# also factory-reset before AND after so we don't litter operator
-# state. The dev / CI machine usually has no real session state in
-# desktop/shared/data so this is benign; on Windows it touches the
-# AppData copy. The factory-reset on entry + the test's own /api/reset
-# at exit clean up.
+# #907 — run_all.py exports a fresh per-run SLYLED_DATA temp dir, so
+# both server restarts inside this test share one isolated DATA dir and
+# the simulated-restart check stays meaningful WITHOUT ever touching the
+# operator's live %APPDATA% project (the pre-#907 behaviour). Run
+# directly (no SLYLED_DATA), it falls back to the platform default —
+# the factory-reset on entry + the test's own /api/reset at exit clean
+# up, but prefer running through run_all.py or presetting SLYLED_DATA.
 _tmp_root = tempfile.mkdtemp(prefix='slyled_741_')
 
 PORT = 5571  # avoid colliding with the other regressions (5570)
@@ -85,7 +86,14 @@ def api(method, path, data=None):
 # Easier: query /api/settings — DATA path isn't exposed, so we just
 # fall back to scanning likely locations for layout.json after import.
 def _find_data_dir():
+    # Mirrors parent_server's DATA precedence: SLYLED_DATA env var first
+    # (#907 — run_all.py injects a fresh temp dir per run, so the server
+    # this test spawns persists there, and that is where the disk
+    # assertions must look), then %APPDATA%\SlyLED\data on Windows,
+    # then the repo-local fallback.
     candidates = []
+    if os.environ.get('SLYLED_DATA'):
+        candidates.append(Path(os.environ['SLYLED_DATA']))
     appdata = os.environ.get('APPDATA')
     if os.name == 'nt' and appdata:
         candidates.append(Path(appdata) / 'SlyLED' / 'data')

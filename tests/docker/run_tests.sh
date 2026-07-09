@@ -25,7 +25,13 @@ cleanup() {
 trap cleanup EXIT
 
 echo "=== Starting parent server ==="
+# #907 — explicit data isolation. The container filesystem is throwaway
+# anyway, but set SLYLED_DATA so the server can never write into the
+# bind-free /app/desktop/shared/data copy baked into the image, and so
+# this entry point matches the isolation contract of every other test
+# runner (tests/conftest.py, tests/regression/run_all.py, devgui).
 docker run -d --name "$SERVER_NAME" --network "$NET_NAME" \
+    -e SLYLED_DATA=/tmp/slyled-test-data \
     "$IMAGE_NAME" \
     python desktop/shared/parent_server.py --port 8080 --no-browser
 
