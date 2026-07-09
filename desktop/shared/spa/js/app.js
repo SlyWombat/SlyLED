@@ -42,6 +42,7 @@ var L={
   tabSetup:'Register, discover, and manage LED fixture nodes',
   tabLayout:'Arrange fixtures in physical space on canvas',
   tabActions:'Create and manage reusable animation presets',
+  tabShows:'Edit show timelines and preview them on the 3D stage',
   tabRuntime:'Design and play timelines for LED shows',
   tabSettings:'Configure app settings, dark mode, and logging',
   tabFirmware:'Flash firmware to boards and manage WiFi credentials',
@@ -580,7 +581,6 @@ function showDetails(id){
 }
 
 var _strCol=['#0ff','#f0f','#ff0','#0f0','#f80','#08f','#f08','#8f0'];
-var _dirDx=[1,0,-1,0],_dirDy=[0,-1,0,1]; // E,N,W,S in canvas-Y-down coords
 var _layDragId=null;
 var _layView=(function(){try{var v=localStorage.getItem('slyled-layout-view');return (v==='front'||v==='top'||v==='side'||v==='3d')?v:'3d';}catch(e){return '3d';}})(); // 'front', 'top', 'side', '3d' — persisted per #638
 
@@ -1157,10 +1157,6 @@ function removeFromCanvas(id){
   renderFixturesSidebar();
 }
 
-function fmtCoord(mm){
-  if(units===1)return(mm/25.4).toFixed(1)+'"';return mm+'mm';
-}
-
 // drawLayout() — now a thin wrapper that delegates to 3D scene
 function drawLayout(){
   if(_s3d.inited)s3dLoadChildren();
@@ -1326,11 +1322,6 @@ function setBrightness(val){
   ra('POST','/api/settings',{globalBrightness:val},null);
 }
 
-function saveLoopSetting(){
-  var lp=document.getElementById('rt-loop');
-  ra('POST','/api/settings',{runnerLoop:lp&&lp.checked?true:false},null);
-}
-
 // ── Shows tab ────────────────────────────────────────────────────────────────
 function loadShows(){
   loadTimelines();
@@ -1351,7 +1342,6 @@ function loadShows(){
   },300);
 }
 // Save last-opened timeline when user selects one
-var _origLoadTimelineDetail=typeof loadTimelineDetail==='function'?null:null;
 function _wrapTlSelect(){
   var sel=document.getElementById('tl-select');
   if(sel&&!sel.dataset.wrapped){
@@ -1364,12 +1354,6 @@ function _wrapTlSelect(){
 // Hook into loadTimelines to wrap the select
 var _origLoadTimelines=loadTimelines;
 loadTimelines=function(){_origLoadTimelines();setTimeout(_wrapTlSelect,400);};
-
-
-
-// ── #143: Visual Capability Editor ──────────────────────────────────────
-// Enhanced _peRenderCaps with visual range bars
-// (Original renders a text table — this adds colored bars)
 
 
 // Init
