@@ -3,18 +3,25 @@
 # Usage: powershell -ExecutionPolicy Bypass -File build_release.ps1
 #        powershell -ExecutionPolicy Bypass -File build_release.ps1 -SkipFirmware -SkipAndroid
 #        powershell -ExecutionPolicy Bypass -File build_release.ps1 -SetAppVersion "1.2.0"
+#        powershell -ExecutionPolicy Bypass -File build_release.ps1 -DryRun
+#        powershell -ExecutionPolicy Bypass -File build_release.ps1 -CompileOnly -Board mmwave
 #
 # Version tracks (all independent — see #824):
 #   Orchestrator (desktop):   parent_server.py VERSION → installer.iss
 #   Android APK:              android/app/build.gradle.kts versionName/versionCode
 #                             (own track since #824 — was previously synced
 #                              to orchestrator, hiding half-shipped releases)
-#   ESP32 firmware:           registry.json "child-led-esp32"
-#   D1 Mini firmware:         registry.json "child-led-d1mini"
-#   Giga DMX bridge:          registry.json "dmx-bridge-esp32"
-#   Giga Child:               registry.json "child-led-giga"
-#   Giga Parent:              registry.json "parent-giga"
-#   Camera (Orange Pi):       registry.json "camera-orangepi" + camera_server.py VERSION
+#   Firmware boards:          firmware/registry.json — one entry per board,
+#                             each with its own version + sourceHash gate
+#                             (#902: the firmware step is registry-driven;
+#                              per-board build metadata lives in the entry:
+#                              autoBuild / sketch / hashPaths / versionFile /
+#                              arduinoConfigFile / buildFlags)
+#   Camera (Linux SBC):       registry.json "camera-node" + camera_server.py VERSION
+#
+# Machine-specific paths (arduino-cli, JDK, Android SDK, OneDrive mirror, …)
+# come from build.config.json at repo root; missing file/keys fall back to
+# the historical defaults baked in below.
 
 param(
     [switch]$SkipFirmware,
@@ -26,7 +33,18 @@ param(
     # Without this the script refuses any v7→v8 (etc.) bump because that's how
     # the registry got contaminated by the legacy unified-track era. See
     # memory/reference_firmware_field_versions.md for the per-board truth.
-    [switch]$AllowMajorBump
+    [switch]$AllowMajorBump,
+    # -DryRun: print exactly what would build / bump / copy / tag, touch nothing.
+    [switch]$DryRun,
+    # -CompileOnly: compile firmware only — no version bumps, no registry
+    # writes, no dist copies, no OneDrive mirror, no git tag, no desktop /
+    # Android steps. Outputs land in build\compile-only\<id> (gitignored)
+    # so the sha256-pinned bins under firmware/ stay untouched. Combine
+    # with -Board to compile a single board.
+    [switch]$CompileOnly,
+    # Registry id (or short alias: esp32 / d1mini / gyro / dmx / mmwave) to
+    # restrict the firmware step to one board. Mainly for -CompileOnly.
+    [string]$Board = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,6 +52,22 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location $root
 
 Write-Host "`n=== SlyLED Release Build ===" -ForegroundColor Cyan
+if ($DryRun)     { Write-Host "DRY RUN - printing the plan, modifying nothing" -ForegroundColor Yellow }
+if ($CompileOnly) { Write-Host "COMPILE ONLY - no version bumps, dist copies, tags, or mirroring" -ForegroundColor Yellow }
+
+# ── Machine-specific constants (build.config.json, fallbacks baked in) ──────
+$buildConfig = $null
+$buildConfigPath = Join-Path $root "build.config.json"
+if (Test-Path $buildConfigPath) {
+    try { $buildConfig = Get-Content $buildConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { Write-Host "WARN: build.config.json unreadable - using built-in defaults" -ForegroundColor Yellow }
+}
+function Get-BuildConfig([string]$name, [string]$default) {
+    $v = $default
+    if ($buildConfig -and $buildConfig.PSObject.Properties[$name] -and $buildConfig.$name) { $v = $buildConfig.$name }
+    return [Environment]::ExpandEnvironmentVariables($v)
+}
+$androidBuildDir = Get-BuildConfig 'androidBuildDir' 'C:\Android\build\slyled-app'
 
 # ── Helper: increment a "major.minor.patch" version string ─────────────────
 function Increment-Patch([string]$ver) {
@@ -43,9 +77,15 @@ function Increment-Patch([string]$ver) {
 }
 
 # ── Helper: read/write registry.json ───────────────────────────────────────
+# Read/write explicitly as UTF-8 *without* BOM. Windows PowerShell 5.1
+# defaults to ANSI on read (the historical `â€”` mojibake) and BOM-ful
+# UTF-8 on write (which breaks python's json.load). Pin both directions.
 $regPath = "$root\firmware\registry.json"
-function Read-Registry { Get-Content $regPath -Raw | ConvertFrom-Json }
-function Save-Registry($reg) { $reg | ConvertTo-Json -Depth 5 | Set-Content $regPath -Encoding UTF8 }
+function Read-Registry { Get-Content $regPath -Raw -Encoding UTF8 | ConvertFrom-Json }
+function Save-Registry($reg) {
+    $json = $reg | ConvertTo-Json -Depth 5
+    [System.IO.File]::WriteAllText($regPath, $json + "`r`n", (New-Object System.Text.UTF8Encoding($false)))
+}
 
 function Get-FwVersion([string]$id) {
     $reg = Read-Registry
@@ -60,7 +100,7 @@ function Set-FwVersion([string]$id, [string]$ver) {
     # Operator owns firmware versions (see memory/feedback_firmware_version_
     # authority.md). When the script auto-bumps, also update releaseTag so it
     # stays in sync with the new version label.
-    if ($entry -and $entry.releaseTag) {
+    if ($entry -and $entry.PSObject.Properties['releaseTag'] -and $entry.releaseTag) {
         $tagPrefix = ($entry.releaseTag -replace 'v[0-9]+\.[0-9]+\.[0-9]+$', '')
         if ($tagPrefix) { $entry.releaseTag = "${tagPrefix}v${ver}" }
     }
@@ -112,18 +152,27 @@ function Get-FwSourceHash([string]$id) {
     return ""
 }
 
-# Hash the firmware source tree the arduino-cli compiler actually consumes.
-# Includes main/*.{ino,h,cpp,c,hpp} + libraries/**/*.{h,cpp,c,hpp,ino} +
+# Hash the source tree a board's compile actually consumes (#902: per-board —
+# each registry entry declares its inputs in `hashPaths`; pre-#902 every ESP
+# board shared one main/+libraries hash, so a gyro-only edit patch-bumped
+# unrelated boards; that sharing is now explicit per entry).
 # arduino_secrets.h is intentionally excluded (gitignored, not part of release).
 # version.h is excluded — it's an *output* of the bump, not an input.
-function Get-FirmwareSourceHash {
+# For hashPaths ["main","libraries"] this reproduces the pre-#902 hash
+# byte-for-byte, so stored sourceHash values stay valid across the migration.
+function Get-SourceHash([string[]]$paths) {
     $files = @()
-    $files += Get-ChildItem -Path "$root\main" -Include *.ino,*.h,*.cpp,*.c,*.hpp -File -Recurse -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -ne 'version.h' -and $_.Name -ne 'arduino_secrets.h' }
-    if (Test-Path "$root\libraries") {
-        $files += Get-ChildItem -Path "$root\libraries" -Include *.ino,*.h,*.cpp,*.c,*.hpp -File -Recurse -ErrorAction SilentlyContinue
+    foreach ($p in $paths) {
+        $full = Join-Path $root $p
+        if (Test-Path $full -PathType Container) {
+            $files += Get-ChildItem -Path $full -Include *.ino,*.h,*.cpp,*.c,*.hpp -File -Recurse -ErrorAction SilentlyContinue
+        } elseif (Test-Path $full) {
+            $files += Get-Item $full
+        }
     }
-    $files = $files | Sort-Object FullName
+    $files = $files |
+        Where-Object { $_.Name -ne 'version.h' -and $_.Name -ne 'arduino_secrets.h' } |
+        Sort-Object FullName -Unique
     $sha = [System.Security.Cryptography.SHA256]::Create()
     $combined = New-Object System.IO.MemoryStream
     foreach ($f in $files) {
@@ -258,15 +307,22 @@ function Set-OrchStoredHash([string]$hash, [string]$ver) {
     $obj | ConvertTo-Json | Set-Content $orchCachePath -Encoding UTF8
 }
 
-# ── Helper: write version.h from a version string ─────────────────────────
-function Write-VersionH([string]$ver) {
+# ── Helper: bump the MAJOR/MINOR/PATCH defines in a version header ─────────
+# Handles both macro prefixes in the tree (#902): main/version.h uses APP_*,
+# mmwave/version.h uses MMW_* — each board's registry entry points at its
+# own `versionFile`. Rewrites the three defines in place so include guards
+# and comments survive.
+function Write-VersionFile([string]$path, [string]$ver) {
     $parts = $ver.Split(".")
-    @"
-#pragma once
-#define APP_MAJOR $($parts[0])
-#define APP_MINOR $($parts[1])
-#define APP_PATCH $($parts[2])
-"@ | Set-Content "$root\main\version.h" -Encoding UTF8
+    $content = Get-Content $path -Raw -Encoding UTF8
+    if ($content -notmatch '#define\s+([A-Z0-9_]+?)_MAJOR\b') {
+        throw "no *_MAJOR define found in $path"
+    }
+    $prefix = $Matches[1]
+    $content = $content -replace "(#define\s+${prefix}_MAJOR\s+)\d+", "`${1}$($parts[0])"
+    $content = $content -replace "(#define\s+${prefix}_MINOR\s+)\d+", "`${1}$($parts[1])"
+    $content = $content -replace "(#define\s+${prefix}_PATCH\s+)\d+", "`${1}$($parts[2])"
+    Set-Content $path $content -NoNewline -Encoding UTF8
 }
 
 # ── Step 1: Determine app version ──────────────────────────────────────────
@@ -274,145 +330,205 @@ function Write-VersionH([string]$ver) {
 # number when something under desktop/ actually changed. Pre-#824, this
 # script bumped every run regardless, leaking empty version tags into
 # git. The Android source-hash cache lives next to its source; mirror
-# that for desktop/.
-$serverPy = Get-Content "$root\desktop\shared\parent_server.py" -Raw
-if ($serverPy -match 'VERSION = "([^"]+)"') { $orchCurVer = $Matches[1] } else { $orchCurVer = "1.0.0" }
-
-$orchSrcHash = Get-OrchestratorSourceHash
-$orchStored = Get-OrchStoredHash
-$orchSourceUnchanged = ($orchStored -eq $orchSrcHash) -and (-not $SetAppVersion)
-
-if ($SetAppVersion) {
-    $appVersion = $SetAppVersion
-} elseif ($orchSourceUnchanged) {
-    $appVersion = $orchCurVer
-    Write-Host "Orchestrator source unchanged - keeping v$appVersion" -ForegroundColor Gray
-} else {
-    $appVersion = Increment-Patch $orchCurVer
-}
-
-# Validate no regression against git tags
+# that for desktop/. (-CompileOnly skips the orchestrator entirely.)
 $gitCmd = Get-Command git -ErrorAction SilentlyContinue
-if ($gitCmd) {
-    $latestTag = & git describe --tags --abbrev=0 2>$null
-    if ($latestTag -and $latestTag.StartsWith("v")) {
-        $tagVer = $latestTag.TrimStart("v")
-        $tagParts = $tagVer.Split(".")
-        $curParts = $appVersion.Split(".")
-        $tagNum = [int]$tagParts[0] * 10000 + [int]$tagParts[1] * 100 + [int]$tagParts[2]
-        $curNum = [int]$curParts[0] * 10000 + [int]$curParts[1] * 100 + [int]$curParts[2]
-        if ($curNum -lt $tagNum) {
-            Write-Host "ERROR: App version $appVersion is lower than latest tag $latestTag" -ForegroundColor Red
-            Write-Host "       Use -SetAppVersion to set a higher version" -ForegroundColor Yellow
-            exit 1
+
+if (-not $CompileOnly) {
+    $serverPy = Get-Content "$root\desktop\shared\parent_server.py" -Raw
+    if ($serverPy -match 'VERSION = "([^"]+)"') { $orchCurVer = $Matches[1] } else { $orchCurVer = "1.0.0" }
+
+    $orchSrcHash = Get-OrchestratorSourceHash
+    $orchStored = Get-OrchStoredHash
+    $orchSourceUnchanged = ($orchStored -eq $orchSrcHash) -and (-not $SetAppVersion)
+
+    if ($SetAppVersion) {
+        $appVersion = $SetAppVersion
+    } elseif ($orchSourceUnchanged) {
+        $appVersion = $orchCurVer
+        Write-Host "Orchestrator source unchanged - keeping v$appVersion" -ForegroundColor Gray
+    } else {
+        $appVersion = Increment-Patch $orchCurVer
+    }
+
+    # Validate no regression against git tags
+    if ($gitCmd) {
+        $latestTag = & git describe --tags --abbrev=0 2>$null
+        if ($latestTag -and $latestTag.StartsWith("v")) {
+            $tagVer = $latestTag.TrimStart("v")
+            $tagParts = $tagVer.Split(".")
+            $curParts = $appVersion.Split(".")
+            $tagNum = [int]$tagParts[0] * 10000 + [int]$tagParts[1] * 100 + [int]$tagParts[2]
+            $curNum = [int]$curParts[0] * 10000 + [int]$curParts[1] * 100 + [int]$curParts[2]
+            if ($curNum -lt $tagNum) {
+                Write-Host "ERROR: App version $appVersion is lower than latest tag $latestTag" -ForegroundColor Red
+                Write-Host "       Use -SetAppVersion to set a higher version" -ForegroundColor Yellow
+                exit 1
+            }
         }
     }
+
+    Write-Host "App version: $appVersion" -ForegroundColor Green
+
+    # ── Step 2: Sync orchestrator version (Android tracks independently) ──
+    # `$appVersion` is the orchestrator (desktop) track only — parent_server.py
+    # + installer.iss + the SPA. Android has its OWN version in
+    # android/app/build.gradle.kts → versionName, bumped by the source-hash
+    # gate in Step 5 below. The two tracks deliberately drift: a server-only
+    # bug fix bumps orchestrator without touching Android, and vice-versa,
+    # so the operator's mismatch banner (#824) actually surfaces something
+    # real instead of always reading "matched".
+    if ($DryRun) {
+        Write-Host "DRY RUN: would sync parent_server.py VERSION to $appVersion" -ForegroundColor Gray
+    } else {
+        (Get-Content "$root\desktop\shared\parent_server.py" -Raw) -replace 'VERSION = "[^"]+"', "VERSION = `"$appVersion`"" | Set-Content "$root\desktop\shared\parent_server.py" -Encoding UTF8
+    }
+
+    Write-Host "Orchestrator version: $appVersion (Android tracks independently)" -ForegroundColor Green
 }
 
-Write-Host "App version: $appVersion" -ForegroundColor Green
-
-# ── Step 2: Sync orchestrator version (Android tracks independently) ──────
-# `$appVersion` is the orchestrator (desktop) track only — parent_server.py
-# + installer.iss + the SPA. Android has its OWN version in
-# android/app/build.gradle.kts → versionName, bumped by the source-hash
-# gate in Step 5 below. The two tracks deliberately drift: a server-only
-# bug fix bumps orchestrator without touching Android, and vice-versa,
-# so the operator's mismatch banner (#824) actually surfaces something
-# real instead of always reading "matched".
-(Get-Content "$root\desktop\shared\parent_server.py" -Raw) -replace 'VERSION = "[^"]+"', "VERSION = `"$appVersion`"" | Set-Content "$root\desktop\shared\parent_server.py" -Encoding UTF8
-
-Write-Host "Orchestrator version: $appVersion (Android tracks independently)" -ForegroundColor Green
-
-# ── Step 3: Compile firmware (per-board, only when source changed) ─────────
-# Source-hash gate: each board entry in registry.json carries `sourceHash`
-# (sha256 of every firmware-input file). We rebuild + bump only when the
-# current hash differs. -SkipFirmware skips the entire step. -ForceFirmware
-# rebuilds every board regardless of hash.
+# ── Step 3: Compile firmware (registry-driven, per-board change gate) ──────
+# #902: loop over firmware/registry.json instead of unrolled per-board
+# blocks. Each entry with `autoBuild: true` compiles from its `sketch` dir,
+# gated by a sha256 of its own `hashPaths` (stored per entry as
+# `sourceHash`). `arduinoConfigFile` (mmwave) routes the compile through an
+# isolated arduino-cli data dir so the C61 core can't disturb the default
+# toolchain. `buildFlags` become compiler.{cpp,c}.extra_flags (the ESP32
+# core ignores build.extra_flags). Entries with `autoBuild: false` — Giga
+# boards (dfu/manual flash) and camera-node (SSH-deployed Python) — are
+# never compiled here: increment their registry entry when building those
+# targets by hand, exactly as before.
+# -SkipFirmware skips the entire step. -ForceFirmware rebuilds every board
+# regardless of hash. -CompileOnly compiles (ignoring the gate) without
+# bumping versions or writing the registry.
 if (-not $SkipFirmware) {
-    $cli = "$env:LOCALAPPDATA\Arduino\arduino-cli.exe"
+    $cli = Get-BuildConfig 'arduinoCli' "$env:LOCALAPPDATA\Arduino\arduino-cli.exe"
     $env:ARDUINO_DIRECTORIES_USER = $root
 
-    $srcHash = Get-FirmwareSourceHash
-    Write-Host "`nFirmware source hash: $($srcHash.Substring(0,12))..." -ForegroundColor Gray
+    $boardAliases = @{
+        'esp32'  = 'child-led-esp32'
+        'd1mini' = 'child-led-d1mini'
+        'gyro'   = 'gyro-esp32s3'
+        'dmx'    = 'dmx-bridge-esp32'
+    }
+    $boardFilter = $Board
+    if ($boardFilter -and $boardAliases.ContainsKey($boardFilter)) { $boardFilter = $boardAliases[$boardFilter] }
 
-    # --- ESP32 ---
-    if (Test-FwOnHold "child-led-esp32") {
-        Write-Host "ESP32 firmware: onHold flag set - skipping" -ForegroundColor Gray
-    } else {
-    $espStored = Get-FwSourceHash "child-led-esp32"
-    if (-not $ForceFirmware -and $espStored -eq $srcHash) {
-        Write-Host "ESP32 firmware: source unchanged - skipping (v$(Get-FwVersion 'child-led-esp32'))" -ForegroundColor Gray
-    } else {
-        $espCur = Get-FwVersion "child-led-esp32"
-        $espVer = Increment-Patch $espCur
-        if (-not $AllowMajorBump) { Assert-NoMajorBumpRegression "child-led-esp32" $espCur $espVer }
-        Write-VersionH $espVer
-        Write-Host "`n--- ESP32 Firmware v$espVer ---" -ForegroundColor Yellow
-        & $cli compile --clean --fqbn esp32:esp32:esp32 "$root\main" --output-dir "$root\firmware\esp32"
-        if ($LASTEXITCODE -ne 0) { Write-Host "ESP32 FAILED" -ForegroundColor Red; exit 1 }
-        Set-FwVersion "child-led-esp32" $espVer
-        Set-FwSourceHash "child-led-esp32" $srcHash
-    }
+    $regSnapshot = Read-Registry
+    $hashCache = @{}
+    $compiledBoards = @()
+    $matchedFilter = $false
+
+    foreach ($fw in $regSnapshot.firmware) {
+        $id = $fw.id
+        if ($boardFilter -and $id -ne $boardFilter) { continue }
+        $matchedFilter = $true
+
+        $auto = ($fw.PSObject.Properties['autoBuild'] -and $fw.autoBuild)
+        if (-not $auto) {
+            Write-Host "${id}: not auto-built (flashMethod $($fw.flashMethod)) - bump its registry entry when built by hand" -ForegroundColor Gray
+            continue
+        }
+        if (Test-FwOnHold $id) {
+            Write-Host "${id}: onHold flag set - skipping" -ForegroundColor Gray
+            continue
+        }
+
+        # Per-board change gate: hash exactly the inputs this board's
+        # compile consumes. Identical hashPaths share one computation.
+        $hashKey = ($fw.hashPaths -join '|')
+        if (-not $hashCache.ContainsKey($hashKey)) { $hashCache[$hashKey] = Get-SourceHash $fw.hashPaths }
+        $srcHash = $hashCache[$hashKey]
+        $stored = Get-FwSourceHash $id
+        $curVer = Get-FwVersion $id
+
+        if (-not $CompileOnly -and -not $ForceFirmware -and $stored -eq $srcHash) {
+            Write-Host "${id}: source unchanged - skipping (v$curVer)" -ForegroundColor Gray
+            continue
+        }
+
+        if ($CompileOnly) {
+            $newVer = $curVer
+        } else {
+            $newVer = Increment-Patch $curVer
+            if (-not $AllowMajorBump) { Assert-NoMajorBumpRegression $id $curVer $newVer }
+        }
+
+        # Output dir + declared artifact come from the entry's `file`
+        # (tolerate a leading "firmware/" — paths are relative to firmware/).
+        $relFile = ($fw.file -replace '^firmware/', '')
+        $outDir = Join-Path "$root\firmware" (Split-Path $relFile -Parent)
+        if ($CompileOnly) {
+            # A compile check must not clobber the released bins under
+            # firmware/ — their sha256 is pinned in the registry. Send
+            # outputs to the gitignored build/ scratch area instead.
+            $outDir = Join-Path $root "build\compile-only\$id"
+        }
+        $sketchDir = Join-Path $root $fw.sketch
+
+        if ($DryRun) {
+            $cfgNote = ""
+            if ($fw.PSObject.Properties['arduinoConfigFile'] -and $fw.arduinoConfigFile) { $cfgNote = ", config $($fw.arduinoConfigFile)" }
+            Write-Host "${id}: WOULD build v$curVer -> v$newVer (sketch $($fw.sketch), fqbn $($fw.fqbn)$cfgNote, hash $($srcHash.Substring(0,12))...)" -ForegroundColor Yellow
+            continue
+        }
+
+        if (-not $CompileOnly) { Write-VersionFile (Join-Path $root $fw.versionFile) $newVer }
+        Write-Host "`n--- $($fw.name) [$id] v$newVer ---" -ForegroundColor Yellow
+
+        $cliArgs = @()
+        if ($fw.PSObject.Properties['arduinoConfigFile'] -and $fw.arduinoConfigFile) {
+            # Isolated toolchain (e.g. the ESP32-C61 core, arduino-cli-mmwave.yaml):
+            # its own data/downloads dirs so the default cores never move.
+            $cliArgs += @('--config-file', (Join-Path $root $fw.arduinoConfigFile))
+        }
+        $cliArgs += @('compile', '--clean', '--fqbn', $fw.fqbn, $sketchDir, '--output-dir', $outDir)
+        if ($fw.PSObject.Properties['buildFlags'] -and $fw.buildFlags) {
+            # ESP32 Arduino core honours compiler.cpp/c.extra_flags, not
+            # build.extra_flags — same pattern build.ps1 uses.
+            $cliArgs += @('--build-property', "compiler.cpp.extra_flags=$($fw.buildFlags)",
+                          '--build-property', "compiler.c.extra_flags=$($fw.buildFlags)")
+        }
+        & $cli @cliArgs
+        if ($LASTEXITCODE -ne 0) { Write-Host "$id FAILED" -ForegroundColor Red; exit 1 }
+        $compiledBoards += $id
+
+        # Make sure the registry-declared artifact exists — arduino-cli names
+        # outputs <sketch>.ino[.merged].bin; when the entry's `file` uses a
+        # different name (mmwave.bin), publish the merged image under it.
+        # (Skipped in -CompileOnly: outputs stay in the scratch dir.)
+        if (-not $CompileOnly) {
+            $declared = Join-Path "$root\firmware" $relFile
+            if (-not (Test-Path $declared)) {
+                $sketchName = Split-Path $fw.sketch -Leaf
+                $merged = Join-Path $outDir "$sketchName.ino.merged.bin"
+                $plain  = Join-Path $outDir "$sketchName.ino.bin"
+                if (Test-Path $merged) { Copy-Item $merged $declared -Force }
+                elseif (Test-Path $plain) { Copy-Item $plain $declared -Force }
+            }
+        }
+
+        if (-not $CompileOnly) {
+            Set-FwVersion $id $newVer
+            Set-FwSourceHash $id $srcHash
+        }
     }
 
-    # --- D1 Mini ---
-    if (Test-FwOnHold "child-led-d1mini") {
-        Write-Host "D1 Mini firmware: onHold flag set - skipping" -ForegroundColor Gray
-    } else {
-    $d1Stored = Get-FwSourceHash "child-led-d1mini"
-    if (-not $ForceFirmware -and $d1Stored -eq $srcHash) {
-        Write-Host "D1 Mini firmware: source unchanged - skipping (v$(Get-FwVersion 'child-led-d1mini'))" -ForegroundColor Gray
-    } else {
-        $d1Cur = Get-FwVersion "child-led-d1mini"
-        $d1Ver = Increment-Patch $d1Cur
-        if (-not $AllowMajorBump) { Assert-NoMajorBumpRegression "child-led-d1mini" $d1Cur $d1Ver }
-        Write-VersionH $d1Ver
-        Write-Host "`n--- D1 Mini Firmware v$d1Ver ---" -ForegroundColor Yellow
-        & $cli compile --clean --fqbn esp8266:esp8266:d1_mini "$root\main" --output-dir "$root\firmware\d1mini"
-        if ($LASTEXITCODE -ne 0) { Write-Host "D1 Mini FAILED" -ForegroundColor Red; exit 1 }
-        Set-FwVersion "child-led-d1mini" $d1Ver
-        Set-FwSourceHash "child-led-d1mini" $srcHash
+    if ($boardFilter -and -not $matchedFilter) {
+        Write-Host "No registry entry matched -Board '$Board' (use a registry id or alias: esp32/d1mini/gyro/dmx/mmwave)" -ForegroundColor Red
+        exit 1
     }
-    }
-
-    # --- Gyro (ESP32-S3, BOARD_GYRO) ---
-    # Same source-hash gate as ESP32/D1 — without this the gyro version drifted
-    # silently because build_release.ps1 never tracked it (1.2.0 → 8.5.20
-    # hand-bumped on 2026-04-30; see follow-up #769 / #768 context). Now its
-    # version moves only when main/ or libraries/ actually change.
-    if (Test-FwOnHold "gyro-esp32s3") {
-        Write-Host "Gyro firmware: onHold flag set - skipping" -ForegroundColor Gray
-    } else {
-    $gyroStored = Get-FwSourceHash "gyro-esp32s3"
-    if (-not $ForceFirmware -and $gyroStored -eq $srcHash) {
-        Write-Host "Gyro firmware: source unchanged - skipping (v$(Get-FwVersion 'gyro-esp32s3'))" -ForegroundColor Gray
-    } else {
-        $gyroCur = Get-FwVersion "gyro-esp32s3"
-        $gyroVer = Increment-Patch $gyroCur
-        if (-not $AllowMajorBump) { Assert-NoMajorBumpRegression "gyro-esp32s3" $gyroCur $gyroVer }
-        Write-VersionH $gyroVer
-        Write-Host "`n--- Gyro Firmware v$gyroVer (BOARD_GYRO) ---" -ForegroundColor Yellow
-        # ESP32 Arduino core honours compiler.cpp/c.extra_flags, not
-        # build.extra_flags — same pattern build.ps1 uses for the gyro target.
-        & $cli compile --clean --fqbn esp32:esp32:esp32s3 "$root\main" `
-            --output-dir "$root\firmware\esp32s3" `
-            --build-property "compiler.cpp.extra_flags=-DGYRO_BOARD" `
-            --build-property "compiler.c.extra_flags=-DGYRO_BOARD"
-        if ($LASTEXITCODE -ne 0) { Write-Host "Gyro FAILED" -ForegroundColor Red; exit 1 }
-        Set-FwVersion "gyro-esp32s3" $gyroVer
-        Set-FwSourceHash "gyro-esp32s3" $srcHash
-    }
-    }
-
-    # Gyro test diagnostic build (#776) retired 2026-05-05 — superseded by
-    # the gyro-esp32s3 telemetry path (CMD_GYRO_BATT, /api/gyro/state).
-    # Build step + registry entry deleted; source files in main/TestGyro*
-    # remain only because deleting them is a separate cleanup pass.
-
-    # Note: Giga boards (child-led-giga, parent-giga, dmx-bridge-esp32) compile
-    # separately — increment their registry entry when building those targets.
 
     Write-Host "`nFirmware step complete (rebuild only on source change)" -ForegroundColor Green
+}
+
+# -CompileOnly stops here: no desktop/Android builds, no dist copies, no
+# SHA re-pinning, no OneDrive mirror, no git tag.
+if ($CompileOnly) {
+    Write-Host "`n=== Compile-only complete ===" -ForegroundColor Cyan
+    if (-not $SkipFirmware) {
+        foreach ($b in $compiledBoards) { Write-Host "  compiled: $b" -ForegroundColor White }
+    }
+    exit 0
 }
 
 # ── Step 4: Windows Desktop (PyInstaller + Inno Setup) ────────────────────
@@ -420,6 +536,9 @@ if (-not $SkipWindows) {
     if ($orchSourceUnchanged -and -not $ForceFirmware) {
         Write-Host "`n--- Windows Desktop ---" -ForegroundColor Yellow
         Write-Host "Windows: orchestrator source unchanged - skipping (v$appVersion, cached SlyLED-Setup.exe in dist/)" -ForegroundColor Gray
+    } elseif ($DryRun) {
+        Write-Host "`n--- Windows Desktop ---" -ForegroundColor Yellow
+        Write-Host "DRY RUN: would build SlyLED.exe (PyInstaller) + SlyLED-Setup.exe (Inno Setup) at v$appVersion" -ForegroundColor Yellow
     } else {
         Write-Host "`n--- Windows Desktop (App v$appVersion) ---" -ForegroundColor Yellow
         Set-Location "$root\desktop\windows"
@@ -433,7 +552,7 @@ if (-not $SkipWindows) {
         Write-Host "SlyLED.exe: $([math]::Round($exeSize/1MB, 1)) MB" -ForegroundColor Green
 
         # Build installer via Inno Setup
-        $iscc = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+        $iscc = Join-Path (Get-BuildConfig 'innoSetupDir' "$env:LOCALAPPDATA\Programs\Inno Setup 6") "ISCC.exe"
         if (-not (Test-Path $iscc)) { $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" }
         if (Test-Path $iscc) {
             Write-Host "Building installer..." -ForegroundColor Yellow
@@ -455,8 +574,8 @@ if (-not $SkipWindows) {
 
 # ── Step 5: Android APK ───────────────────────────────────────────────────
 if (-not $SkipAndroid) {
-    $env:JAVA_HOME = 'C:\Program Files\Microsoft\jdk-17.0.18.8-hotspot'
-    $env:ANDROID_SDK_ROOT = 'C:\Android\Sdk'
+    $env:JAVA_HOME = Get-BuildConfig 'javaHome' 'C:\Program Files\Microsoft\jdk-17.0.18.8-hotspot'
+    $env:ANDROID_SDK_ROOT = Get-BuildConfig 'androidSdkRoot' 'C:\Android\Sdk'
 
     # Read Android's CURRENT versionName as the source of truth — mirrors
     # how firmware boards read from registry.json. Android tracks its own
@@ -474,6 +593,10 @@ if (-not $SkipAndroid) {
         Write-Host "`n--- Android APK ---" -ForegroundColor Yellow
         Write-Host "Android APK: source unchanged - skipping (v$androidCurVer, cached $((Get-Item $androidCachePath).LastWriteTime))" -ForegroundColor Gray
         $androidVer = $androidCurVer
+    } elseif ($DryRun) {
+        $androidVer = Increment-Patch $androidCurVer
+        Write-Host "`n--- Android APK ---" -ForegroundColor Yellow
+        Write-Host "DRY RUN: would bump Android v$androidCurVer -> v$androidVer (+versionCode) and run gradlew assembleRelease" -ForegroundColor Yellow
     } else {
         # Bump the Android patch independently — same Increment-Patch logic
         # firmware boards use. Operator can hand-edit build.gradle.kts to
@@ -494,7 +617,7 @@ if (-not $SkipAndroid) {
         Set-Location "$root\android"
         .\gradlew.bat assembleRelease --no-daemon
         if ($LASTEXITCODE -ne 0) { Write-Host "Android FAILED" -ForegroundColor Red; exit 1 }
-        $apkPath = Get-ChildItem -Path "C:\Android\build\slyled-app" -Recurse -Filter "app-release.apk" | Select-Object -First 1
+        $apkPath = Get-ChildItem -Path $androidBuildDir -Recurse -Filter "app-release.apk" -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($apkPath) {
             $apkSize = $apkPath.Length
             Write-Host "APK: $([math]::Round($apkSize/1MB, 1)) MB at $($apkPath.FullName)" -ForegroundColor Green
@@ -507,52 +630,68 @@ if (-not $SkipAndroid) {
 # ── Step 6: Copy to dist/ ─────────────────────────────────────────────────
 Write-Host "`n--- Copying to dist/ ---" -ForegroundColor Yellow
 $distDir = "$root\dist"
-if (-not (Test-Path $distDir)) { New-Item -ItemType Directory -Path $distDir | Out-Null }
+if (-not $DryRun -and -not (Test-Path $distDir)) { New-Item -ItemType Directory -Path $distDir | Out-Null }
 
-Copy-Item "$root\firmware\esp32\main.ino.merged.bin" "$distDir\esp32-firmware-merged.bin" -Force -ErrorAction SilentlyContinue
-Copy-Item "$root\firmware\d1mini\main.ino.bin" "$distDir\d1mini-firmware.bin" -Force -ErrorAction SilentlyContinue
+function Copy-DistItem([string]$src, [string]$dst) {
+    if ($DryRun) {
+        if (Test-Path $src) { Write-Host "  DRY RUN: would copy $src -> $dst" -ForegroundColor Gray }
+        return
+    }
+    Copy-Item $src $dst -Force -ErrorAction SilentlyContinue
+}
+
+Copy-DistItem "$root\firmware\esp32\main.ino.merged.bin" "$distDir\esp32-firmware-merged.bin"
+Copy-DistItem "$root\firmware\d1mini\main.ino.bin" "$distDir\d1mini-firmware.bin"
 # Bins that the prior build_release.ps1 forgot — the SHA-refresh step
 # below walks dist/ and re-pins registry.json sha256 from whatever's
 # there, so missing copies meant the registry stayed pinned to the
 # previous release's hashes. Add gyro / gyro-test / dmx-bridge so
 # every firmware entry's dist/ artifact matches the just-rebuilt bin.
-Copy-Item "$root\firmware\esp32s3\main.ino.merged.bin" "$distDir\esp32s3-gyro-firmware.bin" -Force -ErrorAction SilentlyContinue
-Copy-Item "$root\firmware\esp32s3-test\main.ino.merged.bin" "$distDir\esp32s3-gyro-test-firmware.bin" -Force -ErrorAction SilentlyContinue
-Copy-Item "$root\firmware\esp32-dmx\main.ino.merged.bin" "$distDir\esp32-dmx-bridge-firmware.bin" -Force -ErrorAction SilentlyContinue
+Copy-DistItem "$root\firmware\esp32s3\main.ino.merged.bin" "$distDir\esp32s3-gyro-firmware.bin"
+Copy-DistItem "$root\firmware\esp32s3-test\main.ino.merged.bin" "$distDir\esp32s3-gyro-test-firmware.bin"
+Copy-DistItem "$root\firmware\esp32-dmx\main.ino.merged.bin" "$distDir\esp32-dmx-bridge-firmware.bin"
 # #870 — also publish app-only binaries for OTA. ESP32 OTA appends
 # bytes to the inactive OTA app partition (~1.5 MB on 4 MB flash);
 # the merged image overflows the partition AND fails magic-byte
 # validation. The orchestrator's OTA proxy serves these via the
 # registry's `otaAsset` field; pre-#870 it fell back to the merged
 # binary and silently broke OTA on every fresh-cache child.
-Copy-Item "$root\firmware\esp32\main.ino.bin" "$distDir\esp32-firmware-app.bin" -Force -ErrorAction SilentlyContinue
-Copy-Item "$root\firmware\esp32s3\main.ino.bin" "$distDir\esp32s3-gyro-firmware-app.bin" -Force -ErrorAction SilentlyContinue
-Copy-Item "$root\firmware\esp32-dmx\main.ino.bin" "$distDir\esp32-dmx-bridge-firmware-app.bin" -Force -ErrorAction SilentlyContinue
-Copy-Item "$root\desktop\windows\dist\SlyLED.exe" "$distDir\SlyLED.exe" -Force -ErrorAction SilentlyContinue
-Copy-Item "$root\desktop\windows\dist\SlyLED-Setup.exe" "$distDir\SlyLED-Setup.exe" -Force -ErrorAction SilentlyContinue
+Copy-DistItem "$root\firmware\esp32\main.ino.bin" "$distDir\esp32-firmware-app.bin"
+Copy-DistItem "$root\firmware\esp32s3\main.ino.bin" "$distDir\esp32s3-gyro-firmware-app.bin"
+Copy-DistItem "$root\firmware\esp32-dmx\main.ino.bin" "$distDir\esp32-dmx-bridge-firmware-app.bin"
+Copy-DistItem "$root\desktop\windows\dist\SlyLED.exe" "$distDir\SlyLED.exe"
+Copy-DistItem "$root\desktop\windows\dist\SlyLED-Setup.exe" "$distDir\SlyLED-Setup.exe"
 # Operator-canonical APK output: `dist/slyled-android.apk` (release-
 # signed). The release variant is the operator-facing artifact;
 # debug APK is a build-only intermediate and stays out of dist/.
-$apk = Get-ChildItem -Path "C:\Android\build\slyled-app" -Recurse -Filter "app-release.apk" -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($apk) { Copy-Item $apk.FullName "$distDir\slyled-android.apk" -Force }
-Write-Host "dist/ updated" -ForegroundColor Green
+$apk = Get-ChildItem -Path $androidBuildDir -Recurse -Filter "app-release.apk" -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($apk) { Copy-DistItem $apk.FullName "$distDir\slyled-android.apk" }
+if ($DryRun) {
+    Write-Host "DRY RUN: dist/ not modified" -ForegroundColor Yellow
+} else {
+    Write-Host "dist/ updated" -ForegroundColor Green
+}
 
 # Mirror dist/ to the OneDrive pickup folder so the operator finds the
 # finals where they always look for them. The work tree is now
 # /mnt/d/SlyLED (D:\SlyLED) per 2026-05-06 directive; OneDrive holds
 # only the operator-facing /dist mirror, no source.
-$onedriveDist = "D:\OneDrive\My Documents\ElectricRV\Development\Projects\Lighting Arduino\dist"
+$onedriveDist = Get-BuildConfig 'onedriveDistDir' 'D:\OneDrive\My Documents\ElectricRV\Development\Projects\Lighting Arduino\dist'
 if (Test-Path (Split-Path $onedriveDist -Parent)) {
-    if (-not (Test-Path $onedriveDist)) {
-        New-Item -ItemType Directory -Path $onedriveDist -Force | Out-Null
+    if ($DryRun) {
+        Write-Host "DRY RUN: would mirror dist/ to $onedriveDist (operator pickup)" -ForegroundColor Yellow
+    } else {
+        if (-not (Test-Path $onedriveDist)) {
+            New-Item -ItemType Directory -Path $onedriveDist -Force | Out-Null
+        }
+        # Copy every artifact in $distDir to the OneDrive mirror. Force-
+        # overwrite so a stale OneDrive copy from before the migration is
+        # replaced cleanly.
+        Get-ChildItem -Path $distDir -File | ForEach-Object {
+            Copy-Item $_.FullName (Join-Path $onedriveDist $_.Name) -Force -ErrorAction SilentlyContinue
+        }
+        Write-Host "dist/ mirrored to $onedriveDist (operator pickup)" -ForegroundColor Green
     }
-    # Copy every artifact in $distDir to the OneDrive mirror. Force-
-    # overwrite so a stale OneDrive copy from before the migration is
-    # replaced cleanly.
-    Get-ChildItem -Path $distDir -File | ForEach-Object {
-        Copy-Item $_.FullName (Join-Path $onedriveDist $_.Name) -Force -ErrorAction SilentlyContinue
-    }
-    Write-Host "dist/ mirrored to $onedriveDist (operator pickup)" -ForegroundColor Green
 } else {
     Write-Host "OneDrive parent path not present; skipping mirror" -ForegroundColor Yellow
 }
@@ -562,74 +701,81 @@ if (Test-Path (Split-Path $onedriveDist -Parent)) {
 # so downloads can verify integrity. Walks every registry entry that
 # declares a releaseAsset and, if the matching file lives in dist/,
 # updates sha256 to the fresh hash. Unchanged binaries keep their hash.
-Write-Host "`n--- Refreshing registry SHA-256 hashes ---" -ForegroundColor Yellow
-$reg = Read-Registry
-$anyChanged = $false
-foreach ($fw in $reg.firmware) {
-    $asset = $fw.releaseAsset
-    if (-not $asset) { continue }
-    $distPath = Join-Path $distDir $asset
-    if (-not (Test-Path $distPath)) { continue }
-    $newHash = (Get-FileHash -Algorithm SHA256 -Path $distPath).Hash.ToLower()
-    $oldHash = $null
-    if ($fw.PSObject.Properties['sha256']) { $oldHash = $fw.sha256 }
-    if ($newHash -ne $oldHash) {
-        $anyChanged = $true
-        if ($fw.PSObject.Properties['sha256']) {
-            $fw.sha256 = $newHash
-        } else {
-            $fw | Add-Member -MemberType NoteProperty -Name sha256 -Value $newHash
-        }
-        $shortHash = $newHash.Substring(0, 12)
-        Write-Host "  $($fw.id): sha256 -> $shortHash..." -ForegroundColor Green
-    }
-    # #870 — pin otaSha256 alongside sha256 so the OTA proxy can
-    # verify the app-only binary it serves matches the published
-    # release. Skip entries without otaAsset (D1 Mini, Giga, parent-
-    # giga, dmx-bridge-giga, camera).
-    $otaAsset = $null
-    if ($fw.PSObject.Properties['otaAsset']) { $otaAsset = $fw.otaAsset }
-    if ($otaAsset) {
-        $otaPath = Join-Path $distDir $otaAsset
-        if (Test-Path $otaPath) {
-            $otaHash = (Get-FileHash -Algorithm SHA256 -Path $otaPath).Hash.ToLower()
-            $oldOtaHash = $null
-            if ($fw.PSObject.Properties['otaSha256']) { $oldOtaHash = $fw.otaSha256 }
-            if ($otaHash -ne $oldOtaHash) {
-                $anyChanged = $true
-                if ($fw.PSObject.Properties['otaSha256']) {
-                    $fw.otaSha256 = $otaHash
-                } else {
-                    $fw | Add-Member -MemberType NoteProperty -Name otaSha256 -Value $otaHash
-                }
-                $shortOta = $otaHash.Substring(0, 12)
-                Write-Host "  $($fw.id): otaSha256 -> $shortOta..." -ForegroundColor Green
-            }
-        } else {
-            Write-Host "  $($fw.id): otaAsset $otaAsset missing in dist/ (#870 - OTA will 502 until rebuilt)" -ForegroundColor Yellow
-        }
-    }
-}
-if ($anyChanged) {
-    Save-Registry $reg
-    Write-Host "registry.json SHAs updated - commit with the release" -ForegroundColor Green
+if ($DryRun) {
+    Write-Host "`n--- Refreshing registry SHA-256 hashes ---" -ForegroundColor Yellow
+    Write-Host "DRY RUN: would re-pin sha256/otaSha256 in registry.json from dist/ binaries" -ForegroundColor Yellow
+    Write-Host "DRY RUN: would copy registry.json to $(Join-Path $env:APPDATA 'SlyLED\firmware') (live-OTA visibility)" -ForegroundColor Yellow
 } else {
-    Write-Host "All SHAs already match dist/ binaries" -ForegroundColor Gray
-}
+    Write-Host "`n--- Refreshing registry SHA-256 hashes ---" -ForegroundColor Yellow
+    $reg = Read-Registry
+    $anyChanged = $false
+    foreach ($fw in $reg.firmware) {
+        $asset = $null
+        if ($fw.PSObject.Properties['releaseAsset']) { $asset = $fw.releaseAsset }
+        if (-not $asset) { continue }
+        $distPath = Join-Path $distDir $asset
+        if (-not (Test-Path $distPath)) { continue }
+        $newHash = (Get-FileHash -Algorithm SHA256 -Path $distPath).Hash.ToLower()
+        $oldHash = $null
+        if ($fw.PSObject.Properties['sha256']) { $oldHash = $fw.sha256 }
+        if ($newHash -ne $oldHash) {
+            $anyChanged = $true
+            if ($fw.PSObject.Properties['sha256']) {
+                $fw.sha256 = $newHash
+            } else {
+                $fw | Add-Member -MemberType NoteProperty -Name sha256 -Value $newHash
+            }
+            $shortHash = $newHash.Substring(0, 12)
+            Write-Host "  $($fw.id): sha256 -> $shortHash..." -ForegroundColor Green
+        }
+        # #870 — pin otaSha256 alongside sha256 so the OTA proxy can
+        # verify the app-only binary it serves matches the published
+        # release. Skip entries without otaAsset (D1 Mini, Giga, parent-
+        # giga, dmx-bridge-giga, camera).
+        $otaAsset = $null
+        if ($fw.PSObject.Properties['otaAsset']) { $otaAsset = $fw.otaAsset }
+        if ($otaAsset) {
+            $otaPath = Join-Path $distDir $otaAsset
+            if (Test-Path $otaPath) {
+                $otaHash = (Get-FileHash -Algorithm SHA256 -Path $otaPath).Hash.ToLower()
+                $oldOtaHash = $null
+                if ($fw.PSObject.Properties['otaSha256']) { $oldOtaHash = $fw.otaSha256 }
+                if ($otaHash -ne $oldOtaHash) {
+                    $anyChanged = $true
+                    if ($fw.PSObject.Properties['otaSha256']) {
+                        $fw.otaSha256 = $otaHash
+                    } else {
+                        $fw | Add-Member -MemberType NoteProperty -Name otaSha256 -Value $otaHash
+                    }
+                    $shortOta = $otaHash.Substring(0, 12)
+                    Write-Host "  $($fw.id): otaSha256 -> $shortOta..." -ForegroundColor Green
+                }
+            } else {
+                Write-Host "  $($fw.id): otaAsset $otaAsset missing in dist/ (#870 - OTA will 502 until rebuilt)" -ForegroundColor Yellow
+            }
+        }
+    }
+    if ($anyChanged) {
+        Save-Registry $reg
+        Write-Host "registry.json SHAs updated - commit with the release" -ForegroundColor Green
+    } else {
+        Write-Host "All SHAs already match dist/ binaries" -ForegroundColor Gray
+    }
 
-# Step 6c — #832: copy firmware/registry.json to %APPDATA%\SlyLED\firmware\
-# so a running orchestrator (frozen exe or python) sees freshly-bumped
-# versions without a reinstall. Pre-fix the bundled registry inside the
-# PyInstaller exe was the only source — newly-built local firmware was
-# invisible to the Firmware tab + OTA. Mirrors the binary-cache layout
-# already used by `_FW_CACHE_DIR`, so the override-path read from
-# `firmware_manager.load_registry(..., cache_dir=_FW_CACHE_DIR)` finds it.
-$appDataFw = Join-Path $env:APPDATA "SlyLED\firmware"
-if (-not (Test-Path $appDataFw)) {
-    New-Item -ItemType Directory -Path $appDataFw -Force | Out-Null
+    # Step 6c — #832: copy firmware/registry.json to %APPDATA%\SlyLED\firmware\
+    # so a running orchestrator (frozen exe or python) sees freshly-bumped
+    # versions without a reinstall. Pre-fix the bundled registry inside the
+    # PyInstaller exe was the only source — newly-built local firmware was
+    # invisible to the Firmware tab + OTA. Mirrors the binary-cache layout
+    # already used by `_FW_CACHE_DIR`, so the override-path read from
+    # `firmware_manager.load_registry(..., cache_dir=_FW_CACHE_DIR)` finds it.
+    $appDataFw = Join-Path $env:APPDATA "SlyLED\firmware"
+    if (-not (Test-Path $appDataFw)) {
+        New-Item -ItemType Directory -Path $appDataFw -Force | Out-Null
+    }
+    Copy-Item $regPath (Join-Path $appDataFw "registry.json") -Force
+    Write-Host "registry.json copied to $appDataFw (live-OTA visibility)" -ForegroundColor Green
 }
-Copy-Item $regPath (Join-Path $appDataFw "registry.json") -Force
-Write-Host "registry.json copied to $appDataFw (live-OTA visibility)" -ForegroundColor Green
 
 # ── Step 7: Create git tag (app version only) ─────────────────────────────
 if ($gitCmd) {
@@ -638,6 +784,9 @@ if ($gitCmd) {
     $existingTag = & git tag -l $tagName 2>$null
     if ($existingTag) {
         Write-Host "Tag $tagName already exists - skipping" -ForegroundColor Yellow
+    }
+    elseif ($DryRun) {
+        Write-Host "DRY RUN: would create annotated tag $tagName" -ForegroundColor Yellow
     }
     else {
         & git tag -a $tagName -m "Release $tagName"
@@ -648,7 +797,11 @@ if ($gitCmd) {
 }
 
 # ── Summary ────────────────────────────────────────────────────────────────
-Write-Host "`n=== Build Complete ===" -ForegroundColor Cyan
+if ($DryRun) {
+    Write-Host "`n=== Dry run complete - nothing was modified ===" -ForegroundColor Cyan
+} else {
+    Write-Host "`n=== Build Complete ===" -ForegroundColor Cyan
+}
 Write-Host "  Orchestrator (desktop): v$appVersion" -ForegroundColor White
 if ($androidVer) {
     Write-Host "  Android APK:            v$androidVer" -ForegroundColor White
@@ -657,9 +810,11 @@ $reg = Read-Registry
 foreach ($fw in $reg.firmware) {
     Write-Host "  $($fw.id): v$($fw.version)" -ForegroundColor Gray
 }
-Write-Host ""
-Write-Host "  dist/:     All binaries copied"
-Write-Host ""
-Write-Host "Next steps:"
-Write-Host "  git add -A && git commit -m 'release: v$appVersion' && git push origin main --tags"
-Write-Host "  gh release create v$appVersion --target main --title 'v$appVersion'"
+if (-not $DryRun) {
+    Write-Host ""
+    Write-Host "  dist/:     All binaries copied"
+    Write-Host ""
+    Write-Host "Next steps:"
+    Write-Host "  git add -A && git commit -m 'release: v$appVersion' && git push origin main --tags"
+    Write-Host "  gh release create v$appVersion --target main --title 'v$appVersion'"
+}

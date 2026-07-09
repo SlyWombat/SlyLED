@@ -1,0 +1,10 @@
+{
+    "_comment": "Machine-specific build constants read by build.ps1 and build_release.ps1 (#902). %VAR% tokens are expanded via the environment. If this file is missing or a key is absent, the scripts fall back to the defaults recorded here.",
+    "arduinoCli": "%LOCALAPPDATA%\\Arduino\\arduino-cli.exe",
+    "defaultPort": "COM7",
+    "javaHome": "C:\\Program Files\\Microsoft\\jdk-17.0.18.8-hotspot",
+    "androidSdkRoot": "C:\\Android\\Sdk",
+    "androidBuildDir": "C:\\Android\\build\\slyled-app",
+    "innoSetupDir": "%LOCALAPPDATA%\\Programs\\Inno Setup 6",
+    "onedriveDistDir": "D:\\OneDrive\\My Documents\\ElectricRV\\Development\\Projects\\Lighting Arduino\\dist"
+}

@@ -32,6 +32,16 @@ Standard path is the build script:
 powershell.exe -ExecutionPolicy Bypass -File build.ps1 -Port COM7
 ```
 
+Machine-specific paths (arduino-cli, default COM port, JDK/Android SDK, Inno Setup,
+OneDrive dist mirror) live in `build.config.json` at repo root — edit that, not the
+scripts. `build_release.ps1`'s firmware step is registry-driven (#902): each
+`firmware/registry.json` entry carries `autoBuild` / `sketch` / `hashPaths` /
+`versionFile` (and optionally `arduinoConfigFile` — the MMwave ESP32-C61 builds via
+the isolated toolchain in `arduino-cli-mmwave.yaml`, sketch `mmwave/`, version track
+`mmwave/version.h` with `MMW_*` macros). Use `-DryRun` to print the per-board plan and
+`-CompileOnly [-Board <id|esp32|d1mini|gyro|dmx|mmwave>]` to compile with no version
+bumps, dist copies, tags, or mirroring.
+
 **Versioning — every platform has its own independent track. Never align them.**
 - **Firmware** — `main/version.h` + per-board entry in `firmware/registry.json`. Each board (LED ESP32, LED D1 Mini, gyro ESP32-S3, DMX bridge, camera, Giga child, Giga parent) is its own number. Only bumps when that board's source changes. `build.ps1` increments `APP_MINOR` on manual compile+upload; `build_release.ps1` source-hash-gates each board.
 - **Orchestrator** — `desktop/shared/parent_server.py` `VERSION` + `desktop/windows/installer.iss`. Tracks SPA + server changes. Source-hash gated.
