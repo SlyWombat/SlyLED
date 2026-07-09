@@ -51,7 +51,18 @@ Facts from the Ai-Thinker user manual and specification (links in §13):
 
 ### 2.3 Wiring
 
-Radar 5V→5V, GND→GND, radar TX/RX → a free C61 GPIO pair on **UART1** via the GPIO matrix (final pin pick during bench validation, §10 — UART0 stays reserved for console/flashing). Use hardware UART; 256000 baud is not reliable bit-banged.
+The boards in hand are the "G550" Rd-03D revision: a fitted 4-pin connector labeled `5V/GND/TX/RX` — per the Ai-Thinker spec a **1×4P 1.25 mm-pitch socket** (buy a "JST 1.25 mm 4-pin" / Molex PicoBlade-compatible pigtail; supply is 4.5–5.5 V at ≥200 mA, fine on the DevKit's USB 5 V rail), plus edge pads `RX TX GND DEBUG DP DM 5V` (`DEBUG` = chip debug port, `DP`/`DM` = USB for Ai-Thinker's PC tool — all unused; generic docs call the UART pins `OT1`/`RX`):
+
+| Rd-03D (G550 silk) | C61 DevKitC-1 | Note |
+|---|---|---|
+| 5V | 5V (J1 pin 14) | USB 5 V rail |
+| GND | GND (J1 pin 15) | adjacent to 5V |
+| TX (radar out; a.k.a. OT1) | GPIO4 → UART1 RX | |
+| RX (radar in) | GPIO5 → UART1 TX | |
+
+Direct stacking on the DevKit headers was evaluated and rejected: no consecutive header run matches the pad sequence (radar wants 5V/GND four positions apart; J1 has them adjacent, J3 has no 5V), the pad pitch isn't 2.54 mm, and a board stacked over the DevKit sits on its WiFi antenna while putting the MCU in the radar's back lobe. Mechanical pattern for a compact node: radar at the enclosure face (antennas outward, metal backplate behind), DevKit behind/beside on standoffs, 4-wire pigtail between.
+
+`Serial1.begin(256000, SERIAL_8N1, /*rx=*/4, /*tx=*/5)`. No level shifter — radar UART logic is 3.3 V. Pin choice rationale: GPIO7/8/9 are strapping (8 = RGB LED), GPIO10/11 are the UART0 console (keep for flashing/logs), GPIO12/13 are native USB, and GPIO14 is PSRAM `SPICS1` on the N8R2 — GPIO0–6 are the free set; any pair works if 4/5 is inconvenient. Hardware UART required; 256000 baud is not reliable bit-banged.
 
 ### 2.4 ESP32-C61 — the "newer board" risk, named explicitly
 
