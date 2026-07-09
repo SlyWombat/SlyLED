@@ -1,7 +1,7 @@
 """Stage setup regression test (split from test_full_show.py).
 
 Phase 1: stage dimensions, DMX profile, fixture creation, layout positions,
-mountedInverted. Pure API tests, no Playwright.
+inverted-mount fold (#780 P1). Pure API tests, no Playwright.
 
 Run: python -X utf8 tests/regression/test_stage_setup.py
 """
@@ -113,9 +113,18 @@ try:
     positioned = [f for f in fixtures if f.get('positioned')]
     check('3 fixtures positioned', len(positioned) == 3)
 
-    # Verify MH1 is inverted
+    # Verify MH1 inversion was baked (#780 P1 / #792 / #920): PUT
+    # {'mountedInverted': True} is save-time only — the server folds it
+    # into rotation[1] += 180 (roll about the forward axis) and clears
+    # the flag, so runtime IK consumes a single rotation source of
+    # truth. MH1 was created with rotation [-30, -10, 0], so the baked
+    # record is [-30, 170, 0] with mountedInverted False.
     mh1 = next((f for f in fixtures if f['id'] == mh1_id), None)
-    check('MH1 mountedInverted', mh1 and mh1.get('mountedInverted'))
+    mh1_rot = (mh1 or {}).get('rotation') or [0, 0, 0]
+    check('MH1 inversion baked: flag cleared (#780 P1)',
+          mh1 and not mh1.get('mountedInverted'))
+    check('MH1 inversion baked: rotation[1] == 170 (#780 P1)',
+          len(mh1_rot) >= 3 and abs(mh1_rot[1] - 170) < 0.001)
 
     # Verify fixture list via API
     r = api('GET', '/api/fixtures')

@@ -124,11 +124,21 @@ try:
     # Double-click MH1, verify rotation fields
     page.evaluate(f'() => {{ var f=null; _fixtures.forEach(function(fx){{if(fx.id==={mh1_id})f=fx;}}); if(f)showNodeEdit(f); }}')
     page.wait_for_timeout(500)
+    # #892 / #920 — the node editor binds through rotationFromLayout
+    # (#600 schema v2: [rx pitch, ry roll, rz yaw]) and displays tilt
+    # negated per #783 (operator tilt+ = above horizon; internal rx>0 =
+    # down). MH1 rotation is [-30, 170, 0] (roll 170 = baked #780 P1
+    # inversion), so ne-tilt shows -(-30) = 30 and ne-roll shows 170.
     tilt_val = page.evaluate('() => document.getElementById("ne-tilt") ? document.getElementById("ne-tilt").value : null')
-    check('MH1 double-click shows tilt=-30', tilt_val == '-30')
+    check('MH1 double-click shows tilt=30 (#892 display = -rx)', tilt_val == '30')
 
+    roll_val = page.evaluate('() => document.getElementById("ne-roll") ? document.getElementById("ne-roll").value : null')
+    check('MH1 double-click shows roll=170 (#780 P1 baked)', roll_val == '170')
+
+    # #780 P1 — mountedInverted is folded into rotation at save time and
+    # cleared, so the checkbox is unchecked for migrated records.
     inv_checked = page.evaluate('() => { var el=document.getElementById("ne-inverted"); return el ? el.checked : null; }')
-    check('MH1 inverted checkbox checked', inv_checked == True)
+    check('MH1 inverted checkbox unchecked (#780 P1 baked)', inv_checked == False)
 
     # Save and verify fixtures persist
     page.evaluate(f'() => applyNodePos({mh1_id})')
