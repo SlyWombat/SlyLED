@@ -120,9 +120,11 @@ def run_existing_types(c):
 def run_unknown_type(c):
     r = _post(c, {"name": "Bad", "type": "point", "fixtureType": "lidar"})
     ok("unknown type POST → 400", r.status_code == 400)
+    # #911 — the radar registration extends the message; wording pattern
+    # (registration-order listing, Oxford "or") is what's pinned.
     ok("unknown-type error message preserved",
        (r.get_json() or {}).get("err")
-       == "Invalid fixtureType - must be 'led', 'dmx', 'camera', or 'gyro'",
+       == "Invalid fixtureType - must be 'led', 'dmx', 'camera', 'gyro', or 'radar'",
        r.data[:160])
     # PUT with unknown type on an existing fixture.
     r = _post(c, {"name": "L2", "type": "linear", "fixtureType": "led"})
@@ -187,7 +189,8 @@ def run_dummy_registration(c):
 
 def run_registry_surface():
     ok("registry holds exactly the built-in types",
-       list(fixture_types.FIXTURE_TYPES) == ["led", "dmx", "camera", "gyro"],
+       list(fixture_types.FIXTURE_TYPES) == ["led", "dmx", "camera", "gyro",
+                                             "radar"],  # radar since #911
        repr(list(fixture_types.FIXTURE_TYPES)))
     wl = fixture_types.update_field_whitelist()
     ok("whitelist starts with the common fields in order",
@@ -198,8 +201,9 @@ def run_registry_surface():
     ok("smoothing stays out of the PUT whitelist (#877)",
        "smoothing" not in wl)
     caps = {n: d.capabilities for n, d in fixture_types.FIXTURE_TYPES.items()}
-    ok("camera is the only tracks_people type today",
-       [n for n, c in caps.items() if c.get("tracks_people")] == ["camera"],
+    ok("camera and radar (#911) are the tracks_people types",
+       [n for n, c in caps.items() if c.get("tracks_people")]
+       == ["camera", "radar"],
        repr(caps))
     ok("dmx is the only has_dmx type", caps["dmx"]["has_dmx"] is True
        and not any(c["has_dmx"] for n, c in caps.items() if n != "dmx"))

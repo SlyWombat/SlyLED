@@ -24,9 +24,9 @@ Adding a new sensor type is a registration, not a route edit:
 
     register_fixture_type(FixtureTypeDescriptor("radar", ...))
 
-# radar (#911) registers here — a `radar` descriptor with
-# tracks_people=True and its node-binding fields makes the type
-# creatable/updatable through the existing routes untouched.
+The `radar` type (#911) is exactly that: registered at the bottom of
+this module with tracks_people=True and its node-binding fields, the
+type became creatable/updatable through the existing routes untouched.
 
 Note the *geometry* type (``fixture.type`` ∈ linear/point/surface/group)
 is a separate axis from ``fixtureType`` and is not handled here —
@@ -303,4 +303,54 @@ register_fixture_type(FixtureTypeDescriptor(
     fields=("gyroChildId", "assignedMoverId", "gyroEnabled"),
     apply_create=_gyro_apply_create,
     capabilities={"tracks_people": False, "has_dmx": False, "placeable": True},
+))
+
+
+# ── radar (#911) — MMwave radar node (ESP32-C61 + Rd-03D, design doc
+# docs/design/mmwave_tracking.md §4.4). A placeable people-tracking
+# sensor: pose (layout position + `rotation`, stage Z-up mm, read only
+# via camera_math.rotation_from_layout) plus node binding & coverage:
+#
+#   radarNode    — hostname the reporting node announces in its PONG
+#                  (e.g. "MMW-A1B2"); optional at create — the #910
+#                  ingest falls back to a single-radar heuristic until
+#                  the operator binds it.
+#   rangeMm      — detection range, mm (Rd-03D ≈ 8 m).
+#   fovDeg       — azimuth field of view, degrees (Rd-03D ≈ ±60°).
+#   radarEnabled — ingest gate; a disabled radar's packets are ignored.
+
+def _radar_validate(body, fixture=None):
+    """Shared create/update validation — every radar field is optional,
+    so create and update enforce the same per-field constraints."""
+    if "radarNode" in body and body["radarNode"] is not None:
+        v = body["radarNode"]
+        if not isinstance(v, str) or not v.strip():
+            return "radarNode must be a non-empty string (node hostname, e.g. 'MMW-A1B2')"
+    if "rangeMm" in body and body["rangeMm"] is not None:
+        v = body["rangeMm"]
+        if not isinstance(v, int) or isinstance(v, bool) or v < 100 or v > 20000:
+            return "rangeMm must be an integer 100-20000"
+    if "fovDeg" in body and body["fovDeg"] is not None:
+        v = body["fovDeg"]
+        if not isinstance(v, int) or isinstance(v, bool) or v < 1 or v > 360:
+            return "fovDeg must be an integer 1-360 for radar fixtures"
+    if "radarEnabled" in body and not isinstance(body["radarEnabled"], bool):
+        return "radarEnabled must be a boolean"
+    return None
+
+
+def _radar_apply_create(f, body):
+    f["radarNode"] = body.get("radarNode")      # PONG hostname of the node
+    f["rangeMm"] = body.get("rangeMm", 8000)    # Rd-03D detection range
+    f["fovDeg"] = body.get("fovDeg", 120)       # ±60° azimuth wedge
+    f["radarEnabled"] = body.get("radarEnabled", True)
+
+
+register_fixture_type(FixtureTypeDescriptor(
+    "radar",
+    fields=("radarNode", "rangeMm", "fovDeg", "radarEnabled"),
+    validate_create=_radar_validate,
+    validate_update=lambda body, fixture: _radar_validate(body, fixture),
+    apply_create=_radar_apply_create,
+    capabilities={"tracks_people": True, "has_dmx": False, "placeable": True},
 ))
