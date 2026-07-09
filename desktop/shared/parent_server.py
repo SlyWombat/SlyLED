@@ -725,7 +725,7 @@ _temporal_objects = []  # in-memory only, never saved
 _nxt_tmp = 10000       # temporal IDs start at 10000 to avoid collision
 _nxt_sfx = max((f["id"] for f in _spatial_fx),  default=-1) + 1
 _nxt_tl  = max((t["id"] for t in _timelines),  default=-1) + 1
-_lock  = threading.Lock()
+_lock  = threading.Lock()  # #894 — rule: any write to a persisted collection (fixtures/children/objects/…) holds _lock
 
 #  "  "  DMX subsystems  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 _profile_lib = ProfileLibrary(data_dir=str(DATA))
@@ -1396,13 +1396,17 @@ def _periodic_ping():
         # Also probe WLED devices via HTTP
         for c in list(_children):
             if c.get("type") == "wled":
+                # Blocking HTTP probe stays outside _lock; only the
+                # status/seen mutation is locked (#894 — keep this
+                # consistent with the locked non-WLED sweep below).
                 info = wled_probe(c["ip"], timeout=2.0)
-                if info:
-                    c["status"] = 1
-                    c["seen"] = int(time.time())
-                    c["fwVersion"] = info.get("ver")
-                else:
-                    c["status"] = 0
+                with _lock:
+                    if info:
+                        c["status"] = 1
+                        c["seen"] = int(time.time())
+                        c["fwVersion"] = info.get("ver")
+                    else:
+                        c["status"] = 0
         time.sleep(2)   # allow PONGs to arrive
         with _lock:
             now = int(time.time())
@@ -3149,6 +3153,11 @@ def api_fixture_update(fid):
     # the claim and send a CMD_GYRO_CTRL(0) packet so the gyro stops
     # streaming.
     prior_gyro_active = bool(f.get("gyroEnabled")) if f.get("fixtureType") == "gyro" else None
+    # #894 — build the full update first, then commit it under _lock in
+    # one shot. The old field-by-field mutation of the live dict could
+    # be observed torn (half old, half new — e.g. new dmxStartAddr with
+    # old dmxChannelCount) by the DMX/show playback loops.
+    updates = {}
     for k in ("name", "type", "fixtureType", "childId", "childIds", "strings",
               "rotation", "orientation", "mountedInverted", "aoeRadius", "meshFile",
               "dmxUniverse", "dmxStartAddr", "dmxChannelCount", "dmxProfileId",
@@ -3160,9 +3169,16 @@ def api_fixture_update(fid):
             # #Q12 — normalise fovType on write so stored value is always in
             # the whitelist (inputs go through _normalise_fov_type).
             if k == "fovType":
-                f[k] = _normalise_fov_type(body[k])
+                updates[k] = _normalise_fov_type(body[k])
             else:
-                f[k] = body[k]
+                updates[k] = body[k]
+    with _lock:
+        f.update(updates)
+        # #780 P1 — fold any newly-set `mountedInverted=True` into
+        # `rotation[1] += 180°` so runtime IK never sees the flag.
+        # Idempotent for records the startup migration already processed.
+        _normalise_mounted_inverted(f)
+        _save("fixtures", _fixtures)
     # #801 — gyro Active state transitions:
     #   True  → False (Active → Inactive): release claim, send
     #          CMD_GYRO_CTRL(disabled) so the gyro stops streaming.
@@ -3178,10 +3194,6 @@ def api_fixture_update(fid):
             except Exception:
                 log.debug("gyro Inactive transition failed for fid %s",
                           fid, exc_info=True)
-    # #780 P1 — fold any newly-set `mountedInverted=True` into
-    # `rotation[1] += 180°` so runtime IK never sees the flag. Idempotent
-    # for records the startup migration already processed.
-    _normalise_mounted_inverted(f)
     # #742 — log when a request tries to mutate a home anchor through
     # the generic PUT so post-hoc forensics on "who nuked my home" has
     # an audit trail. We do not honour the write — caller must use the
@@ -3193,7 +3205,6 @@ def api_fixture_update(fid):
         log.warning("PUT /api/fixtures/%d ignored home-anchor field(s) %s — "
                     "use /api/fixtures/<fid>/home or /home/secondary instead",
                     fid, rejected_home_keys)
-    _save("fixtures", _fixtures)
     # #785 — rotation / profile / orientation may have changed; drop
     # the cached aim sphere so the next /api/mover/<fid>/aim rebuilds.
     _aim_invalidate_sphere(fid)
@@ -11029,11 +11040,14 @@ def api_objects_create():
 @app.delete("/api/objects/<int:sid>")
 def api_object_delete(sid):
     global _objects, _temporal_objects
-    before = len(_objects) + len(_temporal_objects)
-    _objects = [s for s in _objects if s["id"] != sid]
-    _temporal_objects = [s for s in _temporal_objects if s["id"] != sid]
-    if len(_objects) + len(_temporal_objects) < before:
-        _save("objects", _objects)
+    # #894 — the read-modify-write rebind + save must hold _lock or a
+    # concurrent create/pos-update can be lost between the rebinds.
+    with _lock:
+        before = len(_objects) + len(_temporal_objects)
+        _objects = [s for s in _objects if s["id"] != sid]
+        _temporal_objects = [s for s in _temporal_objects if s["id"] != sid]
+        if len(_objects) + len(_temporal_objects) < before:
+            _save("objects", _objects)
     return jsonify(ok=True)
 
 @app.put("/api/objects/<int:oid>/pos")
