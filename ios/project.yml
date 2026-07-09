@@ -105,3 +105,50 @@ targets:
     # developer.apple.com/account/resources/identifiers. The Info.plist
     # declares the usage descriptions; this just confirms the target
     # uses no extra entitlements at the project layer for v0.1.
+
+  # #906 — unit-test bundle for the hand-synced twin gates. Consumes the
+  # shared shortcut corpus at tests/fixtures/shortcut_corpus/ (repo root,
+  # copied into the test bundle as resources) — the same JSON that gates
+  # the JS reference (tests/test_fixture_shortcuts.py) and the Kotlin
+  # twin (android FixtureShortcutsTest.kt). XcodeGen sets TEST_HOST
+  # automatically from the app-target dependency.
+  SlyLEDTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: SlyLEDTests
+        excludes:
+          - "**/.DS_Store"
+      - path: ../tests/fixtures/shortcut_corpus
+        buildPhase: resources
+    dependencies:
+      - target: SlyLED
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ca.electricrv.slyled.tests
+        # Unlike the app target (hand-written plist — see the comment
+        # above), the test bundle has no version-sensitive plist keys,
+        # so the generated Info.plist is fine here.
+        GENERATE_INFOPLIST_FILE: YES
+        DEVELOPMENT_TEAM: V97FBD9SXN
+        CODE_SIGN_STYLE: Automatic
+        ARCHS: arm64
+        ONLY_ACTIVE_ARCH: NO
+
+# Explicit shared scheme so `xcodebuild -scheme SlyLED` keeps resolving
+# exactly as before (CI archive path, ios-testflight.yml) and
+# `xcodebuild -scheme SlyLED test` now runs the twin gates. SlyLEDTests
+# is build-for-testing only — the Release archive never builds or signs
+# the test bundle.
+schemes:
+  SlyLED:
+    build:
+      targets:
+        SlyLED: all
+        SlyLEDTests: [test]
+    test:
+      config: Debug
+      targets:
+        - SlyLEDTests
+    archive:
+      config: Release
