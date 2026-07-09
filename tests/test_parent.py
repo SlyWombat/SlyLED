@@ -1552,7 +1552,8 @@ def run():
         ok('GET / (SPA)', r.status_code == 200)
         spa = r.data.decode('utf-8', errors='replace')
         # Also fetch external JS — SPA content tests need HTML + all JS modules
-        for jsfile in ['app.js', 'dashboard.js', 'setup-ui.js', 'objects-effects.js',
+        for jsfile in ['fixture-types.js',  # type descriptors (#899) — rest-arrow/mesh tokens live here
+                       'app.js', 'dashboard.js', 'setup-ui.js', 'objects-effects.js',
                        'timelines.js', 'actions.js', 'wizard.js', 'file-manager.js',
                        'scene-3d.js', 'fixtures.js', 'profiles.js', 'emulation.js',
                        'calibration.js', 'settings.js', 'firmware.js',

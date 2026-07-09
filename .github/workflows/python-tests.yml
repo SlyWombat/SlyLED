@@ -118,7 +118,7 @@ jobs:
 
       - name: test_parent.py (known-failure allowlist)
         # test_parent.py currently has exactly 1 known-red assertion
-        # (776/777 pass as of 2026-07-09, #919; observed up to 786 total
+        # (777/778 pass as of 2026-07-09 post-#899 SPA registry; observed up to 786 total
         # on runs where more network-conditional branches execute):
         #   - "#739 import → fixtures.json matches memory" — open bug
         #     #739 (import → persist), red until that bug is fixed.
@@ -126,7 +126,7 @@ jobs:
         # under #919 — the test now asserts the #832 contract: version
         # comes from firmware/registry.json's per-board entry.)
         # Policy (option a from #904): run the full suite unmodified and
-        # fail this step if EITHER the pass count regresses below 776
+        # fail this step if EITHER the pass count regresses below 777
         # or any failure appears that is not on the allowlist. The floor
         # is deliberately below (total - 1): the assertion TOTAL varies
         # by environment (network-conditional branches add/skip ok()
@@ -153,8 +153,8 @@ jobs:
           if unexpected:
               sys.exit("UNEXPECTED failures (not on the #739 allowlist):\n  "
                        + "\n  ".join(unexpected))
-          if passed < 776:
-              sys.exit(f"pass count regressed: {passed} < 776")
+          if passed < 777:
+              sys.exit(f"pass count regressed: {passed} < 777")
           print("test_parent.py OK (known failures only)")
           EOF
 
