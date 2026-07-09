@@ -42,9 +42,10 @@ FR = SRC / 'fr'
 # source-of-truth list in DOCS_MAINTENANCE.md. Wildcards supported via
 # simple "startswith" match against repo-relative paths.
 SOT_MOVER = [
-    'desktop/shared/mover_calibrator.py',
+    # #784 — the aim/ package replaced the legacy IK modules
+    # (mover_calibrator.py, parametric_mover.py, coverage_math.py).
+    'desktop/shared/aim/',
     'desktop/shared/mover_control.py',
-    'desktop/shared/parametric_mover.py',
     'desktop/shared/spa/js/calibration.js',
 ]
 SOT_CAMERA = [

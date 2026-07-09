@@ -41,9 +41,8 @@ to bump the DRAFT banner" list below before removing.
 Any PR that touches these files should include an Appendix A or B review in the same PR:
 
 ### Mover-calibration surface
-- `desktop/shared/mover_calibrator.py`
+- `desktop/shared/aim/` — the IK package (#784): `sphere.py`, `stage_frame.py`, `profile_mechanics.py`, `park.py`, `routes.py`, `_rotmat.py` (replaced the deleted `mover_calibrator.py` / `parametric_mover.py` / `coverage_math.py`)
 - `desktop/shared/mover_control.py`
-- `desktop/shared/parametric_mover.py`
 - `desktop/shared/spa/js/calibration.js`
 - Orchestrator routes `/api/calibration/mover/*` in `desktop/shared/parent_server.py`
 - `CAL_TUNING_SPEC` in `desktop/shared/parent_server.py` (operator-tunable mover-cal knobs #680) — any change to defaults, clamps, keys, or tooltips MUST update Appendix B §B.7 "Tuning-parameter reference" in both EN and FR
@@ -61,7 +60,7 @@ Any PR that touches these files should include an Appendix A or B review in the 
 
 When reviewing a PR that touches any file above, confirm:
 
-- [ ] Phase names in `mover_calibrator.py` still match Appendix B §B.2
+- [ ] Calibration phase names (parent_server cal routes + `desktop/shared/aim/`) still match Appendix B §B.2
 - [ ] Timeout constants cited in Appendix B (`SETTLE`, `MAX_SAMPLES`, claim TTL, bracket floor, phase budgets #653) still match code
 - [ ] `CAL_TUNING_SPEC` (#680) defaults, clamps, and tooltip wording still match Appendix B §B.7
 - [ ] Endpoint paths and request/response shapes in Appendix A match the Flask route signatures

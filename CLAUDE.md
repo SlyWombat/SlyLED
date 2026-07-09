@@ -67,7 +67,7 @@ Camera Nodes (Linux SBC + USB V4L2 cam)     firmware/orangepi/camera_server.py
 
 The **Giga R1 also compiles as a Performer** (`BOARD_GIGA_CHILD`, define `GIGA_CHILD`) using the onboard RGB via software PWM. Default Giga build (`BOARD_GIGA`) is a minimal runtime — design/control UI lives in the desktop orchestrator.
 
-**Camera nodes:** Ubuntu 22.04+ / Debian Bookworm+ on any Linux SBC (Orange Pi 4A primary; RPi 3B+/4/5 and Orange Pi Zero 3/5 confirmed). USB V4L2 only — Pi CSI ribbon not supported in v1.x. Repo path is `firmware/orangepi/` for historical reasons; code is board-agnostic. Each USB sensor is a separate placeable fixture. Compatibility matrix in `docs/SUPPORTED_HARDWARE.md`.
+**Camera nodes:** Ubuntu 22.04+ / Debian Bookworm+ on any Linux SBC (Orange Pi 4A primary; RPi 3B+/4/5 and Orange Pi Zero 3/5 confirmed). USB V4L2 only — Pi CSI ribbon not supported in v1.x. Repo path is `firmware/orangepi/` for historical reasons; code is board-agnostic, and `firmware/orangepi/` is the **only** copy (the stale root `camera/` mirror was deleted under #905). Each USB sensor is a separate placeable fixture. Compatibility matrix in `docs/SUPPORTED_HARDWARE.md`.
 
 **"Surfaces" was renamed to "Objects"** across all platforms. Use `/api/objects` only.
 
@@ -87,9 +87,9 @@ Moving-head aim uses **stage-frame fixture-internal angles**, not mechanical yok
 
 - **`panDeg > 0`** = beam swept toward `+X` (stage-left, matching `rz > 0` in the rotation convention above).
 - **`tiltDeg > 0`** = beam **above horizon** (toward `+Z`, sky/ceiling). **`tiltDeg < 0`** = beam **below horizon** (toward `-Z`, floor).
-- The canonical reference implementation is `desktop/shared/coverage_math.py::world_to_fixture_pt(target, fix_pos, rotation)` — `tilt_deg = atan2(mz, hypot(mx, my))`, `pan_deg = atan2(mx, my)`. Anything that produces or consumes `(panDeg, tiltDeg)` must round-trip with this function.
+- The canonical reference implementation is `desktop/shared/aim/stage_frame.py::stage_aim_from_world_xyz(target_xyz, fixture_xyz)` — returns stage-frame `(az_deg, el_deg)` with `az_deg = atan2(sx, sy)`, `el_deg = atan2(sz, hypot(sx, sy))`. The `aim/` package names the same convention `az`/`el` (az = pan, el = tilt); anything that produces or consumes stage-frame aim angles must round-trip with this function.
 - The fixture-internal-to-DMX direction (whether DMX-up rotates the yoke clockwise or CCW; whether mechanical tilt-up = beam-up for top-mount or beam-down for pendant-mount) is **profile metadata's job** (`panSignFromDmx`, `tiltSignFromDmx` on the DMX profile). Call sites and tests express angles in stage convention only — never in mechanical or DMX terms.
-- `POST /api/mover/<fid>/aim-angles {panDeg, tiltDeg}` is the canonical low-level move endpoint and obeys this convention end-to-end.
+- `POST /api/mover/<fid>/aim` with `{azDeg, elDeg}` (or a `{x, y, z}` stage-mm target) is the canonical low-level move endpoint and obeys this convention end-to-end. (The legacy `aim-angles` endpoint was deleted under #784 PR-7.)
 
 ## UDP binary protocol (port 4210)
 
@@ -135,16 +135,26 @@ Moving-head aim uses **stage-frame fixture-internal angles**, not mechanical yok
 | ESP32               | 8                   | NVS Preferences (`"slyled"` ns)    |
 | Giga Child          | 1                   | NVS Preferences; 1 onboard RGB LED |
 
-## Cal-pipeline change checklist (#733)
+## Aim-pipeline change checklist (#733, reworked under #784)
 
-Any PR touching `mover_calibrator.py`, `coverage_math.py`, `parent_server.py` cal routes,
-`mover_control.py`, `surface_analyzer.py` cal helpers, or `dmx_profiles.py` channel-map shape **must**:
+The legacy IK modules (`mover_calibrator.py`, `coverage_math.py`, `sphere_model.py`,
+`parametric_mover.py`) and the SMART-pipeline emulator were deleted in #784 — the
+`desktop/shared/aim/` package is the only IK. Any PR touching `desktop/shared/aim/`
+(`sphere.py`, `stage_frame.py`, `profile_mechanics.py`, `park.py`, `routes.py`, `_rotmat.py`),
+`parent_server.py` cal routes, `mover_control.py`, `surface_analyzer.py` cal helpers, or
+`dmx_profiles.py` channel-map shape **must**:
 
-1. Run `python tools/emulate_smart_pipeline.py --verbose` against `tests/fixtures/cal/corpus.json` and confirm exit 0.
-2. Add a corpus case if the PR introduces a new failure mode.
+1. Run the offline aim gates and confirm exit 0:
+   - `python tests/aim/test_sphere.py` — AimSphere slope-from-home model (#799):
+     `aim_direction`/`aim_xyz` round-trips, multi-valued pose selection, unreachable targets.
+   - `python tests/aim/test_routes.py` — `POST /api/mover/<fid>/aim` contract against the
+     live Flask app: `{x,y,z}` and `{azDeg,elDeg}` forms, unreachable / not-found /
+     not-a-mover / incomplete-fixture errors.
+   (`tests/aim/test_stage_frame.py` and `tests/aim/test_profile_mechanics.py` cover the
+   mechanical ↔ stage-frame conversions the sphere builds on — run them too when touching
+   those modules.)
+2. Add a test case if the PR introduces a new failure mode.
 3. Land the test alongside the fix in the same commit.
-
-The weekly `tests/regression/run_all.py` includes the emulator (`test_smart_pipeline_emulator.py`).
 
 ## Tests
 
@@ -154,7 +164,7 @@ All commands run from project root. Wrap with `powershell.exe -Command "python -
 |----------------------------------------|----------|
 | `tests/test_parent.py`                 | Parent API, action types, WLED, runners, schema (523 assertions) |
 | `tests/test_spatial_math.py`           | Coordinate transforms, pan/tilt math (47) |
-| `tests/test_mover_calibration.py`      | Initial aim, grid interp, DMX buffer (99) |
+| `tests/aim/` (4 suites)                | AimSphere IK, mech↔stage frame, profile mechanics, `/aim` endpoint (121) |
 | `tests/test_beam_detector.py`          | Synthetic frame detection (35, requires OpenCV) |
 | `tests/test_surface_analyzer.py`       | RANSAC walls, obstacle clustering (42) |
 | `tests/test_unified_3d.py` etc.        | Playwright visual checks |

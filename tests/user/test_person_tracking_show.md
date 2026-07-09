@@ -1,8 +1,8 @@
 # Person Tracking Show — End-User Test Procedure
 
-**Date:** 2026-04-13
-**Project file:** `tests/user/basement/basement.slyshow`
-**Goal:** Load the basement show and create a show where cameras detect people and moving heads track them.
+**Date:** 2026-04-13 (project file updated 2026-07 — the basement rig was removed in favour of the checked-in sample stage)
+**Project file:** `docs/samples/sample-stage.slyshow`
+**Goal:** Load the sample stage and create a show where cameras detect people and moving heads track them.
 
 ## Hardware Required
 
@@ -34,20 +34,24 @@
 
 ## Test Steps
 
-### Step 1: Load Basement Project
+### Step 1: Load the Sample Stage Project
 
 1. Open SlyLED in browser (http://localhost:5000)
 2. Go to **Settings** tab
 3. Click **Import Project**
-4. Select `tests/user/basement/basement.slyshow`
+4. Select `docs/samples/sample-stage.slyshow`
 5. Wait for import confirmation
 
-**Verify:** Setup tab shows 2 DMX fixtures (Sly MH 1, Sly MH 2) and camera fixtures.
+**Verify:** Setup tab shows the sample rig — 3 moving heads (150W Stage Left, 150W Stage Right, 350W Outdoor Waterproof BeamLight), 8 Back Wash RGBW fixtures, an LED-bar fixture, and 2 camera fixtures.
+
+> Substitute your own movers/cameras for the sample fixture names in the steps
+> below if you are running against live hardware — the sample stage carries
+> layout + profiles but no rig-specific credentials or calibrations.
 
 ### Step 2: Start Camera Tracking
 
 1. Go to **Layout** tab
-2. In the 3D viewport, locate the camera fixture (Left Cam Wide, ID 12)
+2. In the 3D viewport, locate a camera fixture (e.g. "Global Shutter Camera" in the sample stage)
 3. Click the camera fixture to select it
 4. Click **Track** toggle button to start person tracking
 5. Status bar should show: *"Tracking active — watching for people"*
@@ -149,9 +153,9 @@ If aiming seems off, check calibration:
    - Sample at least 4 stage positions
    - Save calibration
 
-The basement show includes calibration data for both movers:
-- MH 1: Pan 0.298–0.400, Tilt 0.753–1.000, 4 sample points
-- MH 2: Pan 0.286–0.459, Tilt 0.776–1.000, 4 sample points
+The sample stage ships **without** calibration data (rig-specific data is
+stripped from `docs/samples/sample-stage.slyshow`) — run the calibration
+wizard on your own movers before expecting accurate tracking aim.
 
 ## Architecture Reference
 

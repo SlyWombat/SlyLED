@@ -309,9 +309,9 @@ fun ControllerModeOverlay(
                 }
             }
 
-            // #479 — live status row (shared with PointerModeOverlay via
-            // MoverStatusRow.kt). Green dot when fresh + state, dim amber
-            // when stale/no-data, red when engine isn't running.
+            // #479 — live status row (MoverStatusRow.kt). Green dot when
+            // fresh + state, dim amber when stale/no-data, red when the
+            // engine isn't running.
             Spacer(Modifier.height(8.dp))
             MoverStatusRow(statusClaim = statusClaim, engineRunning = engineRunning)
 

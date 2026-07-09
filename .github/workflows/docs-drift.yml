@@ -14,9 +14,8 @@ name: docs-drift
 on:
   pull_request:
     paths:
-      - 'desktop/shared/mover_calibrator.py'
+      - 'desktop/shared/aim/**'
       - 'desktop/shared/mover_control.py'
-      - 'desktop/shared/parametric_mover.py'
       - 'desktop/shared/camera_math.py'
       - 'desktop/shared/space_mapper.py'
       - 'desktop/shared/surface_analyzer.py'
