@@ -230,7 +230,16 @@ class LiveStageViewModel @Inject constructor(
                     return@start
                 }
                 val seq = brightnessSeq.also { brightnessSeq = (it + 1) and 0xFF }
-                udpClient.sendAutoBrightnessPush(host, master, flags = 0, seq = seq)
+                // #906 — flags aligned with iOS UdpClient.swift semantics:
+                // bit0 = beat-pulse active (iOS: `gotBeat || beatPulse > 0.5`;
+                // here a fresh beat snaps the pulse StateFlow to 1.0 before
+                // this callback fires, so `> 0.5` covers both cases),
+                // bit1 = mic-gated (this push only ever originates from the
+                // live audio-capture loop, matching iOS's unconditional
+                // `micGated: true`). Server treats flags as diagnostic-only.
+                var flags = 0x02
+                if (mic.beatPulse.value > 0.5f) flags = flags or 0x01
+                udpClient.sendAutoBrightnessPush(host, master, flags = flags, seq = seq)
             }
             _autoBrightnessEnabled.value = started
             // #804 — persist intent so the next app launch resumes mic

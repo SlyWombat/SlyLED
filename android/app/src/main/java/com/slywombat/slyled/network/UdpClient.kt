@@ -1,5 +1,6 @@
 package com.slywombat.slyled.network
 
+import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -59,6 +60,14 @@ class UdpClient @Inject constructor() {
     @Volatile private var socket: DatagramSocket? = null
     private val sendLock = Any()
 
+    // #906 — session-relative monotonic epoch, matching iOS UdpClient.swift
+    // (`sessionEpochStart = Date()` at init; epoch = ms since session start).
+    // elapsedRealtime() is monotonic across sleep, immune to wall-clock
+    // changes. The orchestrator currently ignores the header epoch for
+    // fire-and-forget pushes, but both phone platforms now stamp the same
+    // semantics so the field is usable for latency diagnostics.
+    private val sessionEpochStartMs = SystemClock.elapsedRealtime()
+
     // #861 follow-up — `MicAutoBrightness` invokes its master callback on
     // `Dispatchers.Main` (line 370), so calling this from `LiveStageViewModel`
     // would `DatagramSocket.send` on the UI thread → `NetworkOnMainThreadException`,
@@ -83,13 +92,15 @@ class UdpClient @Inject constructor() {
         return s!!
     }
 
-    /** Build the standard 8-byte protocol header. */
-    private fun header(cmd: Byte): ByteArray {
+    /** Build the standard 8-byte protocol header.
+     *  `epoch` — #906: monotonic ms since session start (uint32, wraps),
+     *  aligned with iOS UdpClient.swift's sendAutoBrightness. */
+    private fun header(cmd: Byte, epoch: Int): ByteArray {
         val buf = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
         buf.putShort(MAGIC)
         buf.put(PROTOCOL_VERSION)
         buf.put(cmd)
-        buf.putInt(0)   // epoch — orchestrator ignores for fire-and-forget
+        buf.putInt(epoch)
         return buf.array()
     }
 
@@ -117,7 +128,11 @@ class UdpClient @Inject constructor() {
                     put((flags and 0xFF).toByte())
                     put((seq and 0xFF).toByte())
                 }.array()
-                val pkt = header(CMD_AUTOBRI_PUSH) + payload
+                // #906 — stamp session-relative monotonic ms, same
+                // semantics as iOS (wire format unchanged: uint32 LE).
+                val epochMs =
+                    (SystemClock.elapsedRealtime() - sessionEpochStartMs).toInt()
+                val pkt = header(CMD_AUTOBRI_PUSH, epochMs) + payload
                 val addr = InetAddress.getByName(host)
                 val datagram = DatagramPacket(pkt, pkt.size, addr, port)
                 ensureSocket().send(datagram)
