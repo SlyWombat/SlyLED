@@ -11070,9 +11070,11 @@ _FUSION_TIER_WEIGHT = {"homography": 1.0, "fov-projection": 0.4, "raw": 0.05}
 
 
 def _fusion_weight(obj, obj_age_s):
-    """Weight for a temporal-object placement: tier × YOLO confidence ×
-    hull-falloff × freshness. Used as the mean-fusion weight and as the
-    #630 confidence signal."""
+    """Camera-source weight for a temporal-object placement: tier × YOLO
+    confidence × hull-falloff × freshness. Used as the mean-fusion weight
+    and as the #630 confidence signal. Registered as the "camera" entry
+    (and the legacy default) in the #900 per-source-type weight registry
+    below — non-camera sources supply their own weight/covariance hook."""
     tier = _FUSION_TIER_WEIGHT.get(obj.get("_method"), 0.05)
     yolo_conf = obj.get("confidence")
     if yolo_conf is None:
@@ -11082,8 +11084,60 @@ def _fusion_weight(obj, obj_age_s):
     return max(0.0, tier * float(yolo_conf) * freshness)
 
 
+# #900 — source-agnostic fusion. A temporal object may carry provenance
+# metadata under "source": {"type": "<source type>", ...} — e.g.
+# {"type": "camera", "cameraId": 3}. The camera ingest path stamps it;
+# objects created before #900 (or by external POSTs that omit it) default
+# to "camera", so legacy objects fuse exactly as they always did.
+# The fusion core consults this registry for the per-source weight (a
+# covariance-derived confidence for filtered sources like radar), so a
+# new sensor type participates in fusion without touching
+# _fuse_temporal_objects itself.
+#
+# radar_fusion.py (#912) registers its weight hook here:
+#   register_fusion_source_weight("radar", <fn(obj, obj_age_s) -> float>)
+_FUSION_SOURCE_WEIGHTS = {}
+
+
+def register_fusion_source_weight(source_type, weight_fn):
+    """Register `weight_fn(obj, obj_age_s) -> float` as the fusion weight
+    for temporal objects whose source["type"] == source_type (#900)."""
+    _FUSION_SOURCE_WEIGHTS[str(source_type)] = weight_fn
+
+
+def _fusion_source_type(obj):
+    """Source type of a temporal object. Defaults to "camera" — every
+    pre-#900 temporal object was camera-pushed, so the default preserves
+    legacy behaviour for objects with no source stamp."""
+    src = obj.get("source")
+    if isinstance(src, dict):
+        st = src.get("type")
+        if isinstance(st, str) and st:
+            return st
+    return "camera"
+
+
+def _fusion_weight_for(obj, obj_age_s):
+    """Per-source fusion weight (#900): route through the registered
+    source-type hook; unknown/unregistered types fall back to the camera
+    weighting (matching pre-#900 behaviour for legacy objects)."""
+    fn = _FUSION_SOURCE_WEIGHTS.get(_fusion_source_type(obj))
+    if fn is None:
+        fn = _fusion_weight
+    try:
+        return max(0.0, float(fn(obj, obj_age_s)))
+    except Exception:
+        log.debug("fusion weight hook failed for source %r",
+                  _fusion_source_type(obj), exc_info=True)
+        return 0.0
+
+
+register_fusion_source_weight("camera", _fusion_weight)
+
+
 def _fuse_temporal_objects():
-    """Cluster near-duplicate temporal objects across cameras and replace
+    """Cluster near-duplicate temporal objects across sources (cameras
+    today; radar via the #900 per-source weight registry) and replace
     each cluster with a single weighted-mean object. Runs on every reap
     (piggybacks on the existing /api/objects + bake-tick cadence).
 
@@ -11133,7 +11187,9 @@ def _fuse_temporal_objects():
         for _idx, obj in cluster:
             ex = obj.get("_expiresAt", now)
             age = max(0.0, now - (ex - (obj.get("ttl") or 0)))
-            w = _fusion_weight(obj, age)
+            # #900 — weight comes from the per-source-type hook (camera
+            # weighting for legacy/camera objects, unchanged).
+            w = _fusion_weight_for(obj, age)
             if w <= 0:
                 continue
             pos = obj.get("transform", {}).get("pos", [0, 0, 0])
@@ -11151,6 +11207,9 @@ def _fuse_temporal_objects():
             sources.append({
                 "id": obj.get("id"),
                 "cameraId": obj.get("_cameraId"),
+                # #900 — provenance for mixed-source clusters (additive;
+                # cameraId stays for the SPA's per-camera breakdown).
+                "sourceType": _fusion_source_type(obj),
                 "method": src_tier,
                 "weight": round(w, 3),
             })
@@ -11361,6 +11420,16 @@ def api_objects_temporal_create():
         # _fusionSources.
         if cam_id is not None:
             obj["_cameraId"] = cam_id
+            # #900 — source provenance for the per-source fusion hooks.
+            obj["source"] = {"type": "camera", "cameraId": cam_id}
+        elif isinstance(body.get("source"), dict) \
+                and isinstance(body["source"].get("type"), str) \
+                and body["source"]["type"]:
+            # #900 — non-camera ingest (e.g. radar_fusion.py #912, or a
+            # test harness) declares its own source type. Absent both,
+            # the object carries no source stamp and fuses with the
+            # legacy camera weighting (see _fusion_source_type).
+            obj["source"] = body["source"]
         # Q3/#630 — forward the YOLO confidence if the tracker provided
         # one. Feeds _fusion_weight alongside the method tier.
         if "confidence" in body:
