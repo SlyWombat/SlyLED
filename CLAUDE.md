@@ -103,12 +103,12 @@ Moving-head aim uses **stage-frame fixture-internal angles**, not mechanical yok
 
 ## UDP binary protocol (port 4210)
 
-8-byte header: `struct.pack("<HBBI", magic=0x534C, version=4, cmd, epoch)`.
+8-byte header: `struct.pack("<HBBI", magic=0x534C, version=5, cmd, epoch)`.
 
 | Cmd  | Name         | Direction      | Payload |
 |------|--------------|----------------|---------|
 | 0x01 | PING         | parent→child   | header only |
-| 0x02 | PONG         | child→parent   | 133 bytes (see below) |
+| 0x02 | PONG         | child→parent   | 134 bytes (see below) |
 | 0x10 | ACTION       | parent→child   | 42 bytes (type/rgb/p16a/p8a-d + ledStart[8×u16] + ledEnd[8×u16]) |
 | 0x11 | ACTION_STOP  | parent→child   | header only |
 | 0x12 | ACTION_EVENT | child→parent   | 4 bytes (actionType, stepIndex, totalSteps, event) |
@@ -119,21 +119,34 @@ Moving-head aim uses **stage-frame fixture-internal angles**, not mechanical yok
 | 0x31 | RUNNER_STOP  | parent→child   | header only |
 | 0x40 | STATUS_REQ   | parent→child   | header only |
 | 0x41 | STATUS_RESP  | child→parent   | 8 bytes `<BBBBI` (activeAction, runnerActive, currentStep, rssi, uptime) |
+| 0x50 | OTA_UPDATE   | parent→child   | variable — maj(1) + min(1) + patch(1) + urlLen(2 LE) + url(N) + sha256hex(64); triggers `otaStartUpdate()` + reboot |
+| 0x51 | OTA_STATUS   | child→parent   | reserved — status codes defined (`main/OtaUpdate.h`) but no firmware transmits it yet |
+| 0x60 | GYRO_ORIENT  | gyro→parent    | 8 bytes — roll100/pitch100/yaw100 (i16, ×100) + fps(u8) + flags(u8: bit0=streaming, bit1=imuOk, bit2=wifiOk, bit3=RESERVED per #819, bits[5:4]=ui-mode preset); ≤50 Hz stream, 20 Hz default |
+| 0x61 | GYRO_CTRL    | parent→gyro    | 2 bytes — enabled(1) + targetFps(1) (0 = board default 20 Hz, max 50) |
+| 0x62 | GYRO_RECAL   | parent→gyro    | header only — zero IMU reference |
+| 0x63 | GYRO_COLOR   | gyro→parent    | 4 bytes — r, g, b + flags (bit0 = flash: brief full-brightness pulse) |
+| 0x64 | GYRO_CALIBRATE | gyro→parent  | 7 bytes — calibrating(1: 1=hold started, 0=hold released) + roll100/pitch100/yaw100 (i16, ×100) |
+| 0x65 | GYRO_HEARTBEAT | parent→gyro  | header only — keep-alive, 2 s cadence while a claim is active |
 | 0x66 | GYRO_START   | gyro→parent    | 2 bytes — nonce (#825); legacy header-only still accepted |
-| 0x67 | CLAIM_DENIED | parent→gyro    | header only — claim refused (#772) |
+| 0x67 | GYRO_CLAIM_DENIED | parent→gyro | 1 byte — reason code (#872; see `docs/gyro-claim-lifecycle.md` §3.6). Pre-#872 servers send header-only; the gyro reads that as reason 0 (legacy/unspecified) |
+| 0x68 | GYRO_BATT    | gyro→parent    | 4 bytes — vbat100(u16, V×100) + pct(u8, 0xFF = unknown) + flags (bit0 = charging); ~10 s cadence |
 | 0x69 | GYRO_STOP    | gyro→parent    | 2 bytes — nonce (#825); legacy header-only still accepted |
-| 0x6A | CLAIM_ACK    | parent→gyro    | 4 bytes — nonce + moverId (#825) |
-| 0x6B | STOP_ACK     | parent→gyro    | 2 bytes — nonce (#825) |
-| 0x6C | HB_REP       | gyro→parent    | 5 bytes — uiState + claimNonce + seq (#825) |
+| 0x6A | GYRO_CLAIM_ACK | parent→gyro  | 4 bytes — nonce + moverId (#825) |
+| 0x6B | GYRO_STOP_ACK | parent→gyro   | 2 bytes — nonce (#825) |
+| 0x6C | GYRO_HEARTBEAT_REP | gyro→parent | 5 bytes — uiState + claimNonce + seq (#825) |
 | 0x6D | AUTOBRI_PUSH | phone→parent   | 3 bytes — master + flags + seq (#861); UDP **4211** (#862) — own port to dodge Windows-host 4210 kernel reservations |
 | 0x6E | GYRO_OFF     | gyro→parent    | 2 bytes — nonce (#867); same shape as GYRO_STOP but server releases claim with `blackout=True` (head goes dark). ACK reuses CMD_GYRO_STOP_ACK |
 | 0x6F | GYRO_AIM_WIZARD | gyro→parent | 36 bytes — three Euler triples in degrees (roll, pitch, yaw) for {neutral, pitch_forward, yaw_left} (#869). Server converts each to a body-to-world unit quat via `quat_from_euler_zyx_deg` and runs the same `_aim_wizard_compute` math the Android wizard (#826) uses; persists derived `forward_local` / `up_local` on the gyro's `gyro-<ip>` Remote. Fire-and-forget; no ACK |
+| 0x70 | MMW_TARGETS  | node→parent    | 28 bytes — seq(u16) + count(u8) + flags(u8: bit0 = radar-frame parse healthy) + 3 × {xMm i16, yMm i16, speedCms i16, resMm u16}; fixed 3 slots, unused zeroed. Source of truth: `mmwave/MmwProtocol.h::MmwTargetsPayload`; design doc `docs/design/mmwave_tracking.md` §4.3 |
+| 0x71 | MMW_CONFIG   | parent→node    | reserved — not implemented in v1 (`mmwave/MmwProtocol.h`; design doc §4.3) |
 
-**v3→v4:** `ledStart[]` / `ledEnd[]` upgraded uint8 → uint16 (8 entries each, +16 bytes per ACTION/LOAD_STEP). Parent accepts both v3 and v4 PONGs.
+**v3→v4:** `ledStart[]` / `ledEnd[]` upgraded uint8 → uint16 (8 entries each, +16 bytes per ACTION/LOAD_STEP). Parent accepts both v3 and v4 PONGs. **v4→v5 (#819):** CMD_GYRO_STOP (0x69) split out from the retired CMD_GYRO_ORIENT flags bit 3.
+
+**Version acceptance (deliberate, #819):** children accept v3+ headers (`main/UdpCommon.cpp`), but the parent's synchronous STATUS_RESP wait accepts v4/v5 only (`main/Parent.cpp`).
 
 **#825 gyro handshake:** press-Start sends a fresh 16-bit nonce; orchestrator replies with CLAIM_ACK echoing the nonce. Gyro advances UI only on matching ACK; CLAIM_DENIED reverts; ~1.5s overall timeout reverts with "NO RESPONSE". Server arms a 1.5s timer after CLAIM_ACK that releases the claim if no orient arrives (orphan-claim guard). Press-Stop carries a nonce too and is ACKed via STOP_ACK. Both sides exchange 2s heartbeats — gyro→parent HB_REP carries `uiState + claimNonce` so divergent state is reconciled (gyro IDLE + server claim → release; gyro ACTIVE + no server claim → reconstruct, the orchestrator-restart bootstrap path). New CMD codes (0x6A/0x6B/0x6C) are back-compat-safe — older firmware silently ignores them; UDP_VERSION stays at 5.
 
-**PONG (133 bytes / 141 total):** `hostname[10] altName[16] description[32] stringCount(1) PongStrings×8 fwMajor(1) fwMinor(1)` where `PongString = <HHBBHB>` (`ledCount, lengthMm, ledType, cableDir, cableMm, stripDir`). `cableDir` bit 0 = folded.
+**PONG (134 bytes / 142 total):** `hostname[10] altName[16] description[32] stringCount(1) PongStrings×8 fwMajor(1) fwMinor(1) fwPatch(1)` where `PongString = <HHBBHB>` (`ledCount, lengthMm, ledType, cableDir, cableMm, stripDir`). `cableDir` bit 0 = folded. (`fwPatch` added v5.3.6; parent still accepts v3 139-byte and v4 141-byte PONGs.)
 
 `wifiRssi` is stored as `uint8_t` absolute magnitude (e.g. 69 → -69 dBm); check `> 0`.
 
