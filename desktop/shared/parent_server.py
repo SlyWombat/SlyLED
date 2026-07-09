@@ -177,13 +177,42 @@ DATA.mkdir(parents=True, exist_ok=True)
 
 def _load(name, default):
     p = DATA / f"{name}.json"
+    if not p.exists():
+        return default
     try:
-        return json.loads(p.read_text()) if p.exists() else default
-    except Exception:
+        return json.loads(p.read_text())
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
+        # #889 — NEVER silently default over a corrupt/unreadable file:
+        # the next _save would overwrite the operator's project with the
+        # empty default. Quarantine it as <name>.json.corrupt (numbered
+        # if one already exists) so the data is recoverable, log loudly,
+        # then start from the default.
+        q = DATA / f"{name}.json.corrupt"
+        n = 1
+        while q.exists():
+            q = DATA / f"{name}.json.corrupt.{n}"
+            n += 1
+        try:
+            os.replace(p, q)
+            where = str(q)
+        except OSError as move_err:
+            where = f"COULD NOT QUARANTINE ({move_err}) — left in place"
+        log.error("!!! CORRUPT PERSISTENCE FILE %s: %s — quarantined to %s; "
+                  "starting '%s' from defaults (#889)", p, e, where, name)
+        print(f"!!! CORRUPT PERSISTENCE FILE {p}: {e} — quarantined to {where}; "
+              f"starting '{name}' from defaults (#889)", file=sys.stderr)
         return default
 
 def _save(name, obj):
-    (DATA / f"{name}.json").write_text(json.dumps(obj, indent=2))
+    # #889 — atomic write: dump to a temp file in the same directory,
+    # then os.replace() over the target (atomic on the same filesystem,
+    # including Windows). A crash mid-write leaves the previous file
+    # intact instead of a truncated one. Pattern copied from
+    # remote_orientation.py::RemoteRegistry.save.
+    p = DATA / f"{name}.json"
+    tmp = DATA / f"{name}.json.tmp"
+    tmp.write_text(json.dumps(obj, indent=2))
+    os.replace(tmp, p)
     # #853 — fixture changes invalidate the per-universe intensity-
     # channel cache used by the master grand-master send-time gate.
     # Any path that adds / removes / re-addresses / re-profiles a
