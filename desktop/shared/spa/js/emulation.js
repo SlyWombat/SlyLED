@@ -467,6 +467,10 @@ function emu3dRenderObjects(){
       ring.rotation.x=-Math.PI/2;
       ring.position.set(0,0.02,0);
       grp.add(ring);
+      // #911 — radar-tracked people (source.type stamped by the fusion
+      // layer, #900) get an amber body tint (the radar accent) so
+      // operators can tell radar tracks from camera tracks at a glance.
+      if(s.source&&s.source.type==='radar'){grp.traverse(function(o){if(o.userData.personBody)o.material.color.setHex(0xfbbf24);});}
     } else {
       // Static object: box/plane (same as layout view)
       var sw=(t.scale[0]||2000)/1000,sh=(t.scale[1]||1500)/1000;

@@ -5,8 +5,8 @@
  * hardcoded `ft==='dmx'?...:ft==='camera'?...` chains in seven-plus places
  * (app.js side panel + edit modal, scene-3d.js layout meshes, emulation.js
  * runtime meshes, dashboard.js counts, fixtures.js sidebar + editor). Now a
- * new type — e.g. the mmWave `radar` fixture planned in #911 — is one entry
- * in FIXTURE_TYPES.
+ * new type — e.g. the mmWave `radar` fixture (#911) — is one entry in
+ * FIXTURE_TYPES.
  *
  * LOAD ORDER: this file is the FIRST app script in index.html (before
  * dashboard.js and long before app.js / scene-3d.js). Nothing here may call
@@ -466,6 +466,81 @@ function _ftLedRuntimeUpdate(grp, ctx){
   }
 }
 
+// ── Radar coverage sector (#911) ─────────────────────────────────────────
+// The Rd-03D mmWave module senses a planar wedge: ~8 m range, ±60° azimuth
+// (docs/design/mmwave_tracking.md §2.2). Rendered as a translucent fan of
+// radius `fixture.rangeMm` lying in the sensor's plane, oriented by the
+// fixture rotation.
+
+// Stage-frame unit direction of a sensor-plane ray at azimuth `delta`
+// radians off boresight (+delta toward +X when unrotated), for a fixture
+// rotation read through rotationFromLayout. Applies the same
+// Ry(roll) → Rx(-tilt) → Rz(-pan) matrix sequence as _s3dStringDirFromRot
+// (the JS mirror of camera_math.build_camera_to_stage, #586/#600) but to
+// an arbitrary in-plane ray instead of the fixed forward vector — at
+// delta=0 this reproduces _rotToAim's boresight exactly, so the sector
+// opens the same way a camera FOV cone would aim. Returns [sx, sy, sz]
+// in stage frame (NOT three.js).
+function _ftRadarStageDir(rotA, delta){
+  // Sensor-local ray: forward is stage +Y, the wedge spreads toward ±X,
+  // the sensing plane is z=0 before the fixture rotation is applied.
+  var v=[Math.sin(delta),Math.cos(delta),0];
+  var roll=rotA.roll*Math.PI/180, tilt=rotA.tilt*Math.PI/180, pan=rotA.pan*Math.PI/180;
+  var cr=Math.cos(roll),sr=Math.sin(roll);
+  v=[cr*v[0]+sr*v[2], v[1], -sr*v[0]+cr*v[2]];
+  var ct=Math.cos(tilt),st=Math.sin(tilt);
+  v=[v[0], ct*v[1]+st*v[2], -st*v[1]+ct*v[2]];
+  var cp=Math.cos(pan),sp=Math.sin(pan);
+  v=[cp*v[0]+sp*v[1], -sp*v[0]+cp*v[1], v[2]];
+  return v;
+}
+
+// Shared Layout/Runtime builder: translucent fan fill + brighter outline,
+// group-local (the fixture group carries the world position). Tagged
+// `cameraCone` so the View-menu "Camera Cones" toggle governs it — the
+// sector is the radar's FOV analog and follows the camera-cone
+// show/hide convention on every tab (default hidden, like camera FOV
+// cones; `radarSector` tag identifies it for tests/tools). Runtime passes
+// a lower fillOpacity, mirroring how the camera cone renders statically
+// there (no per-frame updater).
+function _ftRadarSector(fix, grp, fillOpacity){
+  var rangeM=((typeof fix.rangeMm==='number'&&fix.rangeMm>0)?fix.rangeMm:8000)/1000;
+  var fovDeg=(typeof fix.fovDeg==='number'&&fix.fovDeg>0)?fix.fovDeg:120;
+  var half=(fovDeg/2)*Math.PI/180;
+  var rotA=rotationFromLayout(fix.rotation);
+  var segs=24;
+  // Arc points, stage→three.js swap (X→X, Y depth→Z, Z height→Y).
+  var arc=[];
+  for(var i=0;i<=segs;i++){
+    var d=-half+(i/segs)*2*half;
+    var sd=_ftRadarStageDir(rotA,d);
+    arc.push(new THREE.Vector3(sd[0]*rangeM,sd[2]*rangeM,sd[1]*rangeM));
+  }
+  // Fan fill: origin + arc as a triangle fan.
+  var pos=new Float32Array(segs*9);
+  for(var ti=0;ti<segs;ti++){
+    var a=arc[ti],b=arc[ti+1],o=ti*9;
+    pos[o]=0;pos[o+1]=0;pos[o+2]=0;
+    pos[o+3]=a.x;pos[o+4]=a.y;pos[o+5]=a.z;
+    pos[o+6]=b.x;pos[o+7]=b.y;pos[o+8]=b.z;
+  }
+  var fanGeo=new THREE.BufferGeometry();
+  fanGeo.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  var fanMat=new THREE.MeshBasicMaterial({color:0xf59e0b,opacity:fillOpacity,transparent:true,side:THREE.DoubleSide,depthWrite:false});
+  var fan=new THREE.Mesh(fanGeo,fanMat);
+  fan.userData.cameraCone=true;fan.userData.radarSector=true;
+  if(typeof _layShowCamCones!=='undefined')fan.visible=_layShowCamCones;
+  grp.add(fan);
+  // Brighter outline: origin → arc → origin.
+  var outlinePts=[new THREE.Vector3(0,0,0)].concat(arc,[new THREE.Vector3(0,0,0)]);
+  var outGeo=new THREE.BufferGeometry().setFromPoints(outlinePts);
+  var outMat=new THREE.LineBasicMaterial({color:0xfbbf24,opacity:0.6,transparent:true});
+  var outline=new THREE.Line(outGeo,outMat);
+  outline.userData.cameraCone=true;outline.userData.radarSector=true;
+  if(typeof _layShowCamCones!=='undefined')outline.visible=_layShowCamCones;
+  grp.add(outline);
+}
+
 // ── Registry ──────────────────────────────────────────────────────────────
 var FIXTURE_TYPES={
   led:{
@@ -892,6 +967,88 @@ var FIXTURE_TYPES={
       body.trackThreshold=parseFloat(document.getElementById('fx-trk-thr').value)||0.4;
       body.trackTtl=parseInt(document.getElementById('fx-trk-ttl').value)||5;
       body.trackReidMm=parseInt(document.getElementById('fx-trk-reid').value)||500;
+      return null;
+    },
+    afterEditOpen:null,
+  },
+
+  // mmWave radar node (#911) — ESP32-C61 + Ai-Thinker Rd-03D, a planar
+  // people-tracking sensor (docs/design/mmwave_tracking.md). Amber accent
+  // (led=green, dmx=violet, camera=cyan). Small flat module → box node.
+  // Fields: radarNode (hostname/IP of the mmWave child), rangeMm
+  // (detection radius, Rd-03D ≈ 8000), fovDeg (full azimuth width,
+  // Rd-03D = 120 i.e. ±60°), radarEnabled (feeds person tracking;
+  // undefined = enabled).
+  radar:{
+    key:'radar',
+    label:'Radar',
+    badge:{text:'RDR',bg:'#78350f',fg:'#fbbf24'},
+    accent:0xf59e0b,
+    nodeShape:'box',
+    editTypeSuffix:' (Radar)',
+    caps:{hasBeam:false,hasFov:true,tracksPeople:true,hasOrientation:true,
+          hasInvertedMount:false,hasRotationEditor:true,countsAsCamera:false},
+    layoutNodeColor:function(c){return 0xf59e0b;},
+    runtimeNodeColor:function(c){return 0xf59e0b;},
+    buildLayoutMesh:function(c,ctx){_ftRadarSector(ctx.fix||c,ctx.grp,0.10);},
+    // Runtime: same sector at lower opacity — like the camera FOV cone it
+    // renders statically (no per-frame updater; tracking output shows up
+    // as person objects, not on the fixture mesh).
+    buildRuntimeMesh:function(c,ctx){_ftRadarSector(c,ctx.grp,0.06);},
+    updateRuntimeMesh:null,
+    panelDetailHtml:function(f){
+      var rngMm=(typeof f.rangeMm==='number'&&f.rangeMm>0)?f.rangeMm:8000;
+      var fov=(typeof f.fovDeg==='number'&&f.fovDeg>0)?f.fovDeg:120;
+      var enabled=(f.radarEnabled!==false);
+      var h='';
+      h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Radar</div>';
+      h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.2em">Node: '+(f.radarNode?'<span style="color:#e2e8f0">'+escapeHtml(f.radarNode)+'</span>':'<span style="color:#f59e0b">Not set</span>')+'</div>';
+      h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.2em">Range: '+(Math.round(rngMm/100)/10)+' m | FoV: ±'+(fov/2)+'°</div>';
+      h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.2em">'+(enabled?'<span style="color:#4ade80">● Enabled</span>':'<span style="color:#f59e0b">○ Disabled</span>')+'</div>';
+      h+='<div style="font-size:.75em;color:#f472b6;margin-bottom:.4em">Feeds person tracking</div>';
+      // Orientation Pan/Tilt — same rotationFromLayout read + #783 tilt
+      // negation as the camera block above (mounting tilt per
+      // mmwave_tracking.md §7 is captured by rx).
+      var _rRotA=rotationFromLayout(f.rotation);
+      var _rPanDeg=Math.round(_rRotA.pan);
+      var _rTiltDeg=Math.round(-_rRotA.tilt);
+      h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Orientation</div>';
+      h+='<div style="display:flex;gap:.3em;align-items:center;margin-top:.3em">';
+      h+='<label style="font-size:.72em;color:#64748b;margin:0">Pan°</label><input id="panel-pan" type="number" value="'+_rPanDeg+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelPanTiltChange('+f.id+',\'pan\',this.value)">';
+      h+='<label style="font-size:.72em;color:#64748b;margin:0">Tilt°</label><input id="panel-tilt" type="number" value="'+_rTiltDeg+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelPanTiltChange('+f.id+',\'tilt\',this.value)">';
+      h+='</div>';
+      return h;
+    },
+    quickButtonsHtml:function(f){return'';},
+    sidebarBadgeHtml:function(f){
+      return'<span style="font-size:.6em;background:#78350f;color:#fbbf24;padding:0 3px;border-radius:2px">RDR</span>';
+    },
+    sidebarPlacedBadgeHtml:function(f){
+      return'<span style="font-size:.6em;background:#78350f;color:#fbbf24;padding:0 3px;border-radius:2px;margin-left:2px">RDR</span>';
+    },
+    renderEditFields:function(f,id){
+      var rngMm=(typeof f.rangeMm==='number'&&f.rangeMm>0)?f.rangeMm:8000;
+      var fov=(typeof f.fovDeg==='number'&&f.fovDeg>0)?f.fovDeg:120;
+      var h='';
+      h+='<label>Radar Node <span style="color:#64748b;font-size:.75em">(hostname or IP of the mmWave node)</span></label>';
+      h+='<input id="fx-radar-node" value="'+escapeHtml(f.radarNode||'')+'" placeholder="e.g. mmwave-01.local or 192.168.10.60" style="width:100%;margin-bottom:.4em">';
+      h+='<label>Range (mm) <span style="color:#64748b;font-size:.75em">(Rd-03D ≈ 8000)</span></label>';
+      h+='<input id="fx-radar-range" type="number" value="'+rngMm+'" min="100" step="100" style="width:100%;margin-bottom:.4em">';
+      h+='<label>FoV (degrees, full width) <span style="color:#64748b;font-size:.75em">(Rd-03D: 120 = ±60°)</span></label>';
+      h+='<input id="fx-radar-fov" type="number" value="'+fov+'" min="1" max="180" style="width:100%;margin-bottom:.4em">';
+      h+='<label style="display:flex;align-items:center;gap:.4em;margin-top:.2em;cursor:pointer"><input id="fx-radar-enabled" type="checkbox"'+(f.radarEnabled!==false?' checked':'')+' style="width:auto"> <span style="font-size:.82em">Enabled (feeds person tracking)</span></label>';
+      return h;
+    },
+    renderEditExtras:function(f,id){return'';},
+    collectEditFields:function(body,id){
+      var rngV=parseInt(document.getElementById('fx-radar-range').value);
+      if(!(rngV>0))return'Range: enter a positive number of millimetres (Rd-03D is about 8000).';
+      var fovV=parseFloat(document.getElementById('fx-radar-fov').value);
+      if(!(fovV>0&&fovV<=180))return'FoV: enter a full width between 1 and 180 degrees (Rd-03D is 120).';
+      body.radarNode=document.getElementById('fx-radar-node').value.trim();
+      body.rangeMm=rngV;
+      body.fovDeg=fovV;
+      body.radarEnabled=document.getElementById('fx-radar-enabled').checked;
       return null;
     },
     afterEditOpen:null,
