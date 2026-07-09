@@ -530,8 +530,10 @@ function s3dLoadChildren(){
         // Stage→Three.js: X=X, Y(depth)→Z, Z(height)→Y
         var aimLocal=new THREE.Vector3((aim[0]-(c.x||0))/1000,(aim[2]-(c.z||0))/1000,(aim[1]-(c.y||0))/1000);
         var beamLen=aimLocal.length();
-        // Cone shown for DMX and camera fixtures with non-zero rotation
-        var showCone=(_fRot[0]!==0||_fRot[1]!==0)||_fix3d.fixtureType==='camera';
+        // Cone shown for DMX and camera fixtures with non-zero rotation.
+        // #892 — all three axes count: a mover with only pan set (rz,
+        // index 2 per #600) used to get no cone.
+        var showCone=(_fRot[0]!==0||_fRot[1]!==0||_fRot[2]!==0)||_fix3d.fixtureType==='camera';
         if(beamLen>0.01&&showCone){
           var bwDeg=_fix3d.fixtureType==='camera'?(_fix3d.effectiveFovDeg||_fix3d.fovDeg||60):15;
           // Use cached profile beamWidth (sync) — _profileCache populated by emulator/layout
@@ -591,17 +593,17 @@ function s3dLoadChildren(){
         var hasPanTilt=_fix3d.fixtureType==='camera'||
           (window._profileCache&&_fix3d.dmxProfileId&&window._profileCache[_fix3d.dmxProfileId]&&window._profileCache[_fix3d.dmxProfileId].panRange>0);
         if(hasPanTilt||_fix3d.fixtureType==='camera'){
-          // #603 — the rest-direction arrow previously read only rot3d[1]
-          // (yaw) and hardcoded Y=0, so a camera with rx=30° pitch-down
+          // #603 — the rest-direction arrow previously read only the yaw
+          // slot and hardcoded Y=0, so a camera with rx=30° pitch-down
           // still drew its green "home direction" arrow horizontal —
           // looked like the camera was aimed at the horizon instead of
-          // the stage floor. Now mirrors the live-aim math at line ~287:
+          // the stage floor. Mirrors the live-aim math at line ~287:
           // Three.js is Y-up, positive stage pitch = tilt down = negative
-          // Y in Three.js. When #600 lands (ry↔rz swap for Z-up naming)
-          // the index into rot3d will need to update here too.
-          var rot3d=_fix3d.rotation||[0,0,0];
-          var rxRad=rot3d[0]*Math.PI/180;  // pitch (+ = down)
-          var ryRad=rot3d[1]*Math.PI/180;  // yaw
+          // Y in Three.js. #892 — axis reads route through
+          // rotationFromLayout (#600 schema v2: yaw/pan lives at rz).
+          var _restA=rotationFromLayout(_fix3d.rotation);
+          var rxRad=_restA.tilt*Math.PI/180;  // pitch (+ = down)
+          var ryRad=_restA.pan*Math.PI/180;   // yaw
           var cp=Math.cos(rxRad), sp=Math.sin(rxRad);
           var cy=Math.cos(ryRad), sy=Math.sin(ryRad);
           var homeDir=new THREE.Vector3(sy*cp,-sp,cy*cp).normalize();

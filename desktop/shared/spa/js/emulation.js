@@ -390,9 +390,11 @@ function emu3dBuildFixtures(){
         var hasPanTilt=ft==='camera'||
           (window._profileCache&&c.dmxProfileId&&window._profileCache[c.dmxProfileId]&&window._profileCache[c.dmxProfileId].panRange>0);
         if(hasPanTilt){
-          var _ro=c.rotation||[0,0,0];
-          var rxR=_ro[0]*Math.PI/180;
-          var ryR=_ro[1]*Math.PI/180;
+          // #892 — axis reads route through rotationFromLayout (#600
+          // schema v2: yaw/pan lives at rz, not the old ry slot).
+          var _roA=rotationFromLayout(c.rotation);
+          var rxR=_roA.tilt*Math.PI/180;
+          var ryR=_roA.pan*Math.PI/180;
           var cp=Math.cos(rxR), sp=Math.sin(rxR);
           var cy=Math.cos(ryR), sy=Math.sin(ryR);
           var homeDir=new THREE.Vector3(sy*cp,-sp,cy*cp).normalize();

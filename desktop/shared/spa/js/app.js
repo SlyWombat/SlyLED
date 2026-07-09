@@ -287,22 +287,17 @@ function _aimUnitVector(rotation, panNorm, tiltNorm, panRange, tiltRange, invert
 }
 
 function _rotToAim(rot,pos,dist,inverted){
-  // #715 — restored the original "rx = pitch DOWN" convention here.
-  // Despite #715's earlier commit attempting to unify `_rotToAim`
-  // through `_aimUnitVector` (which uses the matrix convention where
-  // rx > 0 rotates +Y toward +Z = UP), this regressed every camera
-  // fixture in the saved data. Camera rotations were authored under
-  // the OLD CLAUDE.md schema (rx > 0 aims DOWN); cam #12 with
-  // rot=[30,0,0] expects to point its FOV cone toward the floor.
-  // Mover fixtures' live aim path (scene-3d.js:329) uses
-  // `_aimUnitVector` directly — that path matches `pan_tilt_to_ray`
-  // and the live API. Until the saved-rotation data is migrated to a
-  // single convention, this function stays at the camera-friendly
-  // schema and the live-aim updater stays at the matrix schema.
+  // #892 — pan/tilt derive through rotationFromLayout (#600 schema v2:
+  // [rx pitch, ry roll, rz yaw]). The old body hand-read rot[1] as pan,
+  // which is roll under the migrated schema, so beam/FOV cones rendered
+  // panned by roll. Persisted data is migrated at server startup (and on
+  // /api/project/import), so no legacy fallback is needed. Internal tilt
+  // (rx) > 0 aims down (#586/#600).
   dist=dist||3000;
-  var rx=rot?rot[0]:0,ry=rot&&rot.length>1?rot[1]:0;
-  if(inverted)rx=-rx;
-  var pr=ry*Math.PI/180,tr=rx*Math.PI/180;
+  var a=rotationFromLayout(rot);
+  var tilt=a.tilt;
+  if(inverted)tilt=-tilt;
+  var pr=a.pan*Math.PI/180,tr=tilt*Math.PI/180;
   return[pos[0]+Math.sin(pr)*Math.cos(tr)*dist,pos[1]+Math.cos(pr)*Math.cos(tr)*dist,pos[2]-Math.sin(tr)*dist];
 }
 var _layoutDirty=false;
@@ -939,9 +934,14 @@ function _updateSidePanel(fixtureId){
       h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.4em">Universe: '+(f.dmxUniverse||1)+' | Addr: '+(f.dmxStartAddr||1)+'</div>';
       // Rotation / orientation
       var orient=f.orientation||{};
-      var _rot=f.rotation||[0,0,0];
-      var _panDeg=Math.round(_rot[1]);
-      var _tiltDeg=Math.round(_rot[0]);
+      // #892 — read through rotationFromLayout (#600: pan lives at rz,
+      // not rot[1] which is roll). Tilt displays negated to match the
+      // fixture editor in fixtures.js (#783: operator tilt+ = above
+      // horizon; internal rx>0 = down). _panelPanTiltChange negates back
+      // on save so typed values round-trip.
+      var _rotA=rotationFromLayout(f.rotation);
+      var _panDeg=Math.round(_rotA.pan);
+      var _tiltDeg=Math.round(-_rotA.tilt);
       h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Orientation</div>';
       h+='<div style="display:flex;gap:.3em;align-items:center;margin-bottom:.3em">';
       h+='<label style="font-size:.72em;color:#64748b;margin:0">Pan\u00b0</label><input id="panel-pan" type="number" value="'+_panDeg+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelPanTiltChange('+f.id+',\'pan\',this.value)">';
@@ -962,9 +962,11 @@ function _updateSidePanel(fixtureId){
       h+='<button class="btn" onclick="_intrinsicCalStart('+f.id+')" style="font-size:.7em;padding:.2em .5em;background:#164e63;color:#67e8f9">Calibrate Lens</button> ';
       h+='</div>';
       // Pan/Tilt editable for camera (from rotation)
-      var _cRot=f.rotation||[0,0,0];
-      var _cPanDeg=Math.round(_cRot[1]);
-      var _cTiltDeg=Math.round(_cRot[0]);
+      // #892 — same rotationFromLayout read + #783 tilt negation as the
+      // DMX block above.
+      var _cRotA=rotationFromLayout(f.rotation);
+      var _cPanDeg=Math.round(_cRotA.pan);
+      var _cTiltDeg=Math.round(-_cRotA.tilt);
       h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Orientation</div>';
       h+='<div style="display:flex;gap:.3em;align-items:center;margin-top:.3em">';
       h+='<label style="font-size:.72em;color:#64748b;margin:0">Pan\u00b0</label><input id="panel-pan" type="number" value="'+_cPanDeg+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelPanTiltChange('+f.id+',\'pan\',this.value)">';
@@ -986,7 +988,9 @@ function _panelPanTiltChange(fid,axis,deg){
   if(axis==='pan'){
     f.rotation=rotationToLayout(cur.tilt,val,cur.roll);
   } else {
-    f.rotation=rotationToLayout(val,cur.pan,cur.roll);
+    // #892/#783 — the panel displays tilt negated (operator tilt+ = above
+    // horizon; internal rx>0 = down), so negate back on save to round-trip.
+    f.rotation=rotationToLayout(-val,cur.pan,cur.roll);
   }
   _layoutDirty=true;_layDirtyUpdate();
   ra('PUT','/api/fixtures/'+fid+'/aim',{rotation:f.rotation});
@@ -1057,13 +1061,19 @@ function showNodeEdit(f){
   }
   // Rotation fields for DMX and Camera fixtures
   if(ft==='dmx'||ft==='camera'){
-    var _fRot=f.rotation||[0,0,0];
+    // #892 — fields bind through rotationFromLayout (#600 schema v2:
+    // [rx pitch, ry roll, rz yaw]); the old code labeled rot[1] Pan and
+    // rot[2] Roll (pre-#600 order). Tilt displays negated per #783
+    // (operator tilt+ = above horizon; internal rx>0 = down), matching
+    // the fixture editor in fixtures.js. applyNodePos negates back on
+    // save.
+    var _fA=rotationFromLayout(f.rotation);
     h+='<div style="margin-bottom:.6em">';
     h+='<label style="font-size:.82em;color:#94a3b8">Orientation (degrees)</label>';
     h+='<div style="display:flex;gap:.4em;align-items:center;margin-top:.2em">';
-    h+='<label style="font-size:.75em;color:#64748b;margin:0">Tilt</label><input id="ne-tilt" type="number" value="'+Math.round(_fRot[0])+'" style="width:65px;font-size:.85em;padding:2px 4px">';
-    h+='<label style="font-size:.75em;color:#64748b;margin:0">Pan</label><input id="ne-pan" type="number" value="'+Math.round(_fRot[1])+'" style="width:65px;font-size:.85em;padding:2px 4px">';
-    h+='<label style="font-size:.75em;color:#64748b;margin:0">Roll</label><input id="ne-roll" type="number" value="'+Math.round(_fRot[2]||0)+'" style="width:65px;font-size:.85em;padding:2px 4px">';
+    h+='<label style="font-size:.75em;color:#64748b;margin:0">Tilt</label><input id="ne-tilt" type="number" value="'+Math.round(-_fA.tilt)+'" style="width:65px;font-size:.85em;padding:2px 4px">';
+    h+='<label style="font-size:.75em;color:#64748b;margin:0">Pan</label><input id="ne-pan" type="number" value="'+Math.round(_fA.pan)+'" style="width:65px;font-size:.85em;padding:2px 4px">';
+    h+='<label style="font-size:.75em;color:#64748b;margin:0">Roll</label><input id="ne-roll" type="number" value="'+Math.round(_fA.roll)+'" style="width:65px;font-size:.85em;padding:2px 4px">';
     h+='</div>';
     h+='<div style="font-size:.72em;color:#64748b;margin-top:.2em">Pan=0 faces forward (+Y). Tilt negative = down.</div>';
     if(ft==='dmx'){
@@ -1101,7 +1111,10 @@ function applyNodePos(id){
   var invEl=document.getElementById('ne-inverted');
   var rotChanged=false;
   if(tiltEl&&panEl){
-    var newRot=[parseFloat(tiltEl.value)||0,parseFloat(panEl.value)||0,parseFloat(rollEl?rollEl.value:0)||0];
+    // #892 — write back through rotationToLayout so the persisted array
+    // stays [rx pitch, ry roll, rz yaw] (#600); negate tilt per #783
+    // (showNodeEdit displays -tilt).
+    var newRot=rotationToLayout(-(parseFloat(tiltEl.value)||0),parseFloat(panEl.value)||0,parseFloat(rollEl?rollEl.value:0)||0);
     _fixtures.forEach(function(f){if(f.id===id){f.rotation=newRot;if(invEl)f.mountedInverted=invEl.checked;}});
     rotChanged=true;
   }
