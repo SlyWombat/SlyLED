@@ -28,6 +28,7 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import io
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
@@ -20035,14 +20036,29 @@ def api_qr():
 
 @app.after_request
 def add_cors(response):
-    # Allow same-origin and Android app connections from LAN
+    # #893 — do NOT reflect arbitrary Origins. Reflecting the request's
+    # Origin (plus allowing X-SlyLED-Confirm) handed every web page a
+    # cross-origin grant that defeated the CSRF-confirm header on
+    # /api/shutdown and every other destructive endpoint. Nothing
+    # legitimate needs a cross-origin grant here: the SPA is served
+    # same-origin by this very server, and the Android/iOS apps use
+    # native HTTP stacks that don't enforce CORS. We therefore only
+    # emit CORS headers when the Origin's *host* matches the host this
+    # request was addressed to (any port — dev SPA on another port is
+    # fine); otherwise no CORS headers at all and the browser blocks.
     origin = request.headers.get("Origin", "")
-    if origin:
+    if not origin:
+        return response
+    try:
+        origin_host = (urlsplit(origin).hostname or "").lower()
+    except ValueError:
+        origin_host = ""
+    server_host = (urlsplit("//" + request.host).hostname or "").lower()
+    if origin_host and origin_host == server_host:
         response.headers["Access-Control-Allow-Origin"] = origin
-    else:
-        response.headers["Access-Control-Allow-Origin"] = request.host_url.rstrip("/")
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-SlyLED-Confirm"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-SlyLED-Confirm"
+        response.headers.add("Vary", "Origin")
     return response
 
 #  "  "  Shutdown  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
