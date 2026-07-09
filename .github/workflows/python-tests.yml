@@ -57,7 +57,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      SLYLED_DATA: ${{ runner.temp }}/slyled-data
+      SLYLED_DATA: /tmp/slyled-ci-data
     steps:
       - uses: actions/checkout@v4
         with:
@@ -174,7 +174,7 @@ jobs:
     timeout-minutes: 60
     continue-on-error: false
     env:
-      SLYLED_DATA: ${{ runner.temp }}/slyled-data
+      SLYLED_DATA: /tmp/slyled-ci-data
     steps:
       - uses: actions/checkout@v4
 
