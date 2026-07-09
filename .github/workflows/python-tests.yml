@@ -117,19 +117,22 @@ jobs:
           done
 
       - name: test_parent.py (known-failure allowlist)
-        # test_parent.py currently has exactly 2 known-red assertions
-        # out of 777 (775 pass as of 2026-07-09):
+        # test_parent.py currently has exactly 1 known-red assertion
+        # (776/777 pass as of 2026-07-09, #919; observed up to 786 total
+        # on runs where more network-conditional branches execute):
         #   - "#739 import → fixtures.json matches memory" — open bug
         #     #739 (import → persist), red until that bug is fixed.
-        #   - "OTA trigger returns version" — expects the pre-#832
-        #     mocked release-cache version ('6.1.0'); the endpoint now
-        #     reads firmware/registry.json (with an outbound fetch of
-        #     GitHub-main's registry attempted first), so the expected
-        #     value is stale regardless of network.
+        # (The stale "OTA trigger returns version" expectation was fixed
+        # under #919 — the test now asserts the #832 contract: version
+        # comes from firmware/registry.json's per-board entry.)
         # Policy (option a from #904): run the full suite unmodified and
-        # fail this step if EITHER the pass count regresses below 775
-        # or any failure appears that is not on the allowlist. When
-        # #739 / the OTA expectation are fixed, shrink the allowlist.
+        # fail this step if EITHER the pass count regresses below 776
+        # or any failure appears that is not on the allowlist. The floor
+        # is deliberately below (total - 1): the assertion TOTAL varies
+        # by environment (network-conditional branches add/skip ok()
+        # calls), so the allowlist check is the precise gate and the
+        # floor is a backstop against silent count collapse. When #739
+        # is fixed, shrink the allowlist to empty and raise the floor.
         run: |
           python3 -X utf8 tests/test_parent.py | tee "$RUNNER_TEMP/test_parent.out" || true
           python3 - "$RUNNER_TEMP/test_parent.out" <<'EOF'
@@ -137,7 +140,6 @@ jobs:
           out = io.open(sys.argv[1], encoding="utf-8").read()
           ALLOW = {
               "#739 import → fixtures.json matches memory",
-              "OTA trigger returns version",
           }
           fails = [m.group(1).rstrip()
                    for m in re.finditer(r"^\s*\[FAIL\] (.+?)(?:  \(.*)?$", out, re.M)]
@@ -149,10 +151,10 @@ jobs:
           print(f"summary: {passed}/{total} passed, {failed} failed; "
                 f"allowlisted failures seen: {sorted(set(fails) & ALLOW)}")
           if unexpected:
-              sys.exit("UNEXPECTED failures (not on #739/#832 allowlist):\n  "
+              sys.exit("UNEXPECTED failures (not on the #739 allowlist):\n  "
                        + "\n  ".join(unexpected))
-          if passed < 775:
-              sys.exit(f"pass count regressed: {passed} < 775")
+          if passed < 776:
+              sys.exit(f"pass count regressed: {passed} < 776")
           print("test_parent.py OK (known failures only)")
           EOF
 

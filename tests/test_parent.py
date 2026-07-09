@@ -2770,7 +2770,20 @@ def run():
         ok('OTA trigger does not crash', r.status_code in (200, 500))
         if r.status_code == 200:
             ok('OTA trigger returns board=esp32', d.get('board') == 'esp32')
-            ok('OTA trigger returns version', d.get('version') == '6.1.0')
+            # #832 — the endpoint reads the per-board registry entry
+            # (firmware/registry.json, id=child-led-esp32) via
+            # _resolve_registry(), NOT the mocked GitHub release cache.
+            # Compare against the file so future version bumps can't
+            # re-stale this assertion (#919).
+            _reg_path = os.path.join(os.path.dirname(__file__), '..',
+                                     'firmware', 'registry.json')
+            with open(_reg_path, encoding='utf-8-sig') as _rf:
+                _reg_esp32 = next(
+                    (e.get('version') for e in json.load(_rf).get('firmware', [])
+                     if e.get('id') == 'child-led-esp32'), None)
+            ok('OTA trigger returns version',
+               _reg_esp32 is not None and d.get('version') == _reg_esp32,
+               f"got={d.get('version')} registry={_reg_esp32}")
 
         # /api/firmware/binary/<board> — serves binary or tries to download
         r = c.get('/api/firmware/binary/unknown')
