@@ -136,6 +136,12 @@ CMD_AUTOBRI_PUSH       = 0x6D  # phone→parent: Android Auto Brightness master 
 CMD_GYRO_OFF           = 0x6E  # gyro→parent: explicit press-OFF (#867) — same nonce shape as CMD_GYRO_STOP but server releases the claim with blackout=True so the head goes dark. STOP leaves head at last frame; OFF blackouts the head AND releases. ACK reuses CMD_GYRO_STOP_ACK.
 CMD_GYRO_AIM_WIZARD    = 0x6F  # gyro→parent: empirical aim-axis wizard (#869) — 36-byte payload: 3 Euler triples in degrees (roll, pitch, yaw) for {neutral, pitch_forward, yaw_left}, each 3×float32 LE. Server converts to quats via quat_from_euler_zyx_deg, then runs the same _aim_wizard_compute (#826) the Android wizard uses; persists derived forward_local/up_local on the gyro's `gyro-<ip>` Remote.
 
+# 0x7x — MMwave radar node range (#910). Wire source of truth is
+# mmwave/MmwProtocol.h (the node's isolated sketch tree); parity with
+# main/Protocol.h is enforced by tests/test_mmwave_wire_parity.py.
+CMD_MMW_TARGETS = 0x70  # radar node→parent: MmwTargetsPayload — seq(u16) count(u8) flags(u8, bit0 = radar parse healthy) + 3 × {xMm i16, yMm i16, speedCms i16, resMm u16} = 28 bytes; unused slots zeroed. Sent on fresh frames with targets (≤25 Hz) + 1 Hz empty keepalive.
+CMD_MMW_CONFIG  = 0x71  # parent→node: reserved (mode switch / report-rate cap) — deliberately NOT implemented in v1 (design doc §4.3).
+
 # #825 — uiState codes carried in CMD_GYRO_HEARTBEAT_REP.
 GYRO_UI_IDLE        = 0
 GYRO_UI_WAITING_ACK = 1
@@ -1445,6 +1451,11 @@ _udp_status = {
     # is observable; the exception-swallowing behaviour is unchanged.
     "recvErrors": 0,          # main 4210 listener (_udp_listener)
     "autobriRecvErrors": 0,   # dedicated 4211 listener (#862)
+    # #910 — MMW_TARGETS ingest health, surfaced beside the listener
+    # health so a mis-bound or chattering radar node is operator-visible
+    # on /api/status instead of silently dropped:
+    "mmwUnbound": 0,     # datagrams whose sender resolved to no radar fixture
+    "mmwMalformed": 0,   # structurally invalid MMW_TARGETS payloads
 }
 _udp_status_lock = threading.Lock()
 _udp_listener_thread = None
@@ -2099,6 +2110,124 @@ def _handle_pong(ip, port, hdr, data):
                 _send(ip, _brightness_packet(g_bri))
 
 
+# ── #910 MMW_TARGETS ingest ──────────────────────────────────────────────────
+# Log-once guards so an unbound/malformed radar node chattering at 25 Hz
+# can't flood the log; the running counters live in _udp_status
+# ("mmwUnbound"/"mmwMalformed") → get_udp_listener_status() → /api/status,
+# beside the #901 listener health.
+_mmw_logged = set()   # (kind, ip) pairs already logged
+_MMW_TARGET_SLOTS = 3  # Rd-03D hard limit (mmwave/MmwProtocol.h MMW_MAX_TARGETS)
+
+
+def _mmw_log_once(kind, ip, msg, *args):
+    if (kind, ip) not in _mmw_logged:
+        _mmw_logged.add((kind, ip))
+        log.warning(msg, *args)
+
+
+def _mmw_sender_hostname(ip):
+    """Hostname the node at `ip` announced — the PONG discovery record
+    (boot-time broadcast self-announce, design doc §4.3) or the persisted
+    child record. None if this sender never announced."""
+    info = _recent_pongs.get(ip)
+    if info and info.get("hostname"):
+        return info["hostname"]
+    child = next((c for c in _children if c.get("ip") == ip), None)
+    return child.get("hostname") if child else None
+
+
+def _mmw_fixture_for_sender(ip):
+    """Resolve a 0x70 sender to its radar fixture (#910 source identity).
+
+    A radar fixture matches when its `radarNode` equals the hostname the
+    node announced (a match on a DISABLED fixture means the operator
+    turned that radar off — its packets are dropped, never re-bound
+    elsewhere). Fallback: iff exactly ONE enabled radar fixture exists
+    and the hostname matched nothing, bind to it (logged once) — a fresh
+    single-radar setup works before the operator fills in radarNode.
+    Multiple candidates → None: never guess which wedge a packet
+    belongs to."""
+    radars = [f for f in _fixtures if f.get("fixtureType") == "radar"]
+    enabled = [f for f in radars if f.get("radarEnabled", True)]
+    if not enabled:
+        return None
+    host = _mmw_sender_hostname(ip)
+    if host:
+        h = host.strip().lower()
+        for f in radars:
+            node = f.get("radarNode")
+            if isinstance(node, str) and node.strip().lower() == h:
+                return f if f.get("radarEnabled", True) else None
+    if len(enabled) == 1:
+        _mmw_log_once("bind", ip,
+                      "MMW_TARGETS from %s (hostname=%s) matched no "
+                      "radarNode — binding to the only enabled radar "
+                      "fixture %s (#910 single-radar heuristic)",
+                      ip, host, enabled[0].get("id"))
+        return enabled[0]
+    return None
+
+
+def _handle_mmw_targets(ip, port, hdr, data):
+    """CMD_MMW_TARGETS — MMwave radar tracked-target frame → radar_fusion
+    (#910/#912). Landed as exactly the one-line registration the #901
+    dispatch-table note promised:
+
+        CMD_MMW_TARGETS: (36, _handle_mmw_targets),
+
+    Payload (MmwTargetsPayload, mmwave/MmwProtocol.h is the wire source
+    of truth; 8-byte header + 28 = 36-byte gate): seq(u16 LE) count(u8)
+    flags(u8, bit0 = radar parse healthy) + 3 × {xMm i16, yMm i16,
+    speedCms i16, resMm u16}, fixed slots, unused zeroed. Coordinates
+    are sensor-frame mm; ALL projection to stage space happens server-
+    side in radar_fusion (design doc §4.4 — node dumb, orchestrator
+    smart). count=0 keepalives (1 Hz) still feed the tracker: they
+    advance track coasting and expiry. Runs on the UDP listener thread —
+    radar_fusion locks its own state; no global _lock on this hot path
+    (the temporal-object sinks lock internally, #912).
+    """
+    seq, count, flags = struct.unpack_from("<HBB", data, 8)
+    if count > _MMW_TARGET_SLOTS:
+        _udp_count_recv_error("mmwMalformed")
+        _mmw_log_once("malformed", ip,
+                      "MMW_TARGETS from %s: count=%d exceeds the Rd-03D "
+                      "%d-target limit — dropping (logged once)",
+                      ip, count, _MMW_TARGET_SLOTS)
+        return
+    fixture = _mmw_fixture_for_sender(ip)
+    if fixture is None:
+        _udp_count_recv_error("mmwUnbound")
+        _mmw_log_once("unbound", ip,
+                      "MMW_TARGETS from %s (hostname=%s) matches no enabled "
+                      "radar fixture — counting in mmwUnbound (logged once). "
+                      "Set the fixture's radarNode to bind it.",
+                      ip, _mmw_sender_hostname(ip))
+        return
+    targets = [struct.unpack_from("<hhhH", data, 12 + 8 * i)
+               for i in range(count)]
+    # Pose snapshot: fixture record + layout position — the same stores
+    # the camera projection reads (#586/#600 conventions; radar_fusion
+    # decodes rotation via rotation_from_layout only).
+    pos = next((p for p in _layout.get("children", [])
+                if p.get("id") == fixture.get("id")), {})
+    pose = {
+        "id": fixture.get("id"),
+        "x": pos.get("x", 0) or 0,
+        "y": pos.get("y", 0) or 0,
+        "z": pos.get("z", 0) or 0,
+        "rotation": fixture.get("rotation") or [0, 0, 0],
+    }
+    node = _mmw_sender_hostname(ip) or fixture.get("radarNode")
+    try:
+        _radar_fusion.ingest(pose, node, seq, flags, targets, time.monotonic())
+    except Exception as e:
+        # Never let a bad frame take down the shared 4210 listener thread.
+        log.error("MMW_TARGETS ingest failed for %s: %s", ip, e, exc_info=True)
+        return
+    log.debug("MMW_TARGETS from %s: seq=%d count=%d flags=0x%02x → fixture %s",
+              ip, seq, count, flags, fixture.get("id"))
+
+
 # #901 — UDP 4210 dispatch: {cmd: (min_total_datagram_len, handler)}.
 # The minimum length mirrors the pre-#901 `elif cmd == X and len(data) >= N`
 # gates exactly; a known cmd arriving shorter than its gate falls through to
@@ -2106,8 +2235,9 @@ def _handle_pong(ip, port, hdr, data):
 # `else`). All commands share the single header version gate in
 # _udp_listener (v3/v4/v5 accepted) — no per-command version windows existed
 # pre-#901 and none are added here.
-# Adding a new command is a one-line registration — e.g. #910's
-# 0x70 MMW_TARGETS: `CMD_MMW_TARGETS: (36, _handle_mmw_targets),`.
+# Adding a new command is a one-line registration — #910's 0x70
+# MMW_TARGETS below landed as exactly that. (0x71 MMW_CONFIG is
+# parent→node and reserved — nothing to dispatch.)
 _UDP_DISPATCH = {
     CMD_ACTION_EVENT: (12, _handle_action_event),
     CMD_GYRO_ORIENT: (16, _handle_gyro_orient),
@@ -2121,6 +2251,7 @@ _UDP_DISPATCH = {
     CMD_GYRO_HEARTBEAT_REP: (13, _handle_gyro_hb_rep),
     CMD_AUTOBRI_PUSH: (11, _handle_autobri_push_udp),
     CMD_PONG: (8, _handle_pong),
+    CMD_MMW_TARGETS: (36, _handle_mmw_targets),
 }
 
 
@@ -11041,6 +11172,86 @@ def _fusion_weight_for(obj, obj_age_s):
 
 
 register_fusion_source_weight("camera", _fusion_weight)
+
+
+# ── #912 — radar fusion → temporal person objects ────────────────────────────
+# radar_fusion.py owns projection + per-radar tracking (gated NN
+# association, per-track CV Kalman, M-of-N confirmation, coasting).
+# Confirmed tracks flow through the two sinks below, which create/update
+# temporal person objects through the SAME internal path the camera
+# tracker's HTTP pushes take (same dict shape, same _lock discipline,
+# same TTL/reap semantics, #896 fused-id forwarding honoured) — no HTTP
+# loopback, per design doc §5.1. The #900 per-source weight registered
+# here then fuses radar↔radar and radar↔camera clusters for free.
+import radar_fusion
+
+
+def _radar_person_create(pos_xy, source, ttl_s):
+    """Sink: confirmed radar track → temporal person object. Mirrors
+    api_objects_temporal_create's person shape (objectType "person",
+    pink, TTL, mobility moving) with radar provenance stamped."""
+    global _nxt_tmp
+    cx, cy = float(pos_xy[0]), float(pos_xy[1])
+    with _lock:
+        obj = {
+            "id": _nxt_tmp, "name": f"Person (radar) {_nxt_tmp}",
+            "objectType": "person",
+            "mobility": "moving",
+            "_temporal": True,
+            "ttl": float(ttl_s),
+            "_expiresAt": time.time() + float(ttl_s),
+            "color": radar_fusion.PERSON_COLOR,
+            "opacity": 40,
+            # pos is the object CENTER (renderer convention, #Q1): the
+            # radar tracks the floor point, height is the default person
+            # estimate — same as the camera path without a full-frame bbox.
+            "transform": {
+                "pos": [cx, cy, radar_fusion.PERSON_HEIGHT_MM / 2.0],
+                "rot": [0, 0, 0],
+                "scale": [500.0, radar_fusion.PERSON_HEIGHT_MM, 500.0],
+            },
+            "source": dict(source),   # {"type": "radar", "fixtureId", "node"}
+        }
+        _temporal_objects.append(obj)
+        _nxt_tmp += 1
+    return obj["id"]
+
+
+def _radar_person_update(oid, pos_xy):
+    """Sink: move a radar person object + refresh its TTL. Follows the
+    #896 fused-id forwarding exactly as PUT /api/objects/<id>/pos does,
+    returning the surviving id so the track rebinds after a cross-sensor
+    merge; None once the object is gone (expired) so the tracker
+    re-creates it."""
+    with _lock:
+        target_id = oid
+        obj = next((o for o in _temporal_objects if o["id"] == oid), None)
+        if obj is None:
+            fwd = _fused_id_map.get(oid)
+            if fwd:
+                target_id = fwd["to"]
+                obj = next((o for o in _temporal_objects
+                            if o["id"] == target_id), None)
+        if obj is None:
+            return None
+        tf = obj.setdefault("transform",
+                            {"pos": [0, 0, 0], "rot": [0, 0, 0],
+                             "scale": [500.0, radar_fusion.PERSON_HEIGHT_MM, 500.0]})
+        tf["pos"] = [float(pos_xy[0]), float(pos_xy[1]),
+                     radar_fusion.PERSON_HEIGHT_MM / 2.0]
+        if obj.get("ttl"):
+            obj["_expiresAt"] = time.time() + obj["ttl"]
+        return target_id
+
+
+# The module-level engine _handle_mmw_targets feeds (#910). Tuning knobs
+# (gate/confirm/coast/TTL/noise) default from radar_fusion's constants —
+# the #908 bench pass revises those, not this call site.
+_radar_fusion = radar_fusion.RadarFusion(
+    create_person=_radar_person_create,
+    update_person=_radar_person_update,
+)
+register_fusion_source_weight("radar", radar_fusion.fusion_weight)
 
 
 def _fuse_temporal_objects():

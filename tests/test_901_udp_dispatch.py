@@ -71,9 +71,12 @@ EXPECTED = {
 def run_table_coverage():
     table = ps._UDP_DISPATCH
     expected_cmds = {getattr(ps, name): (name, mlen) for name, mlen in EXPECTED.items()}
-    ok("dispatch table covers exactly the pre-#901 command set",
-       set(table.keys()) == set(expected_cmds.keys()),
-       f"extra={sorted(set(table) - set(expected_cmds))} "
+    # #910 landed 0x70 MMW_TARGETS as the promised one-line registration;
+    # it is checked separately below (its wire truth is mmwave/
+    # MmwProtocol.h, not main/Protocol.h like the pre-#901 set).
+    ok("dispatch table covers exactly the pre-#901 command set + MMW_TARGETS",
+       set(table.keys()) == set(expected_cmds.keys()) | {ps.CMD_MMW_TARGETS},
+       f"extra={sorted(set(table) - set(expected_cmds) - {ps.CMD_MMW_TARGETS})} "
        f"missing={sorted(set(expected_cmds) - set(table))}")
     for cmd, (name, mlen) in sorted(expected_cmds.items()):
         entry = table.get(cmd)
@@ -94,10 +97,29 @@ def run_table_coverage():
            name in fw and getattr(ps, name) == fw[name],
            f"py={getattr(ps, name):#04x} fw={fw.get(name)}")
 
-    # #910 seam: 0x70 MMW_TARGETS is NOT registered yet — landing it must
-    # be a one-line addition to _UDP_DISPATCH, nothing else.
-    ok("0x70 (future MMW_TARGETS, #910) not yet registered",
-       0x70 not in table)
+    # #910 — 0x70 MMW_TARGETS landed as the one-line addition this seam
+    # reserved. Gate = 8-byte header + 28-byte MmwTargetsPayload; wire
+    # value cross-checked against mmwave/MmwProtocol.h (its source of
+    # truth — the 0x7x range is the radar node's, absent from main/).
+    entry = table.get(ps.CMD_MMW_TARGETS)
+    ok("0x70 MMW_TARGETS registered with 36-byte gate (#910)",
+       ps.CMD_MMW_TARGETS == 0x70 and entry is not None and entry[0] == 36,
+       f"got {entry}")
+    ok("MMW_TARGETS handler is callable",
+       entry is not None and callable(entry[1]))
+    mmw_proto = os.path.join(os.path.dirname(__file__), "..",
+                             "mmwave", "MmwProtocol.h")
+    mmw_src = open(mmw_proto, encoding="utf-8", errors="replace").read()
+    mmw_fw = {m.group(1): int(m.group(2), 16)
+              for m in re.finditer(
+                  r"constexpr uint8_t\s+(CMD_\w+)\s*=\s*0x([0-9A-Fa-f]{2})",
+                  mmw_src)}
+    ok("CMD_MMW_TARGETS value matches mmwave/MmwProtocol.h",
+       mmw_fw.get("CMD_MMW_TARGETS") == ps.CMD_MMW_TARGETS,
+       f"py={ps.CMD_MMW_TARGETS:#04x} fw={mmw_fw.get('CMD_MMW_TARGETS')}")
+    # 0x71 MMW_CONFIG stays reserved/unimplemented in v1 (design doc §4.3).
+    ok("0x71 MMW_CONFIG not dispatched (reserved, parent→node)",
+       mmw_fw.get("CMD_MMW_CONFIG", 0x71) not in table)
 
 
 # ── 3. PONG handler records discovery info ──────────────────────────────────
