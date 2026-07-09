@@ -39,15 +39,12 @@ def _assert(cond, msg):
 
 
 def _off_handler_body():
-    """Slice the OFF elif-branch out of parent_server.py source."""
-    src = inspect.getsource(parent_server)
-    marker = "elif cmd == CMD_GYRO_OFF:"
-    i = src.find(marker)
-    if i < 0:
-        return ""
-    rest = src[i:]
-    j = rest[len(marker):].find("\n        elif cmd ==")
-    return rest if j < 0 else rest[:len(marker) + j]
+    """#920 — post-#901 the OFF dispatch is the module-level
+    `_handle_gyro_off`; inspect it directly (same pattern test_825 uses
+    for _handle_gyro_start_packet) instead of slicing module source by
+    docstring markers."""
+    handler = getattr(parent_server, "_handle_gyro_off", None)
+    return inspect.getsource(handler) if handler is not None else ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -65,7 +62,7 @@ def test_cmd_gyro_off_constant():
 def test_off_handler_branch_exists():
     body = _off_handler_body()
     _assert(len(body) > 0,
-            "parent_server has `elif cmd == CMD_GYRO_OFF:` branch")
+            "parent_server has a CMD_GYRO_OFF handler (_handle_gyro_off)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

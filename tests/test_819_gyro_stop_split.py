@@ -44,22 +44,18 @@ def test_cmd_gyro_stop_constant_defined():
 
 
 def test_orient_handler_no_longer_releases_on_bit3():
-    """The CMD_GYRO_ORIENT branch must NOT call _mover_engine.release on
-    bit 3. Source-level check: the orient handler body must not contain
-    `_mover_engine.release(` inside an `if flags & 0x08:` block.
+    """The CMD_GYRO_ORIENT handler must NOT call _mover_engine.release on
+    bit 3. #920 — post-#901 each wire command has a module-level
+    `_handle_*` function, so inspect it directly (same pattern test_825
+    uses for _handle_gyro_start_packet) instead of slicing module source
+    by docstring markers.
     """
     import inspect
-    src = inspect.getsource(parent_server)
-    # Find the orient handler block
-    marker = "elif cmd == CMD_GYRO_ORIENT and len(data) >= 16:"
-    idx = src.find(marker)
-    _assert(idx >= 0, "CMD_GYRO_ORIENT handler still exists")
-    if idx < 0:
+    handler = getattr(parent_server, "_handle_gyro_orient", None)
+    _assert(handler is not None, "CMD_GYRO_ORIENT handler still exists")
+    if handler is None:
         return
-    # Body extends until the next `elif cmd == ` at the same indent
-    rest = src[idx + len(marker):]
-    next_elif = rest.find("\n        elif cmd ==")
-    body = rest if next_elif < 0 else rest[:next_elif]
+    body = inspect.getsource(handler)
     _assert("_mover_engine.release(" not in body,
             "no _mover_engine.release(...) in CMD_GYRO_ORIENT handler body")
     _assert("end_session()" not in body,
@@ -75,15 +71,12 @@ def test_cmd_gyro_stop_handler_present_and_releases():
     Android-controller-mode-parity rule.
     """
     import inspect
-    src = inspect.getsource(parent_server)
-    marker = "elif cmd == CMD_GYRO_STOP:"
-    idx = src.find(marker)
-    _assert(idx >= 0, "CMD_GYRO_STOP handler exists in dispatcher")
-    if idx < 0:
+    # #920 — inspect the post-#901 `_handle_gyro_stop` handler directly.
+    handler = getattr(parent_server, "_handle_gyro_stop", None)
+    _assert(handler is not None, "CMD_GYRO_STOP handler exists in dispatcher")
+    if handler is None:
         return
-    rest = src[idx:]
-    next_elif = rest[len(marker):].find("\n        elif cmd ==")
-    body = rest if next_elif < 0 else rest[:len(marker) + next_elif]
+    body = inspect.getsource(handler)
     _assert("_mover_engine.release(" in body,
             "CMD_GYRO_STOP handler calls _mover_engine.release(...)")
     _assert("blackout=False" in body,
@@ -98,7 +91,9 @@ def test_legacy_v4_packets_still_accepted():
     so a flag-day reflash isn't required to keep the system online.
     """
     import inspect
-    src = inspect.getsource(parent_server)
+    # #920 — the accept-list gate lives in _udp_listener; inspect that
+    # function rather than the whole module source.
+    src = inspect.getsource(parent_server._udp_listener)
     _assert("ver not in (3, 4, UDP_VERSION)" in src
             or "ver in (3, 4, UDP_VERSION)" in src
             or "ver not in (3, 4," in src,

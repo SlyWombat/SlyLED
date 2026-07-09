@@ -182,15 +182,13 @@ def test_no_arm_check_subsystem():
 # 4. STOP handler parses nonce + sends STOP_ACK.
 
 def _stop_handler_body():
+    # #920 — post-#901 the STOP dispatch is the module-level
+    # `_handle_gyro_stop`; inspect it directly (same pattern as
+    # `_start_handler_body` above) instead of slicing module source
+    # by docstring markers.
     import inspect
-    src = inspect.getsource(parent_server)
-    marker = "elif cmd == CMD_GYRO_STOP:"
-    i = src.find(marker)
-    if i < 0:
-        return ""
-    rest = src[i:]
-    j = rest[len(marker):].find("\n        elif cmd ==")
-    return rest if j < 0 else rest[:len(marker) + j]
+    handler = getattr(parent_server, "_handle_gyro_stop", None)
+    return inspect.getsource(handler) if handler is not None else ""
 
 
 def test_stop_handler_parses_nonce_and_sends_ack():
@@ -222,34 +220,27 @@ def test_touch_remote_helper_present():
     A gyro legitimately holding a still pose (no orient updates) but
     sending heartbeat-rep + battery should NOT trip the fallback."""
     import inspect
-    src = inspect.getsource(parent_server)
-    _assert("def _gyro_touch_remote" in src,
+    _assert(hasattr(parent_server, "_gyro_touch_remote"),
             "_gyro_touch_remote helper defined")
-    # Spot-check every gyro CMD branch invokes it (or is ORIENT, which
+    # Spot-check every gyro CMD handler invokes it (or is ORIENT, which
     # implicitly touches via _apply_quat → last_data = time.time()).
+    # #920 — post-#901 every wire command has a module-level `_handle_*`
+    # function; inspect those directly instead of slicing module source
+    # by docstring markers.
     branches = (
-        ("elif cmd == CMD_GYRO_STOP:", None),
+        ("CMD_GYRO_STOP", parent_server._handle_gyro_stop),
         # #874 — START dispatch was extracted to
         # `_handle_gyro_start_packet`; inspect that function directly.
-        ("elif cmd == CMD_GYRO_START:", parent_server._handle_gyro_start_packet),
-        ("elif cmd == CMD_GYRO_BATT and len(data) >= 12:", None),
-        ("elif cmd == CMD_GYRO_COLOR and len(data) >= 12:", None),
-        ("elif cmd == CMD_GYRO_CALIBRATE and len(data) >= 15:", None),
-        ("elif cmd == CMD_GYRO_HEARTBEAT_REP and len(data) >= 13:", None),
+        ("CMD_GYRO_START", parent_server._handle_gyro_start_packet),
+        ("CMD_GYRO_BATT", parent_server._handle_gyro_batt),
+        ("CMD_GYRO_COLOR", parent_server._handle_gyro_color),
+        ("CMD_GYRO_CALIBRATE", parent_server._handle_gyro_calibrate),
+        ("CMD_GYRO_HEARTBEAT_REP", parent_server._handle_gyro_hb_rep),
     )
-    for branch_marker, extracted in branches:
-        if extracted is not None:
-            body = inspect.getsource(extracted)
-        else:
-            i = src.find(branch_marker)
-            if i < 0:
-                _assert(False, f"{branch_marker} present")
-                continue
-            rest = src[i:]
-            j = rest[len(branch_marker):].find("\n        elif cmd ==")
-            body = rest if j < 0 else rest[:len(branch_marker) + j]
+    for cmd_name, handler in branches:
+        body = inspect.getsource(handler)
         _assert("_gyro_touch_remote(" in body,
-                f"{branch_marker.split()[2].rstrip(':')} branch refreshes silence clock")
+                f"{cmd_name} branch refreshes silence clock")
 
 
 def test_stale_hard_secs_bumped_to_600():
@@ -265,15 +256,10 @@ def test_stale_hard_secs_bumped_to_600():
 # 6. HEARTBEAT_REP handler — reconciliation paths.
 
 def _hb_rep_handler_body():
+    # #920 — inspect the post-#901 `_handle_gyro_hb_rep` handler directly.
     import inspect
-    src = inspect.getsource(parent_server)
-    marker = "elif cmd == CMD_GYRO_HEARTBEAT_REP and len(data) >= 13:"
-    i = src.find(marker)
-    if i < 0:
-        return ""
-    rest = src[i:]
-    j = rest[len(marker):].find("\n        elif cmd ==")
-    return rest if j < 0 else rest[:len(marker) + j]
+    handler = getattr(parent_server, "_handle_gyro_hb_rep", None)
+    return inspect.getsource(handler) if handler is not None else ""
 
 
 def test_hb_rep_handler_present():
@@ -321,7 +307,9 @@ def test_start_dedupe_replay_does_not_double_claim():
     confirm the START handler's replay branch is selected on a matching
     nonce, with no second engine call."""
     import inspect
-    src = inspect.getsource(parent_server)
+    # #920 — the dedupe branch lives in _handle_gyro_start_packet;
+    # inspect that function instead of the whole module source.
+    src = inspect.getsource(parent_server._handle_gyro_start_packet)
     _assert("is_replay" in src,
             "is_replay variable steers the START dedupe branch")
     _assert('_gyro_handshake.setdefault(device_id, {})' in src,

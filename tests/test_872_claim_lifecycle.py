@@ -133,7 +133,9 @@ def test_dedupe_replays_original_reason():
     gyro UI renders the same message it did the first time. Operator
     must press Start with a fresh nonce to retry, even if the
     underlying cause has been resolved (#872 §3.6)."""
-    src = inspect.getsource(parent_server)
+    # #920 — the replay branch lives in _handle_gyro_start_packet;
+    # inspect that function instead of the whole module source.
+    src = inspect.getsource(parent_server._handle_gyro_start_packet)
     _assert('start_response_reason' in src,
             "_gyro_handshake caches `start_response_reason` for replay")
     _assert('_send_gyro_claim_denied(ip, prev_reason)' in src,
@@ -143,12 +145,13 @@ def test_dedupe_replays_original_reason():
 # ── Bug F: HB_REP is diagnostics-only ─────────────────────────────────────────
 
 def _hb_rep_block():
-    """Source slice of the CMD_GYRO_HEARTBEAT_REP handler."""
-    src = inspect.getsource(parent_server)
-    idx = src.find("elif cmd == CMD_GYRO_HEARTBEAT_REP")
-    assert idx > 0, "CMD_GYRO_HEARTBEAT_REP dispatch not found"
-    # ~80-line handler now.
-    return src[idx:idx + 4000]
+    """Source of the CMD_GYRO_HEARTBEAT_REP handler. #920 — post-#901
+    the handler is the module-level `_handle_gyro_hb_rep`; inspect it
+    directly (same pattern as `_handle_gyro_start_packet` above) instead
+    of slicing a fixed 4000-char window off a docstring marker."""
+    handler = getattr(parent_server, "_handle_gyro_hb_rep", None)
+    assert handler is not None, "CMD_GYRO_HEARTBEAT_REP dispatch not found"
+    return inspect.getsource(handler)
 
 
 def test_hb_rep_does_not_call_claim():
