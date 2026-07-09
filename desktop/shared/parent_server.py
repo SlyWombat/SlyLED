@@ -5645,6 +5645,153 @@ def api_camera_calibration_status(fid):
     )
 
 
+# ── #913 Radar calibration walk — track-correlation pose solver ───────
+# mmwave_tracking.md §6 layer 2: one person walks a loop through the
+# radar overlap zones; radar_calibration.py records every bound
+# sensor-frame observation (via the RadarFusion.record_observation hook,
+# attached only while recording so the tracking hot path pays nothing
+# otherwise) and solves each non-reference radar's 2-D rigid transform
+# against the reference radar's trajectory projected through its
+# current layer-1 pose. Apply is explicit and per-fixture — solve never
+# touches the stores.
+import radar_calibration
+
+_radar_cal = radar_calibration.RadarCalibration()
+
+
+def _radar_pose_snapshots():
+    """Current pose snapshot per radar fixture — same stores and
+    conventions as _handle_mmw_targets (#910): position from
+    _layout.children, rotation from the fixture record (decoded only
+    via rotation_from_layout downstream)."""
+    pos_map = {p.get("id"): p for p in _layout.get("children", [])}
+    poses = {}
+    for f in _fixtures:
+        if f.get("fixtureType") != "radar":
+            continue
+        p = pos_map.get(f.get("id"), {})
+        poses[f["id"]] = {
+            "id": f["id"],
+            "name": f.get("name"),
+            "x": p.get("x", 0) or 0,
+            "y": p.get("y", 0) or 0,
+            "z": p.get("z", 0) or 0,
+            "rotation": f.get("rotation") or [0, 0, 0],
+        }
+    return poses
+
+
+@app.post("/api/radar/calibration/start")
+def api_radar_cal_start():
+    """Start recording a calibration walk. 409 if one is already running."""
+    if not _radar_cal.start():
+        return jsonify(err="A radar calibration walk is already recording — "
+                           "stop it before starting another"), 409
+    # Attach the hook AFTER start so record() never sees a stale session;
+    # record() also gates on its own recording flag (belt-and-braces).
+    _radar_fusion.record_observation = _radar_cal.record
+    log.info("radar calibration: walk recording started")
+    return jsonify(ok=True, startedAt=_radar_cal.started_at)
+
+
+@app.post("/api/radar/calibration/stop")
+def api_radar_cal_stop():
+    """Stop the walk; returns per-fixture sample counts."""
+    _radar_fusion.record_observation = None   # detach first — hot path idle
+    counts = _radar_cal.stop()
+    if counts is None:
+        return jsonify(err="No radar calibration walk is recording"), 400
+    log.info("radar calibration: walk stopped — samples per fixture: %s", counts)
+    return jsonify(ok=True, samples={str(k): v for k, v in counts.items()})
+
+
+@app.post("/api/radar/calibration/solve")
+def api_radar_cal_solve():
+    """Solve pose proposals from the recorded walk. Body: optional
+    referenceFixtureId (default: the radar with the most samples).
+    Returns proposals with residuals; does NOT apply anything."""
+    if _radar_cal.recording:
+        return jsonify(err="Stop the calibration walk before solving"), 400
+    body = request.get_json(silent=True) or {}
+    ref = body.get("referenceFixtureId")
+    try:
+        result = _radar_cal.solve(_radar_pose_snapshots(),
+                                  reference_fixture_id=ref)
+    except radar_calibration.SolveError as e:
+        return jsonify(err=str(e)), 400
+    return jsonify(ok=True, **result)
+
+
+@app.post("/api/radar/calibration/apply")
+def api_radar_cal_apply():
+    """Apply accepted proposals from the last solve. Body:
+    {fixtureIds: [id, ...]}. Updates layout position (x/y — z kept) and
+    fixture rotation (pan/yaw only, via rotation_to_layout inside the
+    solver) under _lock, persists, and records a `radarCalibration`
+    entry in the calibrations store."""
+    body = request.get_json(silent=True) or {}
+    ids = body.get("fixtureIds")
+    if not isinstance(ids, list) or not ids:
+        return jsonify(err="Body must carry fixtureIds: a non-empty list of "
+                           "fixture ids to accept"), 400
+    solve = _radar_cal.last_solve
+    if not solve:
+        return jsonify(err="No solve results to apply — run "
+                           "/api/radar/calibration/solve first"), 400
+    by_id = {p["fixtureId"]: p for p in solve.get("proposals", [])
+             if "proposed" in p}
+    missing = [fid for fid in ids if fid not in by_id]
+    if missing:
+        return jsonify(err=f"No applicable proposal for fixture id(s) "
+                           f"{missing} in the last solve"), 400
+    applied = []
+    with _lock:
+        children = _layout.setdefault("children", [])
+        child_map = {c.get("id"): c for c in children}
+        for fid in ids:
+            prop = by_id[fid]
+            f = next((x for x in _fixtures if x.get("id") == fid), None)
+            if f is None:
+                return jsonify(err=f"Fixture {fid} no longer exists"), 400
+            p = prop["proposed"]
+            child = child_map.get(fid)
+            if child is None:
+                child = {"id": fid, "x": 0, "y": 0, "z": p["z"]}
+                children.append(child)
+                child_map[fid] = child
+            child["x"] = round(float(p["x"]), 1)
+            child["y"] = round(float(p["y"]), 1)
+            # z untouched (planar solve — design pin)
+            f["rotation"] = list(p["rotation"])
+            _calibrations.setdefault(str(fid), {})["radarCalibration"] = {
+                "timestamp": time.time(),
+                "referenceFixtureId": solve.get("referenceFixtureId"),
+                "rmsResidualMm": prop.get("rmsResidualMm"),
+                "samples": prop.get("samples"),
+                "deltaPosMm": prop.get("deltaPosMm"),
+                "deltaYawDeg": prop.get("deltaYawDeg"),
+                "applied": {"x": child["x"], "y": child["y"],
+                            "rotation": list(p["rotation"])},
+            }
+            applied.append(fid)
+        _save("fixtures", _fixtures)
+        _save("layout", _layout)
+        _save("calibrations", _calibrations)
+    _apply_auto_stage_bounds()  # layout moved — same hook as /api/layout (#628)
+    log.info("radar calibration: applied proposals for fixture(s) %s", applied)
+    return jsonify(ok=True, applied=applied)
+
+
+@app.get("/api/radar/calibration/status")
+def api_radar_cal_status():
+    """Recording state + per-fixture sample counts + last solve (kept so
+    the SPA card survives a reload without re-solving)."""
+    st = _radar_cal.status()
+    st["samples"] = {str(k): v for k, v in st["samples"].items()}
+    st["ok"] = True
+    return jsonify(st)
+
+
 # ── Moving head range calibration ─────────────────────────────────────
 
 def _compute_axis_mapping(samples):

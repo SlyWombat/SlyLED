@@ -199,6 +199,12 @@ class RadarFusion:
         self.accel_sigma = float(accel_sigma)
         self._lock = threading.Lock()
         self._per_fixture = {}   # fixture id -> {"tracks": [...], "last_seq": int}
+        # #913 — calibration-walk recording hook. None (zero overhead)
+        # outside a walk; parent_server points it at
+        # RadarCalibration.record(fixture_id, x_mm, y_mm, t_mono) while
+        # recording. Fed every healthy bound observation in SENSOR frame
+        # under this module's lock (lock order fusion → recorder).
+        self.record_observation = None
 
     # -- public API ----------------------------------------------------------
 
@@ -243,6 +249,13 @@ class RadarFusion:
                 observations.append((sx, sy, tgt))
 
         with self._lock:
+            # #913 — calibration walk recording: raw sensor-frame coords
+            # (projection through a possibly-wrong pose is the solver's
+            # business, not the recorder's). No-op when the hook is None.
+            hook = self.record_observation
+            if hook is not None:
+                for _sx, _sy, tgt in observations:
+                    hook(fid, tgt[0], tgt[1], t_mono)
             st = self._per_fixture.setdefault(fid, {"tracks": [], "last_seq": None})
             st["last_seq"] = seq
             tracks = st["tracks"]
