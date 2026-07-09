@@ -2,8 +2,8 @@
 """
 test_gyro_api.py - Flask integration tests for gyro-related API endpoints.
 
-Tests fixture CRUD with fixtureType='gyro', gyro state endpoint, enable/disable/
-recalibrate commands, backwards-compatible fixture migration, and validation.
+Tests fixture CRUD with fixtureType='gyro', gyro state endpoint, enable/disable
+commands, legacy pre-#877 field rejection, fixture migration, and validation.
 
 Usage:
     python tests/test_gyro_api.py
@@ -35,6 +35,13 @@ def run():
         c.post('/api/reset', headers={'X-SlyLED-Confirm': 'true'})
 
         # -- 1. Create gyro fixture ---------------------------------------------
+        # #877 / #484 phase 5 — the delta-path tuning fields (panScale,
+        # tiltScale, panCenter, tiltCenter, panOffsetDeg, tiltOffsetDeg,
+        # smoothing) were removed from the gyro contract: the orchestrator
+        # no longer transforms the aim vector. The server tolerates them in
+        # request bodies (ignored) and strips stale persisted values on
+        # load. Current gyro fields: gyroChildId, assignedMoverId,
+        # gyroEnabled (fixture_types.py _gyro_apply_create).
         print('-- 1. Create gyro fixture --')
         r = c.post('/api/fixtures', json={
             'name': 'Stage Gyro 1',
@@ -42,6 +49,7 @@ def run():
             'fixtureType': 'gyro',
             'gyroChildId': None,
             'assignedMoverId': None,
+            # Legacy pre-#877 tunables — must be silently ignored:
             'panScale': 1.4,
             'tiltScale': 1.2,
             'panCenter': 128,
@@ -60,22 +68,23 @@ def run():
         d = r.get_json()
         ok('GET gyro fixture -> 200', r.status_code == 200)
         ok('fixtureType is gyro', d.get('fixtureType') == 'gyro')
-        ok('panScale stored',     abs(d.get('panScale', 0) - 1.4) < 0.001)
-        ok('tiltScale stored',    abs(d.get('tiltScale', 0) - 1.2) < 0.001)
-        ok('smoothing stored',    abs(d.get('smoothing', 0) - 0.2) < 0.001)
-        ok('panOffsetDeg stored', abs(d.get('panOffsetDeg', 0) - 5.0) < 0.001)
+        ok('gyroEnabled defaults False', d.get('gyroEnabled') is False)
+        ok('legacy panScale NOT stored (#877)',     'panScale' not in d, str(d))
+        ok('legacy tiltScale NOT stored (#877)',    'tiltScale' not in d)
+        ok('legacy smoothing NOT stored (#877)',    'smoothing' not in d)
+        ok('legacy panOffsetDeg NOT stored (#877)', 'panOffsetDeg' not in d)
 
         # -- 3. PUT updates gyro fields -----------------------------------------
         print('-- 3. PUT gyro fixture --')
         r = c.put(f'/api/fixtures/{gf_id}', json={
             'gyroEnabled': True,
-            'smoothing': 0.3,
+            'smoothing': 0.3,   # removed field — generic PUT must ignore it
         })
         ok('PUT gyro fixture -> 200', r.status_code == 200 and r.get_json().get('ok'))
         r = c.get(f'/api/fixtures/{gf_id}')
         d = r.get_json()
         ok('gyroEnabled updated to True', d.get('gyroEnabled') is True)
-        ok('smoothing updated to 0.3', abs(d.get('smoothing', 0) - 0.3) < 0.001)
+        ok('smoothing still NOT stored after PUT (#877)', 'smoothing' not in d)
 
         # -- 4. Invalid fixtureType rejected -----------------------------------
         print('-- 4. Invalid fixtureType rejected --')
@@ -129,10 +138,16 @@ def run():
             ok('Enable on offline child -> 503 or 404',
                r.status_code in (503, 404), f'status={r.status_code}')
 
-        # -- 9. Recalibrate on unknown child returns 404 -----------------------
-        print('-- 9. Recalibrate on unknown child --')
+        # -- 9. Recalibrate endpoint removed ------------------------------------
+        # The recalibrate command is no longer part of the gyro API (only
+        # /api/gyro/state and /api/gyro/<id>/enable|disable remain). An
+        # unmatched POST falls through to the SPA catch-all route, which
+        # only serves GET -> 405 Method Not Allowed (404 also acceptable
+        # if the catch-all changes).
+        print('-- 9. Recalibrate endpoint removed --')
         r = c.post('/api/gyro/99999/recalibrate', json={})
-        ok('Recalibrate unknown child -> 404', r.status_code == 404)
+        ok('Recalibrate endpoint removed -> 404/405',
+           r.status_code in (404, 405), f'status={r.status_code}')
 
         # -- 10. GET /api/fixtures returns gyro in the list --------------------
         print('-- 10. Gyro in fixture list --')
