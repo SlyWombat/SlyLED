@@ -138,6 +138,8 @@ Coordinates in MMW_TARGETS are **sensor-frame** (Rd-03D local axes, MSB-sign alr
 
 Discovery: on boot the node broadcasts a standard PONG (like every other node) with `stringCount = 0`, hostname `mmw-<id>`, description identifying the radar. It registers in `children.json` and appears in the Firmware tab like any performer.
 
+Sender→fixture binding (#910, refined by the synthetic E2E test): packets bind to the radar fixture whose `radarNode` equals the sender's PONG-announced hostname; if the hostname matches nothing and exactly one enabled radar fixture exists, that single fixture is assumed (logged once). **A hostname match on a `radarEnabled: false` fixture drops the packet** — disabling a radar is a hard operator gate, never a fall-through to another fixture. Unbindable/malformed packets increment `mmwUnbound`/`mmwMalformed` counters on `/api/status`.
+
 ### 4.4 Coordinate handling — node dumb, orchestrator smart
 
 **Decision: the node reports raw sensor-frame millimetres; all projection to stage space happens on the orchestrator.** This mirrors the camera design (camera sends `pixelBox` + `cameraId`; `camera_math.py` projects using the fixture's calibrated pose) and keeps every piece of tunable math server-side where it can iterate without re-flashing nodes.
