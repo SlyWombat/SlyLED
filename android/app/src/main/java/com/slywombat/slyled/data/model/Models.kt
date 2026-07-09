@@ -192,12 +192,16 @@ object ActionTypes {
     const val DMX_PT_MOVE = 15
     const val DMX_GOBO = 16
     const val DMX_COLOR_WHEEL = 17
+    const val TRACK = 18
 
+    // #906 — must match parent_server.py _ACTION_NAMES exactly (all 19
+    // entries incl. Track). Gated by tests/test_parity_action_names.py.
     val names = listOf(
         "Blackout", "Solid", "Fade", "Breathe", "Chase",
         "Rainbow", "Fire", "Comet", "Twinkle", "Strobe",
         "Color Wipe", "Scanner", "Sparkle", "Gradient",
-        "DMX Scene", "Pan/Tilt Move", "Gobo Select", "Color Wheel"
+        "DMX Scene", "Pan/Tilt Move", "Gobo Select", "Color Wheel",
+        "Track"
     )
 
     val directionNames = listOf("East", "North", "West", "South")

@@ -425,10 +425,13 @@ private fun ShortcutRow(
 
 /** Action-type names, index = wire `type`. Mirrors `_typeNames` in
  *  `desktop/shared/spa/js/actions.js`. Only LED types (0-13) are listed;
- *  the DMX/Track types (14-18) never appear in the LED action picker. */
+ *  the DMX/Track types (14-18) never appear in the LED action picker.
+ *  #906 — canonical spelling is "Color ..." (matches docs/USER_MANUAL.md
+ *  and parent_server.py _ACTION_NAMES); gated by
+ *  tests/test_parity_action_names.py. */
 private val LED_ACTION_TYPE_NAMES = arrayOf(
     "Blackout", "Solid", "Fade", "Breathe", "Chase", "Rainbow", "Fire",
-    "Comet", "Twinkle", "Strobe", "Colour Wipe", "Scanner", "Sparkle",
+    "Comet", "Twinkle", "Strobe", "Color Wipe", "Scanner", "Sparkle",
     "Gradient",
 )
 

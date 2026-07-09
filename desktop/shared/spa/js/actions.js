@@ -1,7 +1,9 @@
 /** actions.js — Actions library: CRUD, action editor modal, type-specific fields. Extracted from app.js Phase 2. */
 // ── Actions library ──────────────────────────────────────────────────────────
 var _acts=[];
-var _typeNames=['Blackout','Solid','Fade','Breathe','Chase','Rainbow','Fire','Comet','Twinkle','Strobe','Colour Wipe','Scanner','Sparkle','Gradient','DMX Scene','Pan/Tilt Move','Gobo Select','Colour Wheel','Track'];
+// #906 — canonical spelling is "Color ..." (matches docs/USER_MANUAL.md and
+// parent_server.py _ACTION_NAMES). Gated by tests/test_parity_action_names.py.
+var _typeNames=['Blackout','Solid','Fade','Breathe','Chase','Rainbow','Fire','Comet','Twinkle','Strobe','Color Wipe','Scanner','Sparkle','Gradient','DMX Scene','Pan/Tilt Move','Gobo Select','Color Wheel','Track'];
 var _dirNames=['East','North','West','South'];
 var _palNames=['Classic','Ocean','Lava','Forest','Party','Heat','Cool','Pastel'];
 function rgb2h(r,g,b){return'#'+('0'+r.toString(16)).slice(-2)+('0'+g.toString(16)).slice(-2)+('0'+b.toString(16)).slice(-2);}
