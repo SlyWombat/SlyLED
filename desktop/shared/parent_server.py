@@ -46,6 +46,11 @@ from bake_engine import (bake_timeline, pack_lsq_zip, segments_to_load_steps,
                          BakeProgress)
 from dmx_profiles import ProfileLibrary
 import dmx_profiles
+# #899 — fixture-type registry: POST/PUT fixture validation, per-type
+# create defaults, and the generic-PUT whitelist are registry-driven.
+# New sensor types (radar, #911) register in fixture_types.py — the
+# routes here need no edits.
+import fixture_types
 from dmx_artnet import ArtNetEngine
 from dmx_sacn import sACNEngine
 
@@ -3158,33 +3163,17 @@ def api_fixtures_create():
     if ftype not in ("linear", "point", "surface", "group"):
         return jsonify(err="Invalid fixture type"), 400
     fixture_type = body.get("fixtureType", "led")
-    if fixture_type not in ("led", "dmx", "camera", "gyro"):
-        return jsonify(err="Invalid fixtureType - must be 'led', 'dmx', 'camera', or 'gyro'"), 400
+    # #899 — type whitelist + per-type validation from the registry (the
+    # dmx/camera blocks moved verbatim into fixture_types.py descriptors).
+    if not fixture_types.is_valid_type(fixture_type):
+        return jsonify(err=fixture_types.invalid_type_error()), 400
     if "strings" in body:
         err = _validate_fixture_strings(body["strings"])
         if err:
             return jsonify(err=err), 400
-    # DMX-specific validation
-    if fixture_type == "dmx":
-        dmx_uni = body.get("dmxUniverse")
-        dmx_addr = body.get("dmxStartAddr")
-        dmx_ch = body.get("dmxChannelCount")
-        if not isinstance(dmx_uni, int) or dmx_uni < 1:
-            return jsonify(err="dmxUniverse must be an integer >= 1"), 400
-        if not isinstance(dmx_addr, int) or dmx_addr < 1 or dmx_addr > 512:
-            return jsonify(err="dmxStartAddr must be 1-512"), 400
-        if not isinstance(dmx_ch, int) or dmx_ch < 1:
-            return jsonify(err="dmxChannelCount must be an integer >= 1"), 400
-    # Camera-specific validation
-    if fixture_type == "camera":
-        fov = body.get("fovDeg")
-        if fov is not None and (not isinstance(fov, (int, float)) or fov < 1 or fov > 180):
-            return jsonify(err="fovDeg must be 1-180"), 400
-        # #Q12 — fovType whitelist
-        if "fovType" in body and body["fovType"] is not None:
-            ft_raw = body["fovType"]
-            if not isinstance(ft_raw, str) or ft_raw.strip().lower() not in _FOV_TYPE_WHITELIST:
-                return jsonify(err=f"fovType must be one of {list(_FOV_TYPE_WHITELIST)}"), 400
+    err = fixture_types.validate_create(fixture_type, body)
+    if err:
+        return jsonify(err=err), 400
     with _lock:
         f = {
             "id": _nxt_fix, "name": name or f"Fixture {_nxt_fix}",
@@ -3196,31 +3185,10 @@ def api_fixtures_create():
             "aoeRadius": body.get("aoeRadius", 1000),
             "meshFile": body.get("meshFile"),
         }
-        if fixture_type == "dmx":
-            f["dmxUniverse"] = body["dmxUniverse"]
-            f["dmxStartAddr"] = body["dmxStartAddr"]
-            f["dmxChannelCount"] = body["dmxChannelCount"]
-            f["dmxProfileId"] = body.get("dmxProfileId")
-        if fixture_type == "camera":
-            f["fovDeg"] = body.get("fovDeg", 60)
-            f["fovType"] = _normalise_fov_type(body.get("fovType"))
-            f["cameraUrl"] = body.get("cameraUrl", "")
-            f["resolutionW"] = body.get("resolutionW", 1920)
-            f["resolutionH"] = body.get("resolutionH", 1080)
-            f["trackClasses"] = body.get("trackClasses", ["person"])
-            f["trackFps"] = body.get("trackFps", 2)
-            f["trackThreshold"] = body.get("trackThreshold", 0.4)
-            f["trackTtl"] = body.get("trackTtl", 5)
-            f["trackReidMm"] = body.get("trackReidMm", 500)
-            f["trackInputSize"] = body.get("trackInputSize", 320)
-        if fixture_type == "gyro":
-            f["gyroChildId"]       = body.get("gyroChildId")       # child record ID of the gyro board
-            f["assignedMoverId"]   = body.get("assignedMoverId")   # fixture ID of the DMX mover to control
-            f["gyroEnabled"]       = body.get("gyroEnabled", False)
-            # `smoothing` removed in #877 — orchestrator no longer
-            # transforms the aim vector. Stale persisted values are
-            # ignored on load; the PUT loop below no longer accepts
-            # the field.
+        # #899 — per-type field defaults from the registry (the dmx/
+        # camera/gyro stamping blocks moved verbatim into the
+        # descriptors' apply_create hooks).
+        fixture_types.apply_create(fixture_type, f, body)
         _fixtures.append(f)
         _nxt_fix += 1
         _save("fixtures", _fixtures)
@@ -3239,9 +3207,9 @@ def api_fixture_update(fid):
     if not f:
         return jsonify(err="Not found"), 404
     body = request.get_json(silent=True) or {}
-    # Validate fixtureType if changing
-    if "fixtureType" in body and body["fixtureType"] not in ("led", "dmx", "camera", "gyro"):
-        return jsonify(err="Invalid fixtureType - must be 'led', 'dmx', 'camera', or 'gyro'"), 400
+    # Validate fixtureType if changing — #899 registry-driven.
+    if "fixtureType" in body and not fixture_types.is_valid_type(body["fixtureType"]):
+        return jsonify(err=fixture_types.invalid_type_error()), 400
     # Validate geometry type if changing
     if "type" in body and body["type"] not in ("linear", "point", "surface", "group"):
         return jsonify(err="Invalid fixture type"), 400
@@ -3250,64 +3218,13 @@ def api_fixture_update(fid):
         err = _validate_fixture_strings(body["strings"])
         if err:
             return jsonify(err=err), 400
-    # Validate DMX fields
+    # #899 — per-type update validation from the registry (the dmx and
+    # camera blocks, incl. #Q12 fovType and the #423 per-class threshold
+    # checks, moved verbatim into fixture_types.py descriptors).
     ft = body.get("fixtureType", f.get("fixtureType", "led"))
-    if ft == "dmx":
-        addr = body.get("dmxStartAddr", f.get("dmxStartAddr"))
-        if "dmxStartAddr" in body:
-            if not isinstance(addr, int) or addr < 1 or addr > 512:
-                return jsonify(err="dmxStartAddr must be 1-512"), 400
-        uni = body.get("dmxUniverse", f.get("dmxUniverse"))
-        if "dmxUniverse" in body:
-            if not isinstance(uni, int) or uni < 1:
-                return jsonify(err="dmxUniverse must be an integer >= 1"), 400
-        ch = body.get("dmxChannelCount", f.get("dmxChannelCount"))
-        if "dmxChannelCount" in body:
-            if not isinstance(ch, int) or ch < 1:
-                return jsonify(err="dmxChannelCount must be an integer >= 1"), 400
-    # Validate camera fields
-    if ft == "camera" and "fovDeg" in body:
-        fov = body["fovDeg"]
-        if not isinstance(fov, (int, float)) or fov < 1 or fov > 180:
-            return jsonify(err="fovDeg must be 1-180"), 400
-    # #Q12 — fovType whitelist
-    if ft == "camera" and "fovType" in body and body["fovType"] is not None:
-        ft_raw = body["fovType"]
-        if not isinstance(ft_raw, str) or ft_raw.strip().lower() not in _FOV_TYPE_WHITELIST:
-            return jsonify(err=f"fovType must be one of {list(_FOV_TYPE_WHITELIST)}"), 400
-    if ft == "camera":
-        if "trackClasses" in body:
-            tc = body["trackClasses"]
-            if not isinstance(tc, list) or not tc or not all(isinstance(c, str) for c in tc):
-                return jsonify(err="trackClasses must be a non-empty list of strings"), 400
-        if "trackFps" in body:
-            v = body["trackFps"]
-            if not isinstance(v, (int, float)) or v < 0.5 or v > 10:
-                return jsonify(err="trackFps must be 0.5-10"), 400
-        if "trackThreshold" in body:
-            v = body["trackThreshold"]
-            if not isinstance(v, (int, float)) or v < 0.1 or v > 0.95:
-                return jsonify(err="trackThreshold must be 0.1-0.95"), 400
-        # #423 — per-class threshold dict. Each value must be in the
-        # same 0.1-0.95 band so an operator can't accidentally set
-        # threshold=0 and flood the tracker with noise.
-        if "trackClassThresholds" in body:
-            ct = body["trackClassThresholds"]
-            if not isinstance(ct, dict):
-                return jsonify(err="trackClassThresholds must be an object mapping class→threshold"), 400
-            for cls, thr in ct.items():
-                if not isinstance(cls, str) or not cls:
-                    return jsonify(err="trackClassThresholds keys must be non-empty class names"), 400
-                if not isinstance(thr, (int, float)) or thr < 0.1 or thr > 0.95:
-                    return jsonify(err=f"trackClassThresholds['{cls}'] must be 0.1-0.95"), 400
-        if "trackTtl" in body:
-            v = body["trackTtl"]
-            if not isinstance(v, (int, float)) or v < 1 or v > 60:
-                return jsonify(err="trackTtl must be 1-60"), 400
-        if "trackReidMm" in body:
-            v = body["trackReidMm"]
-            if not isinstance(v, (int, float)) or v < 50 or v > 5000:
-                return jsonify(err="trackReidMm must be 50-5000"), 400
+    err = fixture_types.validate_update(ft, body, f)
+    if err:
+        return jsonify(err=err), 400
     # #742 — `homePanDmx16` / `homeTiltDmx16` / `homeSetAt` / `homeSecondary`
     # are deliberately **NOT** in the generic-PUT writable list. They have
     # dedicated endpoints with validation:
@@ -3330,13 +3247,11 @@ def api_fixture_update(fid):
     # be observed torn (half old, half new — e.g. new dmxStartAddr with
     # old dmxChannelCount) by the DMX/show playback loops.
     updates = {}
-    for k in ("name", "type", "fixtureType", "childId", "childIds", "strings",
-              "rotation", "orientation", "mountedInverted", "aoeRadius", "meshFile",
-              "dmxUniverse", "dmxStartAddr", "dmxChannelCount", "dmxProfileId",
-              "fovDeg", "fovType", "cameraUrl", "cameraIp", "cameraIdx", "resolutionW", "resolutionH",
-              "trackClasses", "trackClassThresholds",
-              "trackFps", "trackThreshold", "trackTtl", "trackReidMm",
-              "gyroChildId", "assignedMoverId", "gyroEnabled"):
+    # #899 — writable keys are COMMON_UPDATE_FIELDS + the union of every
+    # registered type's fields, reproducing the pre-#899 flat literal
+    # (any type's fields are accepted on any fixture, exactly as before;
+    # a newly registered type's fields join automatically).
+    for k in fixture_types.update_field_whitelist():
         if k in body:
             # #Q12 — normalise fovType on write so stored value is always in
             # the whitelist (inputs go through _normalise_fov_type).
@@ -4254,18 +4169,11 @@ def api_camera_status(fid):
 # commonly published for USB webcams so we default there. Every caller
 # that needs a horizontal FOV for ray math should go through
 # _camera_h_fov_rad() so the conversion stays consistent.
-_FOV_TYPE_WHITELIST = ("horizontal", "vertical", "diagonal")
-_FOV_TYPE_DEFAULT = "diagonal"
-
-
-def _normalise_fov_type(value, *, default=_FOV_TYPE_DEFAULT):
-    """Return a whitelist-validated fovType string. Unknown inputs map to
-    the default so a malformed fixture record never crashes a ray calc."""
-    if isinstance(value, str):
-        v = value.strip().lower()
-        if v in _FOV_TYPE_WHITELIST:
-            return v
-    return default
+# #899 — definitions moved to fixture_types.py (the camera descriptor's
+# validators need them); aliased here for the remaining call sites.
+_FOV_TYPE_WHITELIST = fixture_types.FOV_TYPE_WHITELIST
+_FOV_TYPE_DEFAULT = fixture_types.FOV_TYPE_DEFAULT
+_normalise_fov_type = fixture_types.normalise_fov_type
 
 
 def _camera_h_fov_rad(cam_fixture, frame_w, frame_h):
