@@ -1434,9 +1434,22 @@ _udp_status = {
     "attemptedAt": None,
     "boundAt": None,
     "attempts": 0,
+    # #901 — per-listener receive-loop failure counters (the
+    # `except Exception: continue` paths in each recv loop). Exposed via
+    # get_udp_listener_status() → /api/status so a wedged/erroring loop
+    # is observable; the exception-swallowing behaviour is unchanged.
+    "recvErrors": 0,          # main 4210 listener (_udp_listener)
+    "autobriRecvErrors": 0,   # dedicated 4211 listener (#862)
 }
 _udp_status_lock = threading.Lock()
 _udp_listener_thread = None
+
+def _udp_count_recv_error(key):
+    """#901 — bump a per-listener receive-loop failure counter under the
+    status lock. Called only from the recv loops' pre-existing
+    `except Exception: continue` paths."""
+    with _udp_status_lock:
+        _udp_status[key] = _udp_status.get(key, 0) + 1
 
 def get_udp_listener_status():
     """Snapshot of the UDP listener's bind state. JSON-safe; consumed by
@@ -1522,12 +1535,14 @@ def _udp_autobri_listener():
         except socket.timeout:
             continue
         except Exception:
+            _udp_count_recv_error("autobriRecvErrors")
             continue
         if len(data) < 8:
             continue
         try:
             magic, ver, cmd = struct.unpack_from("<HBB", data, 0)
         except Exception:
+            _udp_count_recv_error("autobriRecvErrors")
             continue
         if magic != UDP_MAGIC or ver not in (3, 4, UDP_VERSION):
             continue
@@ -1536,7 +1551,15 @@ def _udp_autobri_listener():
 
 
 def _udp_listener():
-    """Background daemon: persistent bind on UDP_PORT, receives ACTION_EVENT packets from children."""
+    """Background daemon: persistent bind on UDP_PORT. Receives every
+    child→parent packet — ACTION_EVENT, PONG, the gyro 0x6x family, and
+    CMD_AUTOBRI_PUSH on the legacy 4210 path — and routes it through the
+    `_UDP_DISPATCH` table (#901). Per-command handling lives in the
+    module-level `_handle_*` functions below; PONG matching and the #843
+    globalBrightness top-up via _brightness_packet for a matched
+    reconnecting child live in `_handle_pong`. Receive-loop failures
+    bump `_udp_status["recvErrors"]` (#901 runtime-health note) without
+    changing the swallow-and-continue behaviour."""
     s = _try_bind_udp(UDP_PORT)
     if s is None:
         return
@@ -1546,414 +1569,555 @@ def _udp_listener():
         except socket.timeout:
             continue
         except Exception:
+            _udp_count_recv_error("recvErrors")
             continue
         if len(data) < 8:
             continue
         try:
             magic, ver, cmd = struct.unpack_from("<HBB", data, 0)
         except Exception:
+            _udp_count_recv_error("recvErrors")
             continue
         # #819 — proto bumped 4→5 (CMD_GYRO_STOP added). Accept legacy v3/v4
         # frames so field-deployed children that haven't been re-flashed yet
-        # still talk to the orchestrator. CMD_GYRO_STOP itself is rejected
-        # below if it arrives on v3/v4 — old gyros can't have generated it.
+        # still talk to the orchestrator.
         if magic != UDP_MAGIC or ver not in (3, 4, UDP_VERSION):
             continue
         ip = addr[0]
-        if cmd == CMD_ACTION_EVENT and len(data) >= 12:
-            at, si, tot, ev = struct.unpack_from("<BBBB", data, 8)
-            _live_events[ip] = {
-                "actionType": at, "stepIndex": si,
-                "totalSteps": tot, "event": ev,
-                "ts": time.time(),
-            }
-            log.debug("ACTION_EVENT from %s: type=%d step=%d/%d event=%s",
-                       ip, at, si, tot, "started" if ev == 0 else "ended")
-        elif cmd == CMD_GYRO_ORIENT and len(data) >= 16:
-            # GyroOrientPayload: roll100(2) pitch100(2) yaw100(2) fps(1) flags(1)
-            roll100, pitch100, yaw100, fps, flags = struct.unpack_from("<hhhBB", data, 8)
-
-            # #819 — bit 3 of orient flags used to mean STOP in proto-v4
-            # (gyro firmware ≤v1.2.5). That overload mis-fired on every
-            # orient packet a v1.2.5 gyro sent, auto-releasing the live
-            # claim ~25 ms after CMD_GYRO_START. Bit 3 is now reserved;
-            # STOP moved to a discrete CMD_GYRO_STOP (0x69). We only warn
-            # if the bit is observed and continue processing the orient —
-            # never tear down the claim from this code path. (Acceptance
-            # criterion: grepping desktop/shared/*.py for the old bitmask
-            # literal must return nothing.)
-            if ((flags >> 3) & 1):
-                log.warning(
-                    "GYRO_ORIENT from %s with bit 3 set (flags=0x%02x) — "
-                    "protocol mismatch; expected CMD_GYRO_STOP. Ignoring "
-                    "the bit and processing orient. Reflash gyro firmware "
-                    "to v1.2.6+ to clear this warning.", ip, flags)
-            with _gyro_lock:
-                # #813 follow-up — merge instead of overwrite so the
-                # battery-telemetry fields populated by CMD_GYRO_BATT
-                # survive a subsequent orient packet.
-                st = _gyro_state.setdefault(ip, {})
-                st["roll"]  = roll100  / 100.0
-                st["pitch"] = pitch100 / 100.0
-                st["yaw"]   = yaw100   / 100.0
-                st["fps"]   = fps
-                st["flags"] = flags
-                st["ts"]    = time.time()
-            log.debug("GYRO_ORIENT from %s: R=%.1f P=%.1f Y=%.1f fps=%d",
-                      ip, roll100/100.0, pitch100/100.0, yaw100/100.0, fps)
-            # Primitive owns orientation (#484 phase 4). Mover-follow
-            # reads Remote.aim_stage via its tick loop — no legacy call
-            # here any more.
-            device_id = f"gyro-{ip}"
-            # #822 — bump child.seen so Firmware Updates doesn't flag a
-            # streaming gyro as offline. The gyro rarely sends CMD_PONG
-            # in steady state; orient is the high-frequency liveness
-            # signal.
-            _touch_child_seen(ip)
-            remote = _auto_register_remote(device_id, kind=KIND_GYRO)
-            remote.update_from_euler_deg(
-                roll100/100.0, pitch100/100.0, yaw100/100.0,
-            )
-            # #813 — orient handler is no longer a claim source.
-            # Press-Start (`CMD_GYRO_START`) is the only path that
-            # establishes a claim. An orient packet without a prior
-            # claim updates the Remote's last_quat_world (which is
-            # cheap + stale-clearing per #812) but never spontaneously
-            # claims. The back-compat auto-claim-on-first-orient path
-            # (#772 era) was deleted — green-field reflash assumed.
-        elif cmd == CMD_GYRO_STOP:
-            # #819 — discrete press-STOP. #825 — payload now carries a
-            # nonce(2). Header-only legacy variants (gyro firmware ≤
-            # v1.2.6) are still accepted with nonce=0 and no STOP_ACK.
-            #
-            # #813 §1.2 / §6.1 — release(blackout=False). Press-Stop hands
-            # the fixture back to whatever was driving it before the gyro
-            # session (timeline / Track action / #800 park-at-home idle).
-            # Pre-fix this forced dimmer-zero, fighting the next writer's
-            # first frame; the operator's mental model is "release to what
-            # it was doing before" (Android-controller-mode semantics).
-            stop_nonce = None
-            if len(data) >= 10:
-                try:
-                    (stop_nonce,) = struct.unpack_from("<H", data, 8)
-                except Exception:
-                    stop_nonce = None
-            did_stop = f"gyro-{ip}"
-            _gyro_touch_remote(did_stop)  # §6.3 silence-clock
-            try:
-                # Idempotent dedupe: a retransmitted STOP with the same
-                # nonce just replays the STOP_ACK; we don't double-release.
-                with _gyro_handshake_lock:
-                    st_hs = _gyro_handshake.setdefault(did_stop, {})
-                    prev_nonce = st_hs.get("stop_nonce")
-                    prev_ts = st_hs.get("stop_ack_ts") or 0
-                    is_replay = (
-                        stop_nonce is not None
-                        and prev_nonce == stop_nonce
-                        and (time.time() - prev_ts) < GYRO_HANDSHAKE_DEDUPE_S
-                    )
-                if is_replay:
-                    log.debug("GYRO_STOP replay from %s nonce=%d — re-sending ACK",
-                              ip, stop_nonce)
-                    if stop_nonce is not None:
-                        _send_gyro_stop_ack(ip, stop_nonce)
-                    continue
-                log.info("GYRO_STOP from %s nonce=%s — releasing claim (blackout=False)",
-                          ip, stop_nonce)
-                if _mover_engine:
-                    gf_stop = _gyro_fixture_for_ip(ip)
-                    if gf_stop and gf_stop.get("assignedMoverId") is not None:
-                        _mover_engine.release(gf_stop["assignedMoverId"],
-                                              did_stop, blackout=False)
-                remote_stop = _remotes.by_device(did_stop)
-                if remote_stop is not None:
-                    remote_stop.end_session()
-                    try:
-                        _remotes.save()
-                    except Exception as e:
-                        log.error("remotes.save() during stop failed: %s", e)
-                with _gyro_handshake_lock:
-                    st_hs = _gyro_handshake.setdefault(did_stop, {})
-                    # Drop nonce tracking for the gesture we just stopped.
-                    st_hs["start_nonce"] = None
-                    st_hs["mover_id"] = None
-                    if stop_nonce is not None:
-                        st_hs["stop_nonce"] = stop_nonce
-                        st_hs["stop_ack_ts"] = time.time()
-                if stop_nonce is not None:
-                    _send_gyro_stop_ack(ip, stop_nonce)
-            except Exception as e:
-                log.error("GYRO_STOP handler failed: %s", e, exc_info=True)
-        elif cmd == CMD_GYRO_OFF:
-            # #867 — discrete press-OFF: same payload shape and ACK as
-            # CMD_GYRO_STOP but the server calls release(blackout=True)
-            # so the claimed mover goes dark before the claim returns
-            # to whatever was driving it before the gyro session. STOP
-            # is "I'm done driving, hand control back at current
-            # frame"; OFF is "I'm done driving AND turn the head off
-            # right now." The gyro advances UI on matching STOP_ACK.
-            off_nonce = None
-            if len(data) >= 10:
-                try:
-                    (off_nonce,) = struct.unpack_from("<H", data, 8)
-                except Exception:
-                    off_nonce = None
-            did_off = f"gyro-{ip}"
-            _gyro_touch_remote(did_off)
-            try:
-                # Idempotent dedupe under the same handshake state as
-                # STOP — nonce-collision across STOP/OFF is harmless
-                # because both paths converge on STOP_ACK and the
-                # claim is gone after either. Re-emit on ACK loss
-                # just replays the cached ACK.
-                with _gyro_handshake_lock:
-                    st_hs = _gyro_handshake.setdefault(did_off, {})
-                    prev_nonce = st_hs.get("stop_nonce")
-                    prev_ts = st_hs.get("stop_ack_ts") or 0
-                    is_replay = (
-                        off_nonce is not None
-                        and prev_nonce == off_nonce
-                        and (time.time() - prev_ts) < GYRO_HANDSHAKE_DEDUPE_S
-                    )
-                if is_replay:
-                    log.debug("GYRO_OFF replay from %s nonce=%d — re-sending ACK",
-                              ip, off_nonce)
-                    if off_nonce is not None:
-                        _send_gyro_stop_ack(ip, off_nonce)
-                    continue
-                log.info("GYRO_OFF from %s nonce=%s — releasing claim (blackout=True)",
-                          ip, off_nonce)
-                if _mover_engine:
-                    gf_off = _gyro_fixture_for_ip(ip)
-                    if gf_off and gf_off.get("assignedMoverId") is not None:
-                        _mover_engine.release(gf_off["assignedMoverId"],
-                                              did_off, blackout=True)
-                remote_off = _remotes.by_device(did_off)
-                if remote_off is not None:
-                    remote_off.end_session()
-                    try:
-                        _remotes.save()
-                    except Exception as e:
-                        log.error("remotes.save() during off failed: %s", e)
-                with _gyro_handshake_lock:
-                    st_hs = _gyro_handshake.setdefault(did_off, {})
-                    st_hs["start_nonce"] = None
-                    st_hs["mover_id"] = None
-                    if off_nonce is not None:
-                        st_hs["stop_nonce"] = off_nonce
-                        st_hs["stop_ack_ts"] = time.time()
-                if off_nonce is not None:
-                    _send_gyro_stop_ack(ip, off_nonce)
-            except Exception as e:
-                log.error("GYRO_OFF handler failed: %s", e, exc_info=True)
-        elif cmd == CMD_GYRO_AIM_WIZARD:
-            # #869 — gyro-side empirical aim-axis wizard. Same math
-            # as the Android wizard (#826): three captured poses →
-            # forward_local / up_local. Wire path differs from the
-            # phone (which POSTs to /api/remotes/aim-wizard) because
-            # the gyro has no HTTPS stack — captures ride one UDP
-            # packet. Payload is 3 Euler triples in degrees:
-            #   bytes 8..20  = neutral       (roll, pitch, yaw)
-            #   bytes 20..32 = pitch_forward (roll, pitch, yaw)
-            #   bytes 32..44 = yaw_left      (roll, pitch, yaw)
-            # Server converts each triple to a body-to-world unit
-            # quat via quat_from_euler_zyx_deg (the same convention
-            # the gyro's orient stream uses) before dispatching to
-            # _apply_aim_wizard_to_remote.
-            if len(data) < 44:
-                log.warning("GYRO_AIM_WIZARD from %s: payload too short "
-                            "(%d bytes, expected 44)", ip, len(data))
-                continue
-            try:
-                from remote_math import quat_from_euler_zyx_deg as _qfe
-                eu = struct.unpack_from("<9f", data, 8)
-                poses = {
-                    "neutral":       _qfe(eu[0], eu[1], eu[2]),
-                    "pitch_forward": _qfe(eu[3], eu[4], eu[5]),
-                    "yaw_left":      _qfe(eu[6], eu[7], eu[8]),
-                }
-                did_wiz = f"gyro-{ip}"
-                _gyro_touch_remote(did_wiz)
-                r = _remotes.by_device(did_wiz)
-                if r is None:
-                    r = _auto_register_remote(did_wiz, kind=KIND_GYRO)
-                ok_, resp, status = _apply_aim_wizard_to_remote(r, poses)
-                if ok_:
-                    _remotes.save()
-                    log.info("GYRO_AIM_WIZARD from %s — derived forward=%s up=%s",
-                             ip, resp.get("forwardLocal"), resp.get("upLocal"))
-                else:
-                    log.warning("GYRO_AIM_WIZARD from %s rejected: %s",
-                                 ip, resp)
-            except Exception as e:
-                log.error("GYRO_AIM_WIZARD handler failed: %s", e, exc_info=True)
-        elif cmd == CMD_GYRO_START:
-            # #874 — extracted to a top-level callable for direct
-            # contract testing. Behavior unchanged.
-            _handle_gyro_start_packet(ip, data)
-        elif cmd == CMD_GYRO_BATT and len(data) >= 12:
-            # #813 follow-up — GyroBattPayload: vbat100(2) pct(1) flags(1).
-            # Stamp into _gyro_state so /api/gyros and the SPA can surface
-            # battery without operator intervention.
-            _gyro_touch_remote(f"gyro-{ip}")  # §6.3 silence-clock
-            vbat100, pct, bflags = struct.unpack_from("<HBB", data, 8)
-            charging = bool(bflags & 0x01)
-            with _gyro_lock:
-                st = _gyro_state.setdefault(ip, {})
-                st["vbat"] = vbat100 / 100.0
-                st["batPct"] = (None if pct == 0xFF else int(pct))
-                st["batCharging"] = charging
-                st["batTs"] = time.time()
-            log.debug("GYRO_BATT from %s: %.2fV pct=%s charging=%s",
-                      ip, vbat100/100.0, pct, charging)
-        elif cmd == CMD_GYRO_COLOR and len(data) >= 12:
-            # GyroColorPayload: r(1) g(1) b(1) flags(1)
-            _gyro_touch_remote(f"gyro-{ip}")  # §6.3 silence-clock
-            r, g, b, flags = struct.unpack_from("<BBBB", data, 8)
-            flash = bool(flags & 0x01)
-            log.info("GYRO_COLOR from %s: r=%d g=%d b=%d flash=%s", ip, r, g, b, flash)
-            _apply_gyro_color(ip, r, g, b, flash)
-        elif cmd == CMD_GYRO_CALIBRATE and len(data) >= 15:
-            # GyroCalibratePayload: calibrating(1) roll100(2) pitch100(2) yaw100(2)
-            calibrating, roll100, pitch100, yaw100 = struct.unpack_from("<Bhhh", data, 8)
-            roll = roll100 / 100.0
-            pitch = pitch100 / 100.0
-            yaw = yaw100 / 100.0
-            # #813 §6.3 — every gyro packet refreshes the all-comms-silence
-            # clock. Calibrate is optional (#813 §5.0) so we never gate any
-            # downstream behaviour on having seen one — but receiving one
-            # is proof the gyro is alive.
-            _gyro_touch_remote(f"gyro-{ip}")
-            log.info("GYRO_CALIBRATE from %s: cal=%d R=%.1f P=%.1f Y=%.1f",
-                     ip, calibrating, roll, pitch, yaw)
-            # Resolve the gyro fixture + target mover for this gyro.
-            _gf3 = next((f for f in _fixtures if f.get("fixtureType") == "gyro"
-                         and f.get("gyroChildId") is not None
-                         and next((c for c in _children if c["id"] == f["gyroChildId"]
-                                   and c.get("ip") == ip), None)), None)
-            target_mover_id = _gf3.get("assignedMoverId") if _gf3 else None
-            did = f"gyro-{ip}"
-            if target_mover_id is not None:
-                # State transition on the claim (hold DMX during align).
-                if calibrating:
-                    _mover_engine.calibrate_start(target_mover_id, did)
-                else:
-                    # Primitive computes R_world_to_stage against the mover's
-                    # current stage aim; engine resumes streaming.
-                    mover = _mover_fixture(target_mover_id)
-                    remote = _remotes.by_device(did) or _auto_register_remote(did, kind=KIND_GYRO)
-                    if mover is not None:
-                        aim_stage = _mover_current_aim_stage(mover)
-                        if aim_stage is None:
-                            # #806 — UDP calibrate-end with no canonical aim;
-                            # surface in the log so live-test can spot it. Skip
-                            # the calibrate call instead of locking against a
-                            # wrong vector (the #805 silent-fallback bug).
-                            log.warning(
-                                "Remote %d UDP calibrate skipped for mover %d: "
-                                "aim_unresolvable (no canonical aim, sphere "
-                                "read failed). Confirm Home/Secondary saved.",
-                                remote.id, mover["id"])
-                        else:
-                            try:
-                                remote.calibrate(
-                                    target_aim_stage=aim_stage,
-                                    target_info={"objectId": mover["id"], "kind": "mover"},
-                                    roll=roll, pitch=pitch, yaw=yaw,
-                                )
-                                _remotes.save()
-                                log.info("Remote %d calibrated via UDP against mover %d aim=%s",
-                                         remote.id, mover["id"], aim_stage)
-                            except Exception as e:
-                                log.error("Remote %d calibrate failed: %s", remote.id, e)
-                    _mover_engine.calibrate_end(target_mover_id, did)
-        elif cmd == CMD_GYRO_HEARTBEAT_REP and len(data) >= 13:
-            # #872 — HB_REP is diagnostics-only.
-            #
-            # Pre-#872 this handler reconstructed the claim from the
-            # gyro's heartbeat ("orchestrator-restart bootstrap path",
-            # #813 §5.3) when the gyro reported ACTIVE while the
-            # orchestrator had no claim. That path enabled the
-            # operator-visible bug class in #872: SPA Release / press-
-            # Stop was undone by the next 2 s heartbeat because the
-            # gyro's UI was still ACTIVE and the reconstruct branch
-            # could not distinguish "operator just released" from
-            # "orchestrator just restarted".
-            #
-            # Operator's contract (2026-05-09): "Once Start is pressed,
-            # when we lock and hold." Press-Start is the SOLE
-            # orchestrator-side claim entry trigger. No auto-reclaim,
-            # no bootstrap. After an orchestrator restart, the
-            # operator presses Start again. See `docs/gyro-claim-
-            # lifecycle.md` §5.3 + §7.2.
-            #
-            # This handler may: parse the packet, log it, update
-            # `Remote.last_data`. It MUST NOT call `_mover_engine.claim`,
-            # `_mover_engine.release`, `start_stream`, `_send_gyro_*` —
-            # the spec invariant is enforced here, not at the call
-            # site of every future patch.
-            ui_state, claim_nonce, hb_seq = struct.unpack_from("<BHH", data, 8)
-            device_id_hb = f"gyro-{ip}"
-            _gyro_touch_remote(device_id_hb)
-            try:
-                with _gyro_handshake_lock:
-                    st_hs = _gyro_handshake.setdefault(device_id_hb, {})
-                    last_seq = st_hs.get("last_seen_seq")
-                    st_hs["last_seen_seq"] = hb_seq
-                if last_seq != hb_seq:
-                    # Diagnostics-only log. `server_has_claim` divergence
-                    # used to drive the reconstruct branch; now it just
-                    # informs the log so cross-check between the gyro's
-                    # view and the orchestrator's view is observable.
-                    server_has_claim = (
-                        _mover_engine is not None
-                        and any(cl.get("deviceId") == device_id_hb
-                                for cl in (_mover_engine.get_status() or [])))
-                    log.debug(
-                        "GYRO_HB_REP from %s ui=%d claimNonce=%d seq=%d "
-                        "(server_has_claim=%s, diagnostics-only)",
-                        ip, ui_state, claim_nonce, hb_seq, server_has_claim)
-            except Exception as e:
-                log.error("GYRO_HB_REP handler failed: %s", e, exc_info=True)
-        elif cmd == CMD_AUTOBRI_PUSH and len(data) >= 11:
-            _handle_autobri_push(ip, data)
-        elif cmd == CMD_PONG:
-            # Handle PONGs from broadcast/direct pings
-            info = _parse_pong(data, ip)
-            if info:
-                log.debug("PONG from %s (%s) fw=%s", ip, info.get("hostname"), info.get("fwVersion"))
-                # Store for discover to find
-                _recent_pongs[ip] = info
-                # Update known children
-                matched = None
-                for c in _children:
-                    if c.get("ip") == ip or c.get("hostname") == info.get("hostname"):
-                        saved_fw = c.get("fwVersion", "")
-                        c.update({k: v for k, v in info.items() if k != "id"})
-                        # Preserve 3-digit version over PONG's 2-digit
-                        if saved_fw and saved_fw.count(".") >= 2 and info.get("fwVersion", "").count(".") < 2:
-                            c["fwVersion"] = saved_fw
-                        # #822 — bump seen so Firmware Updates tab
-                        # doesn't show this child as offline. The
-                        # parsed PongPayload doesn't include `seen`,
-                        # so the c.update(info) above doesn't refresh
-                        # it; do it explicitly here.
-                        c["seen"] = int(time.time())
-                        c["status"] = 1
-                        _probe_board_type(c)
-                        matched = c
-                        break
-                # #843 — top up brightness on a freshly-online child.
-                # `childBrightness` boots to 255 in firmware (Child.cpp).
-                # If our master is currently below that, push the value
-                # so the child doesn't display its first show frame at
-                # full intensity. LED children only.
-                if matched is not None and matched.get("type") not in ("dmx", "gyro"):
-                    g_bri = _settings.get("globalBrightness", 255)
-                    if g_bri < 255:
-                        _send(ip, _brightness_packet(g_bri))
-        else:
+        entry = _UDP_DISPATCH.get(cmd)
+        if entry is None or len(data) < entry[0]:
+            # Unknown cmd — or a known cmd shorter than its pre-#901
+            # `len(data) >= N` elif gate — takes exactly the old chain's
+            # trailing-`else` silent-ignore debug log.
             log.debug("UDP cmd=0x%02X from %s (%d bytes)", cmd, ip, len(data))
+            continue
+        entry[1](ip, addr[1], (magic, ver, cmd), data)
+
+
+# ── #901 UDP dispatch handlers ────────────────────────────────────────────────
+# One module-level `_handle_<name>(ip, port, hdr, data)` per wire command,
+# extracted verbatim from the pre-#901 `elif cmd ==` chain in _udp_listener
+# (precedent: _handle_autobri_push / _handle_gyro_start_packet). `hdr` is
+# the parsed (magic, ver, cmd) header triple; `data` is the FULL datagram,
+# payload at offset 8 — struct offsets are unchanged from the wire.
+# Each docstring carries its legacy dispatch line verbatim: the source-
+# inspection contract suites (tests/test_819_gyro_stop_split.py,
+# test_825_gyro_handshake.py, test_867_gyro_off.py, test_869_gyro_aim_
+# wizard.py, test_872_claim_lifecycle.py) slice handler bodies by those
+# lines, and the `and len(data) >= N` text doubles as documentation of the
+# _UDP_DISPATCH minimum-length gate.
+
+
+def _handle_action_event(ip, port, hdr, data):
+    """CMD_ACTION_EVENT — child action start/end event → _live_events.
+    Pre-#901 dispatch line (load-bearing, see block note above):
+
+        if cmd == CMD_ACTION_EVENT and len(data) >= 12:
+    """
+    at, si, tot, ev = struct.unpack_from("<BBBB", data, 8)
+    _live_events[ip] = {
+        "actionType": at, "stepIndex": si,
+        "totalSteps": tot, "event": ev,
+        "ts": time.time(),
+    }
+    log.debug("ACTION_EVENT from %s: type=%d step=%d/%d event=%s",
+               ip, at, si, tot, "started" if ev == 0 else "ended")
+
+
+def _handle_gyro_orient(ip, port, hdr, data):
+    """CMD_GYRO_ORIENT — high-rate gyro pose stream → _gyro_state + Remote.
+    Pre-#901 dispatch line (load-bearing, see block note above):
+
+        elif cmd == CMD_GYRO_ORIENT and len(data) >= 16:
+    """
+    # GyroOrientPayload: roll100(2) pitch100(2) yaw100(2) fps(1) flags(1)
+    roll100, pitch100, yaw100, fps, flags = struct.unpack_from("<hhhBB", data, 8)
+
+    # #819 — bit 3 of orient flags used to mean STOP in proto-v4
+    # (gyro firmware ≤v1.2.5). That overload mis-fired on every
+    # orient packet a v1.2.5 gyro sent, auto-releasing the live
+    # claim ~25 ms after CMD_GYRO_START. Bit 3 is now reserved;
+    # STOP moved to a discrete CMD_GYRO_STOP (0x69). We only warn
+    # if the bit is observed and continue processing the orient —
+    # never tear down the claim from this code path. (Acceptance
+    # criterion: grepping desktop/shared/*.py for the old bitmask
+    # literal must return nothing.)
+    if ((flags >> 3) & 1):
+        log.warning(
+            "GYRO_ORIENT from %s with bit 3 set (flags=0x%02x) — "
+            "protocol mismatch; expected CMD_GYRO_STOP. Ignoring "
+            "the bit and processing orient. Reflash gyro firmware "
+            "to v1.2.6+ to clear this warning.", ip, flags)
+    with _gyro_lock:
+        # #813 follow-up — merge instead of overwrite so the
+        # battery-telemetry fields populated by CMD_GYRO_BATT
+        # survive a subsequent orient packet.
+        st = _gyro_state.setdefault(ip, {})
+        st["roll"]  = roll100  / 100.0
+        st["pitch"] = pitch100 / 100.0
+        st["yaw"]   = yaw100   / 100.0
+        st["fps"]   = fps
+        st["flags"] = flags
+        st["ts"]    = time.time()
+    log.debug("GYRO_ORIENT from %s: R=%.1f P=%.1f Y=%.1f fps=%d",
+              ip, roll100/100.0, pitch100/100.0, yaw100/100.0, fps)
+    # Primitive owns orientation (#484 phase 4). Mover-follow
+    # reads Remote.aim_stage via its tick loop — no legacy call
+    # here any more.
+    device_id = f"gyro-{ip}"
+    # #822 — bump child.seen so Firmware Updates doesn't flag a
+    # streaming gyro as offline. The gyro rarely sends CMD_PONG
+    # in steady state; orient is the high-frequency liveness
+    # signal.
+    _touch_child_seen(ip)
+    remote = _auto_register_remote(device_id, kind=KIND_GYRO)
+    remote.update_from_euler_deg(
+        roll100/100.0, pitch100/100.0, yaw100/100.0,
+    )
+    # #813 — orient handler is no longer a claim source.
+    # Press-Start (`CMD_GYRO_START`) is the only path that
+    # establishes a claim. An orient packet without a prior
+    # claim updates the Remote's last_quat_world (which is
+    # cheap + stale-clearing per #812) but never spontaneously
+    # claims. The back-compat auto-claim-on-first-orient path
+    # (#772 era) was deleted — green-field reflash assumed.
+
+
+def _handle_gyro_stop(ip, port, hdr, data):
+    """CMD_GYRO_STOP — press-STOP: release claim (blackout=False) + STOP_ACK.
+    Pre-#901 dispatch line (load-bearing, see block note above):
+
+        elif cmd == CMD_GYRO_STOP:
+    """
+    # #819 — discrete press-STOP. #825 — payload now carries a
+    # nonce(2). Header-only legacy variants (gyro firmware ≤
+    # v1.2.6) are still accepted with nonce=0 and no STOP_ACK.
+    #
+    # #813 §1.2 / §6.1 — release(blackout=False). Press-Stop hands
+    # the fixture back to whatever was driving it before the gyro
+    # session (timeline / Track action / #800 park-at-home idle).
+    # Pre-fix this forced dimmer-zero, fighting the next writer's
+    # first frame; the operator's mental model is "release to what
+    # it was doing before" (Android-controller-mode semantics).
+    stop_nonce = None
+    if len(data) >= 10:
+        try:
+            (stop_nonce,) = struct.unpack_from("<H", data, 8)
+        except Exception:
+            stop_nonce = None
+    did_stop = f"gyro-{ip}"
+    _gyro_touch_remote(did_stop)  # §6.3 silence-clock
+    try:
+        # Idempotent dedupe: a retransmitted STOP with the same
+        # nonce just replays the STOP_ACK; we don't double-release.
+        with _gyro_handshake_lock:
+            st_hs = _gyro_handshake.setdefault(did_stop, {})
+            prev_nonce = st_hs.get("stop_nonce")
+            prev_ts = st_hs.get("stop_ack_ts") or 0
+            is_replay = (
+                stop_nonce is not None
+                and prev_nonce == stop_nonce
+                and (time.time() - prev_ts) < GYRO_HANDSHAKE_DEDUPE_S
+            )
+        if is_replay:
+            log.debug("GYRO_STOP replay from %s nonce=%d — re-sending ACK",
+                      ip, stop_nonce)
+            if stop_nonce is not None:
+                _send_gyro_stop_ack(ip, stop_nonce)
+            return
+        log.info("GYRO_STOP from %s nonce=%s — releasing claim (blackout=False)",
+                  ip, stop_nonce)
+        if _mover_engine:
+            gf_stop = _gyro_fixture_for_ip(ip)
+            if gf_stop and gf_stop.get("assignedMoverId") is not None:
+                _mover_engine.release(gf_stop["assignedMoverId"],
+                                      did_stop, blackout=False)
+        remote_stop = _remotes.by_device(did_stop)
+        if remote_stop is not None:
+            remote_stop.end_session()
+            try:
+                _remotes.save()
+            except Exception as e:
+                log.error("remotes.save() during stop failed: %s", e)
+        with _gyro_handshake_lock:
+            st_hs = _gyro_handshake.setdefault(did_stop, {})
+            # Drop nonce tracking for the gesture we just stopped.
+            st_hs["start_nonce"] = None
+            st_hs["mover_id"] = None
+            if stop_nonce is not None:
+                st_hs["stop_nonce"] = stop_nonce
+                st_hs["stop_ack_ts"] = time.time()
+        if stop_nonce is not None:
+            _send_gyro_stop_ack(ip, stop_nonce)
+    except Exception as e:
+        log.error("GYRO_STOP handler failed: %s", e, exc_info=True)
+
+
+def _handle_gyro_off(ip, port, hdr, data):
+    """CMD_GYRO_OFF — press-OFF (#867).
+    Pre-#901 dispatch line (load-bearing, see block note above):
+
+        elif cmd == CMD_GYRO_OFF:
+    """
+    # #867 — discrete press-OFF: same payload shape and ACK as
+    # CMD_GYRO_STOP but the server calls release(blackout=True)
+    # so the claimed mover goes dark before the claim returns
+    # to whatever was driving it before the gyro session. STOP
+    # is "I'm done driving, hand control back at current
+    # frame"; OFF is "I'm done driving AND turn the head off
+    # right now." The gyro advances UI on matching STOP_ACK.
+    off_nonce = None
+    if len(data) >= 10:
+        try:
+            (off_nonce,) = struct.unpack_from("<H", data, 8)
+        except Exception:
+            off_nonce = None
+    did_off = f"gyro-{ip}"
+    _gyro_touch_remote(did_off)
+    try:
+        # Idempotent dedupe under the same handshake state as
+        # STOP — nonce-collision across STOP/OFF is harmless
+        # because both paths converge on STOP_ACK and the
+        # claim is gone after either. Re-emit on ACK loss
+        # just replays the cached ACK.
+        with _gyro_handshake_lock:
+            st_hs = _gyro_handshake.setdefault(did_off, {})
+            prev_nonce = st_hs.get("stop_nonce")
+            prev_ts = st_hs.get("stop_ack_ts") or 0
+            is_replay = (
+                off_nonce is not None
+                and prev_nonce == off_nonce
+                and (time.time() - prev_ts) < GYRO_HANDSHAKE_DEDUPE_S
+            )
+        if is_replay:
+            log.debug("GYRO_OFF replay from %s nonce=%d — re-sending ACK",
+                      ip, off_nonce)
+            if off_nonce is not None:
+                _send_gyro_stop_ack(ip, off_nonce)
+            return
+        log.info("GYRO_OFF from %s nonce=%s — releasing claim (blackout=True)",
+                  ip, off_nonce)
+        if _mover_engine:
+            gf_off = _gyro_fixture_for_ip(ip)
+            if gf_off and gf_off.get("assignedMoverId") is not None:
+                _mover_engine.release(gf_off["assignedMoverId"],
+                                      did_off, blackout=True)
+        remote_off = _remotes.by_device(did_off)
+        if remote_off is not None:
+            remote_off.end_session()
+            try:
+                _remotes.save()
+            except Exception as e:
+                log.error("remotes.save() during off failed: %s", e)
+        with _gyro_handshake_lock:
+            st_hs = _gyro_handshake.setdefault(did_off, {})
+            st_hs["start_nonce"] = None
+            st_hs["mover_id"] = None
+            if off_nonce is not None:
+                st_hs["stop_nonce"] = off_nonce
+                st_hs["stop_ack_ts"] = time.time()
+        if off_nonce is not None:
+            _send_gyro_stop_ack(ip, off_nonce)
+    except Exception as e:
+        log.error("GYRO_OFF handler failed: %s", e, exc_info=True)
+
+
+def _handle_gyro_aim_wizard(ip, port, hdr, data):
+    """CMD_GYRO_AIM_WIZARD — gyro-side empirical aim-axis wizard (#869).
+    Pre-#901 dispatch line (load-bearing, see block note above):
+
+        elif cmd == CMD_GYRO_AIM_WIZARD:
+    """
+    # #869 — gyro-side empirical aim-axis wizard. Same math
+    # as the Android wizard (#826): three captured poses →
+    # forward_local / up_local. Wire path differs from the
+    # phone (which POSTs to /api/remotes/aim-wizard) because
+    # the gyro has no HTTPS stack — captures ride one UDP
+    # packet. Payload is 3 Euler triples in degrees:
+    #   bytes 8..20  = neutral       (roll, pitch, yaw)
+    #   bytes 20..32 = pitch_forward (roll, pitch, yaw)
+    #   bytes 32..44 = yaw_left      (roll, pitch, yaw)
+    # Server converts each triple to a body-to-world unit
+    # quat via quat_from_euler_zyx_deg (the same convention
+    # the gyro's orient stream uses) before dispatching to
+    # _apply_aim_wizard_to_remote.
+    if len(data) < 44:
+        log.warning("GYRO_AIM_WIZARD from %s: payload too short "
+                    "(%d bytes, expected 44)", ip, len(data))
+        return
+    try:
+        from remote_math import quat_from_euler_zyx_deg as _qfe
+        eu = struct.unpack_from("<9f", data, 8)
+        poses = {
+            "neutral":       _qfe(eu[0], eu[1], eu[2]),
+            "pitch_forward": _qfe(eu[3], eu[4], eu[5]),
+            "yaw_left":      _qfe(eu[6], eu[7], eu[8]),
+        }
+        did_wiz = f"gyro-{ip}"
+        _gyro_touch_remote(did_wiz)
+        r = _remotes.by_device(did_wiz)
+        if r is None:
+            r = _auto_register_remote(did_wiz, kind=KIND_GYRO)
+        ok_, resp, status = _apply_aim_wizard_to_remote(r, poses)
+        if ok_:
+            _remotes.save()
+            log.info("GYRO_AIM_WIZARD from %s — derived forward=%s up=%s",
+                     ip, resp.get("forwardLocal"), resp.get("upLocal"))
+        else:
+            log.warning("GYRO_AIM_WIZARD from %s rejected: %s",
+                         ip, resp)
+    except Exception as e:
+        log.error("GYRO_AIM_WIZARD handler failed: %s", e, exc_info=True)
+
+
+def _handle_gyro_start(ip, port, hdr, data):
+    """CMD_GYRO_START — press-START. Thin adapter: the #874 extraction
+    `_handle_gyro_start_packet(ip, data)` predates the #901 uniform
+    handler signature and is source-inspected directly by test_825,
+    so it keeps its (ip, data) shape.
+    Pre-#901 dispatch line (load-bearing, see block note above):
+
+        elif cmd == CMD_GYRO_START:
+    """
+    # #874 — extracted to a top-level callable for direct
+    # contract testing. Behavior unchanged.
+    _handle_gyro_start_packet(ip, data)
+
+
+def _handle_gyro_batt(ip, port, hdr, data):
+    """CMD_GYRO_BATT — battery telemetry → _gyro_state.
+    Pre-#901 dispatch line (load-bearing, see block note above):
+
+        elif cmd == CMD_GYRO_BATT and len(data) >= 12:
+    """
+    # #813 follow-up — GyroBattPayload: vbat100(2) pct(1) flags(1).
+    # Stamp into _gyro_state so /api/gyros and the SPA can surface
+    # battery without operator intervention.
+    _gyro_touch_remote(f"gyro-{ip}")  # §6.3 silence-clock
+    vbat100, pct, bflags = struct.unpack_from("<HBB", data, 8)
+    charging = bool(bflags & 0x01)
+    with _gyro_lock:
+        st = _gyro_state.setdefault(ip, {})
+        st["vbat"] = vbat100 / 100.0
+        st["batPct"] = (None if pct == 0xFF else int(pct))
+        st["batCharging"] = charging
+        st["batTs"] = time.time()
+    log.debug("GYRO_BATT from %s: %.2fV pct=%s charging=%s",
+              ip, vbat100/100.0, pct, charging)
+
+
+def _handle_gyro_color(ip, port, hdr, data):
+    """CMD_GYRO_COLOR — gyro colour-wheel pick → claimed mover.
+    Pre-#901 dispatch line (load-bearing, see block note above):
+
+        elif cmd == CMD_GYRO_COLOR and len(data) >= 12:
+    """
+    # GyroColorPayload: r(1) g(1) b(1) flags(1)
+    _gyro_touch_remote(f"gyro-{ip}")  # §6.3 silence-clock
+    r, g, b, flags = struct.unpack_from("<BBBB", data, 8)
+    flash = bool(flags & 0x01)
+    log.info("GYRO_COLOR from %s: r=%d g=%d b=%d flash=%s", ip, r, g, b, flash)
+    _apply_gyro_color(ip, r, g, b, flash)
+
+
+def _handle_gyro_calibrate(ip, port, hdr, data):
+    """CMD_GYRO_CALIBRATE — calibrate start/end + reference orientation.
+    Pre-#901 dispatch line (load-bearing, see block note above):
+
+        elif cmd == CMD_GYRO_CALIBRATE and len(data) >= 15:
+    """
+    # GyroCalibratePayload: calibrating(1) roll100(2) pitch100(2) yaw100(2)
+    calibrating, roll100, pitch100, yaw100 = struct.unpack_from("<Bhhh", data, 8)
+    roll = roll100 / 100.0
+    pitch = pitch100 / 100.0
+    yaw = yaw100 / 100.0
+    # #813 §6.3 — every gyro packet refreshes the all-comms-silence
+    # clock. Calibrate is optional (#813 §5.0) so we never gate any
+    # downstream behaviour on having seen one — but receiving one
+    # is proof the gyro is alive.
+    _gyro_touch_remote(f"gyro-{ip}")
+    log.info("GYRO_CALIBRATE from %s: cal=%d R=%.1f P=%.1f Y=%.1f",
+             ip, calibrating, roll, pitch, yaw)
+    # Resolve the gyro fixture + target mover for this gyro.
+    _gf3 = next((f for f in _fixtures if f.get("fixtureType") == "gyro"
+                 and f.get("gyroChildId") is not None
+                 and next((c for c in _children if c["id"] == f["gyroChildId"]
+                           and c.get("ip") == ip), None)), None)
+    target_mover_id = _gf3.get("assignedMoverId") if _gf3 else None
+    did = f"gyro-{ip}"
+    if target_mover_id is not None:
+        # State transition on the claim (hold DMX during align).
+        if calibrating:
+            _mover_engine.calibrate_start(target_mover_id, did)
+        else:
+            # Primitive computes R_world_to_stage against the mover's
+            # current stage aim; engine resumes streaming.
+            mover = _mover_fixture(target_mover_id)
+            remote = _remotes.by_device(did) or _auto_register_remote(did, kind=KIND_GYRO)
+            if mover is not None:
+                aim_stage = _mover_current_aim_stage(mover)
+                if aim_stage is None:
+                    # #806 — UDP calibrate-end with no canonical aim;
+                    # surface in the log so live-test can spot it. Skip
+                    # the calibrate call instead of locking against a
+                    # wrong vector (the #805 silent-fallback bug).
+                    log.warning(
+                        "Remote %d UDP calibrate skipped for mover %d: "
+                        "aim_unresolvable (no canonical aim, sphere "
+                        "read failed). Confirm Home/Secondary saved.",
+                        remote.id, mover["id"])
+                else:
+                    try:
+                        remote.calibrate(
+                            target_aim_stage=aim_stage,
+                            target_info={"objectId": mover["id"], "kind": "mover"},
+                            roll=roll, pitch=pitch, yaw=yaw,
+                        )
+                        _remotes.save()
+                        log.info("Remote %d calibrated via UDP against mover %d aim=%s",
+                                 remote.id, mover["id"], aim_stage)
+                    except Exception as e:
+                        log.error("Remote %d calibrate failed: %s", remote.id, e)
+            _mover_engine.calibrate_end(target_mover_id, did)
+
+
+def _handle_gyro_hb_rep(ip, port, hdr, data):
+    """CMD_GYRO_HEARTBEAT_REP — diagnostics-only heartbeat reply (#872).
+    Pre-#901 dispatch line (load-bearing, see block note above):
+
+        elif cmd == CMD_GYRO_HEARTBEAT_REP and len(data) >= 13:
+    """
+    # #872 — HB_REP is diagnostics-only.
+    #
+    # Pre-#872 this handler reconstructed the claim from the
+    # gyro's heartbeat ("orchestrator-restart bootstrap path",
+    # #813 §5.3) when the gyro reported ACTIVE while the
+    # orchestrator had no claim. That path enabled the
+    # operator-visible bug class in #872: SPA Release / press-
+    # Stop was undone by the next 2 s heartbeat because the
+    # gyro's UI was still ACTIVE and the reconstruct branch
+    # could not distinguish "operator just released" from
+    # "orchestrator just restarted".
+    #
+    # Operator's contract (2026-05-09): "Once Start is pressed,
+    # when we lock and hold." Press-Start is the SOLE
+    # orchestrator-side claim entry trigger. No auto-reclaim,
+    # no bootstrap. After an orchestrator restart, the
+    # operator presses Start again. See `docs/gyro-claim-
+    # lifecycle.md` §5.3 + §7.2.
+    #
+    # This handler may: parse the packet, log it, update
+    # `Remote.last_data`. It MUST NOT call `_mover_engine.claim`,
+    # `_mover_engine.release`, `start_stream`, `_send_gyro_*` —
+    # the spec invariant is enforced here, not at the call
+    # site of every future patch.
+    ui_state, claim_nonce, hb_seq = struct.unpack_from("<BHH", data, 8)
+    device_id_hb = f"gyro-{ip}"
+    _gyro_touch_remote(device_id_hb)
+    try:
+        with _gyro_handshake_lock:
+            st_hs = _gyro_handshake.setdefault(device_id_hb, {})
+            last_seq = st_hs.get("last_seen_seq")
+            st_hs["last_seen_seq"] = hb_seq
+        if last_seq != hb_seq:
+            # Diagnostics-only log. `server_has_claim` divergence
+            # used to drive the reconstruct branch; now it just
+            # informs the log so cross-check between the gyro's
+            # view and the orchestrator's view is observable.
+            server_has_claim = (
+                _mover_engine is not None
+                and any(cl.get("deviceId") == device_id_hb
+                        for cl in (_mover_engine.get_status() or [])))
+            log.debug(
+                "GYRO_HB_REP from %s ui=%d claimNonce=%d seq=%d "
+                "(server_has_claim=%s, diagnostics-only)",
+                ip, ui_state, claim_nonce, hb_seq, server_has_claim)
+    except Exception as e:
+        log.error("GYRO_HB_REP handler failed: %s", e, exc_info=True)
+
+
+def _handle_autobri_push_udp(ip, port, hdr, data):
+    """CMD_AUTOBRI_PUSH — legacy 4210 path. Thin adapter: the #861
+    extraction `_handle_autobri_push(ip, data)` predates the #901
+    uniform signature and is shared with the dedicated 4211 listener
+    (#862) and the local-audio bridge, so it keeps its (ip, data)
+    shape.
+    Pre-#901 dispatch line (load-bearing, see block note above):
+
+        elif cmd == CMD_AUTOBRI_PUSH and len(data) >= 11:
+    """
+    _handle_autobri_push(ip, data)
+
+
+def _handle_pong(ip, port, hdr, data):
+    """CMD_PONG — broadcast/direct ping replies: discovery + child
+    liveness. A reconnecting LED child below the current master gets
+    a globalBrightness top-up via _brightness_packet once matched
+    (#843).
+    Pre-#901 dispatch line (load-bearing, see block note above):
+
+        elif cmd == CMD_PONG:
+    """
+    # Handle PONGs from broadcast/direct pings
+    info = _parse_pong(data, ip)
+    if info:
+        log.debug("PONG from %s (%s) fw=%s", ip, info.get("hostname"), info.get("fwVersion"))
+        # Store for discover to find
+        _recent_pongs[ip] = info
+        # Update known children
+        matched = None
+        for c in _children:
+            if c.get("ip") == ip or c.get("hostname") == info.get("hostname"):
+                saved_fw = c.get("fwVersion", "")
+                c.update({k: v for k, v in info.items() if k != "id"})
+                # Preserve 3-digit version over PONG's 2-digit
+                if saved_fw and saved_fw.count(".") >= 2 and info.get("fwVersion", "").count(".") < 2:
+                    c["fwVersion"] = saved_fw
+                # #822 — bump seen so Firmware Updates tab
+                # doesn't show this child as offline. The
+                # parsed PongPayload doesn't include `seen`,
+                # so the c.update(info) above doesn't refresh
+                # it; do it explicitly here.
+                c["seen"] = int(time.time())
+                c["status"] = 1
+                _probe_board_type(c)
+                matched = c
+                break
+        # #843 — top up brightness on a freshly-online child.
+        # `childBrightness` boots to 255 in firmware (Child.cpp).
+        # If our master is currently below that, push the value
+        # so the child doesn't display its first show frame at
+        # full intensity. LED children only.
+        if matched is not None and matched.get("type") not in ("dmx", "gyro"):
+            g_bri = _settings.get("globalBrightness", 255)
+            if g_bri < 255:
+                _send(ip, _brightness_packet(g_bri))
+
+
+# #901 — UDP 4210 dispatch: {cmd: (min_total_datagram_len, handler)}.
+# The minimum length mirrors the pre-#901 `elif cmd == X and len(data) >= N`
+# gates exactly; a known cmd arriving shorter than its gate falls through to
+# the same debug-log-and-ignore path as an unknown cmd (the old trailing
+# `else`). All commands share the single header version gate in
+# _udp_listener (v3/v4/v5 accepted) — no per-command version windows existed
+# pre-#901 and none are added here.
+# Adding a new command is a one-line registration — e.g. #910's
+# 0x70 MMW_TARGETS: `CMD_MMW_TARGETS: (36, _handle_mmw_targets),`.
+_UDP_DISPATCH = {
+    CMD_ACTION_EVENT: (12, _handle_action_event),
+    CMD_GYRO_ORIENT: (16, _handle_gyro_orient),
+    CMD_GYRO_STOP: (8, _handle_gyro_stop),
+    CMD_GYRO_OFF: (8, _handle_gyro_off),
+    CMD_GYRO_AIM_WIZARD: (8, _handle_gyro_aim_wizard),
+    CMD_GYRO_START: (8, _handle_gyro_start),
+    CMD_GYRO_BATT: (12, _handle_gyro_batt),
+    CMD_GYRO_COLOR: (12, _handle_gyro_color),
+    CMD_GYRO_CALIBRATE: (15, _handle_gyro_calibrate),
+    CMD_GYRO_HEARTBEAT_REP: (13, _handle_gyro_hb_rep),
+    CMD_AUTOBRI_PUSH: (11, _handle_autobri_push_udp),
+    CMD_PONG: (8, _handle_pong),
+}
+
 
 def _bootstrap_ssh_defaults():
     """Pre-populate SSH credentials on first run (default OrangePi/RPi creds)."""
