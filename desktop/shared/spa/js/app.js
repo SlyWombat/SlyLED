@@ -889,7 +889,9 @@ function _updateSidePanel(fixtureId){
   }
   var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id==fixtureId)f=fx;});
   if(!f){console.warn('_updateSidePanel: no fixture with id',fixtureId,'in',(_fixtures||[]).map(function(x){return x.id;}));return;}
-  var ft=f.fixtureType||'led';
+  // #899 — per-type badge + detail rendering comes from the fixture-type
+  // registry (fixture-types.js) instead of hardcoded type chains.
+  var ftDesc=fixtureTypeDesc(f);
   // Collapse fixtures list to make room for selected fixture details
   _panelSections.fixtures=false;
   var fb=document.getElementById('panel-fixtures-body');var fa=document.getElementById('panel-fixtures-arrow');
@@ -902,9 +904,9 @@ function _updateSidePanel(fixtureId){
     var nm=document.getElementById('panel-fx-name');if(nm)nm.textContent=f.name||'Fixture';
     var badge=document.getElementById('panel-fx-badge');
     if(badge){
-      if(ft==='dmx'){badge.textContent='DMX';badge.style.background='#7c3aed';badge.style.color='#fff';}
-      else if(ft==='camera'){badge.textContent='CAM';badge.style.background='#0e7490';badge.style.color='#fff';}
-      else{badge.textContent='LED';badge.style.background='#14532d';badge.style.color='#86efac';}
+      badge.textContent=ftDesc.badge.text;
+      badge.style.background=ftDesc.badge.bg;
+      badge.style.color=ftDesc.badge.fg;
     }
   }
   // Position
@@ -915,67 +917,11 @@ function _updateSidePanel(fixtureId){
     var pz=document.getElementById('panel-z');if(pz)pz.value=f.z||0;
     pos.dataset.fid=fixtureId;
   }
-  // Type-specific details
+  // Type-specific details — moved into the fixture-type registry (#899);
+  // bodies live in fixture-types.js panelDetailHtml per descriptor.
   if(det){
     det.style.display='block';
-    var h='';
-    if(ft==='led'&&f.strings&&f.strings.length){
-      var dirs=['E','N','W','S'];
-      h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Strings</div>';
-      f.strings.forEach(function(s,i){
-        h+='<div style="padding:.2em 0;border-bottom:1px solid #1a2333;display:flex;gap:.4em;font-size:.82em">';
-        h+='<span style="color:#64748b">#'+(i+1)+'</span>';
-        h+='<span style="flex:1">'+(s.leds||0)+' LEDs, '+(s.mm||0)+'mm</span>';
-        h+='<span style="color:#64748b">'+(dirs[s.sdir]||'?')+'</span>';
-        if(s.folded)h+='<span title="Folded" style="color:#f59e0b;font-size:.7em">F</span>';
-        h+='</div>';
-      });
-    } else if(ft==='dmx'){
-      h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">DMX</div>';
-      h+='<div style="font-size:.82em;color:#c4b5fd;margin-bottom:.2em">Profile: '+(f.dmxProfileId?'<span style="color:#e9d5ff">'+escapeHtml(f.dmxProfileId)+'</span>':'<span style="color:#64748b">None</span>')+'</div>';
-      h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.4em">Universe: '+(f.dmxUniverse||1)+' | Addr: '+(f.dmxStartAddr||1)+'</div>';
-      // Rotation / orientation
-      var orient=f.orientation||{};
-      // #892 — read through rotationFromLayout (#600: pan lives at rz,
-      // not rot[1] which is roll). Tilt displays negated to match the
-      // fixture editor in fixtures.js (#783: operator tilt+ = above
-      // horizon; internal rx>0 = down). _panelPanTiltChange negates back
-      // on save so typed values round-trip.
-      var _rotA=rotationFromLayout(f.rotation);
-      var _panDeg=Math.round(_rotA.pan);
-      var _tiltDeg=Math.round(-_rotA.tilt);
-      h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Orientation</div>';
-      h+='<div style="display:flex;gap:.3em;align-items:center;margin-bottom:.3em">';
-      h+='<label style="font-size:.72em;color:#64748b;margin:0">Pan\u00b0</label><input id="panel-pan" type="number" value="'+_panDeg+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelPanTiltChange('+f.id+',\'pan\',this.value)">';
-      h+='<label style="font-size:.72em;color:#64748b;margin:0">Tilt\u00b0</label><input id="panel-tilt" type="number" value="'+_tiltDeg+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelPanTiltChange('+f.id+',\'tilt\',this.value)">';
-      if(orient.verified)h+='<span style="color:#4ade80;font-size:.75em">\u2713</span>';
-      h+='</div>';
-      if(f.mountedInverted)h+='<div style="font-size:.72em;color:#f59e0b;margin-bottom:.3em">\u26a0 Mounted upside-down</div>';
-      h+='<div style="display:flex;gap:.3em;flex-wrap:wrap">';
-      h+='<button class="btn" onclick="_orientTest('+f.id+')" style="font-size:.7em;padding:.2em .5em;background:#4c1d95;color:#e9d5ff">Test Orient</button>';
-      h+='<button class="btn" onclick="closeModal();_moverCalStart('+f.id+')" style="font-size:.7em;padding:.2em .5em;background:#6b21a8;color:#d8b4fe">Calibrate'+(f.moverCalibrated?' \u2713':'')+'</button>';
-      h+='</div>';
-    } else if(ft==='camera'){
-      h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Camera</div>';
-      h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.2em">IP: '+(f.cameraIp?'<span style="color:#e2e8f0">'+escapeHtml(f.cameraIp)+'</span>':'<span style="color:#f59e0b">Not set</span>')+'</div>';
-      h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.4em">FOV: '+(f.fovDeg||60)+'\u00b0 | '+(f.resolutionW||1920)+'\u00d7'+(f.resolutionH||1080)+'</div>';
-      h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.3em">Homography: '+(f.calibrated?'<span style="color:#4ade80">\u2713 Done</span>':'<span style="color:#f59e0b">Not done</span>')+'</div>';
-      h+='<div style="display:flex;gap:.3em;margin-bottom:.4em">';
-      h+='<button class="btn" onclick="_intrinsicCalStart('+f.id+')" style="font-size:.7em;padding:.2em .5em;background:#164e63;color:#67e8f9">Calibrate Lens</button> ';
-      h+='</div>';
-      // Pan/Tilt editable for camera (from rotation)
-      // #892 — same rotationFromLayout read + #783 tilt negation as the
-      // DMX block above.
-      var _cRotA=rotationFromLayout(f.rotation);
-      var _cPanDeg=Math.round(_cRotA.pan);
-      var _cTiltDeg=Math.round(-_cRotA.tilt);
-      h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Orientation</div>';
-      h+='<div style="display:flex;gap:.3em;align-items:center;margin-top:.3em">';
-      h+='<label style="font-size:.72em;color:#64748b;margin:0">Pan\u00b0</label><input id="panel-pan" type="number" value="'+_cPanDeg+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelPanTiltChange('+f.id+',\'pan\',this.value)">';
-      h+='<label style="font-size:.72em;color:#64748b;margin:0">Tilt\u00b0</label><input id="panel-tilt" type="number" value="'+_cTiltDeg+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelPanTiltChange('+f.id+',\'tilt\',this.value)">';
-      h+='</div>';
-    }
-    det.innerHTML=h;
+    det.innerHTML=ftDesc.panelDetailHtml(f);
   }
 }
 function _panelPanTiltChange(fid,axis,deg){
@@ -1050,8 +996,10 @@ function showNodeEdit(f){
   h+=' <label style="display:inline;margin-left:1em">Y (mm)</label><input id="ne-y" type="number" value="'+f.y+'" min="0" style="width:120px">';
   h+=' <label style="display:inline;margin-left:1em">Z (mm)</label><input id="ne-z" type="number" value="'+(f.z||0)+'" min="0" style="width:120px">';
   h+='</div>';
-  var ft=f.fixtureType||'led';
-  h+='<div style="color:#64748b;font-size:.8em;margin-bottom:.5em">Type: '+f.type+(ft==='dmx'?' (DMX)':ft==='camera'?' (Camera)':'')+' | ID: '+f.id+'</div>';
+  // #899 — per-type suffix / orientation gating / quick buttons come from
+  // the fixture-type registry (fixture-types.js).
+  var ftDesc=fixtureTypeDesc(f);
+  h+='<div style="color:#64748b;font-size:.8em;margin-bottom:.5em">Type: '+f.type+ftDesc.editTypeSuffix+' | ID: '+f.id+'</div>';
   if(f.strings&&f.strings.length){
     var dirs=['East (+X)','North (+Y)','West (-X)','South (-Y)'];
     h+='<table class="tbl" style="font-size:.8em;margin-bottom:.8em"><tr><th>#</th><th>LEDs</th><th>Length</th><th>Dir</th></tr>';
@@ -1061,8 +1009,9 @@ function showNodeEdit(f){
     }
     h+='</table>';
   }
-  // Rotation fields for DMX and Camera fixtures
-  if(ft==='dmx'||ft==='camera'){
+  // Rotation fields for fixture types with an aimable orientation
+  // (DMX movers and cameras today)
+  if(ftDesc.caps.hasOrientation){
     // #892 — fields bind through rotationFromLayout (#600 schema v2:
     // [rx pitch, ry roll, rz yaw]); the old code labeled rot[1] Pan and
     // rot[2] Roll (pre-#600 order). Tilt displays negated per #783
@@ -1078,22 +1027,14 @@ function showNodeEdit(f){
     h+='<label style="font-size:.75em;color:#64748b;margin:0">Roll</label><input id="ne-roll" type="number" value="'+Math.round(_fA.roll)+'" style="width:65px;font-size:.85em;padding:2px 4px">';
     h+='</div>';
     h+='<div style="font-size:.72em;color:#64748b;margin-top:.2em">Pan=0 faces forward (+Y). Tilt negative = down.</div>';
-    if(ft==='dmx'){
+    if(ftDesc.caps.hasInvertedMount){
       h+='<label style="display:flex;align-items:center;gap:.4em;margin-top:.3em;cursor:pointer"><input id="ne-inverted" type="checkbox"'+(f.mountedInverted?' checked':'')+' style="width:auto"> <span style="font-size:.8em">Mounted upside-down</span></label>';
     }
     h+='</div>';
   }
   h+='<div style="display:flex;gap:.5em;flex-wrap:wrap">';
   h+='<button class="btn btn-on" onclick="applyNodePos('+f.id+')">Save</button>';
-  if(ft==='dmx'){
-    h+='<button class="btn" style="background:#1e3a5f;color:#93c5fd" onclick="startAimMode('+f.id+')">Click to Aim</button>';
-    h+='<button class="btn" style="background:#6b21a8;color:#d8b4fe" onclick="closeModal();_moverCalStart('+f.id+')">Calibrate'+(f.moverCalibrated?' \u2713':'')+'</button>';
-  }
-  if(ft==='camera'){
-    h+='<button class="btn" style="background:#7c3aed;color:#e9d5ff" onclick="closeModal();_calWizardStart('+f.id+')">Calibrate'+(f.calibrated?' \u2713':'')+'</button>';
-    var _ta=_trackingCams[f.id];
-    h+='<button class="btn" id="trk-btn-'+f.id+'" style="background:'+(_ta?'#9f1239':'#be185d')+';color:#fce7f3" onclick="closeModal();_trackToggle('+f.id+')">'+(_ta?'Stop Track':'Track')+'</button>';
-  }
+  h+=ftDesc.quickButtonsHtml(f);
   h+='<button class="btn btn-off" onclick="removeFromCanvas('+f.id+')">Remove from Stage</button>';
   h+='</div>';
   document.getElementById('modal-title').textContent=f.name;

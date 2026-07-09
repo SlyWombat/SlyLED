@@ -494,16 +494,22 @@ function s3dLoadChildren(){
     var placed=(_fixtures||[]).filter(_isFixturePlaced);
     placed.forEach(function(c){
       var pos=_s3dPos(c);
-      var ft=c.fixtureType||'led';
-      var col=ft==='dmx'?0x7c3aed:ft==='camera'?0x0e7490:(c.status===1?0x22cc66:0x555555);
+      // #899 — node colour, shape, and type-specific meshes come from the
+      // fixture-type registry (fixture-types.js).
+      var ftDesc=fixtureTypeDesc(c);
+      var col=ftDesc.layoutNodeColor(c);
 
       // Group — everything moves together when dragged
       var grp=new THREE.Group();
       grp.position.copy(pos);
       grp.userData.childId=c.id;
 
-      // Sphere node (at group origin)
-      var geo=new THREE.SphereGeometry(0.15,16,12);
+      // Node mesh at group origin — sphere for known types; unknown types
+      // (radar before #911) render as a neutral box so they're visible and
+      // selectable without pretending to be an LED node.
+      var geo=ftDesc.nodeShape==='box'
+        ?new THREE.BoxGeometry(0.26,0.26,0.26)
+        :new THREE.SphereGeometry(0.15,16,12);
       var mat=new THREE.MeshStandardMaterial({color:col,emissive:col,emissiveIntensity:0.4});
       var sphere=new THREE.Mesh(geo,mat);
       grp.add(sphere);
@@ -521,171 +527,13 @@ function s3dLoadChildren(){
       ring.rotation.x=-Math.PI/2;
       grp.add(ring);
 
-      // DMX beam cone + aim point (for DMX fixtures with rotation)
+      // Type-specific meshes (#899): LED string lines + dots for LED
+      // fixtures; beam/FOV cone + aim point + rest-vector arrow for DMX
+      // movers and cameras. Bodies moved verbatim into fixture-types.js
+      // (_ftLedStringsLayout / _ftAimConeLayout / _ftRestArrowLayout).
       var _fix3d=null;
       (_fixtures||[]).forEach(function(ff){if(ff.childId===c.id||ff.id===c.id)_fix3d=ff;});
-      if(_fix3d&&(_fix3d.fixtureType==='dmx'||_fix3d.fixtureType==='camera')){
-        var _fRot=_fix3d.rotation||[0,0,0];
-        var aim=_rotToAim(_fRot,[c.x||0,c.y||0,c.z||0],3000,_fix3d.mountedInverted);
-        // Stage→Three.js: X=X, Y(depth)→Z, Z(height)→Y
-        var aimLocal=new THREE.Vector3((aim[0]-(c.x||0))/1000,(aim[2]-(c.z||0))/1000,(aim[1]-(c.y||0))/1000);
-        var beamLen=aimLocal.length();
-        // Cone shown for DMX and camera fixtures with non-zero rotation.
-        // #892 — all three axes count: a mover with only pan set (rz,
-        // index 2 per #600) used to get no cone.
-        var showCone=(_fRot[0]!==0||_fRot[1]!==0||_fRot[2]!==0)||_fix3d.fixtureType==='camera';
-        if(beamLen>0.01&&showCone){
-          var bwDeg=_fix3d.fixtureType==='camera'?(_fix3d.effectiveFovDeg||_fix3d.fovDeg||60):15;
-          // Use cached profile beamWidth (sync) — _profileCache populated by emulator/layout
-          if(_fix3d.fixtureType==='dmx'&&_fix3d.dmxProfileId&&window._profileCache&&window._profileCache[_fix3d.dmxProfileId]){
-            bwDeg=window._profileCache[_fix3d.dmxProfileId].beamWidth||15;
-          }
-          var bwRad=bwDeg*Math.PI/180;
-          var topR=Math.tan(bwRad/2)*beamLen;
-          var coneGeo=new THREE.ConeGeometry(topR,beamLen,16,1,true);
-          var coneColor=_fix3d.fixtureType==='camera'?0x22d3ee:0xffff88;
-          var coneMat=new THREE.MeshBasicMaterial({color:coneColor,opacity:0.12,transparent:true,side:THREE.DoubleSide,depthWrite:false});
-          var cone=new THREE.Mesh(coneGeo,coneMat);
-          // Position cone: midpoint between origin and aim, oriented toward aim
-          var midPt=aimLocal.clone().multiplyScalar(0.5);
-          cone.position.copy(midPt);
-          // Orient: ConeGeometry apex is at +Y, base at -Y. We want apex at fixture
-          // (narrow end) and base at aim (wide end), so rotate from -Y to aim direction.
-          var dir=aimLocal.clone().normalize();
-          var quat=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,-1,0),dir);
-          cone.quaternion.copy(quat);
-          // Camera FOV cones and DMX beam cones share rendering but not visibility
-          // — Camera Cones and Light Cones are separate toggles in the View menu.
-          var isCam=(_fix3d.fixtureType==='camera');
-          if(isCam){cone.userData.cameraCone=true;cone.visible=_layShowCamCones;}
-          else{cone.userData.beamCone=true;cone.visible=_layShowCones;}
-          grp.add(cone);
-          // Aim point sphere (red). Draggable for DMX movers only — camera
-          // aim is fixed by placement. Tag drives the correct View toggle.
-          var aimGeo=new THREE.SphereGeometry(0.08,12,12);
-          var aimMat=new THREE.MeshBasicMaterial({color:0xff4444,opacity:0.8,transparent:true});
-          var aimSphere=new THREE.Mesh(aimGeo,aimMat);
-          aimSphere.position.copy(aimLocal);
-          if(isCam){aimSphere.userData.cameraCone=true;aimSphere.visible=_layShowCamCones;}
-          else{
-            aimSphere.userData.isAimPoint=true;
-            aimSphere.userData.fixtureId=_fix3d.id;
-            aimSphere.visible=_layShowCones;
-          }
-          grp.add(aimSphere);
-          // Glow halo ring — visibility follows the cone
-          var glowGeo=new THREE.RingGeometry(0.1,0.15,24);
-          var glowMat=new THREE.MeshBasicMaterial({color:0xff6666,opacity:0.25,transparent:true,side:THREE.DoubleSide,depthWrite:false});
-          var glow=new THREE.Mesh(glowGeo,glowMat);
-          glow.position.copy(aimLocal);
-          glow.lookAt(_s3d.camera.position);
-          if(isCam){glow.userData.cameraCone=true;glow.visible=_layShowCamCones;}
-          else{glow.userData.beamCone=true;glow.visible=_layShowCones;}
-          grp.add(glow);
-
-        }
-      }
-
-      // Rest vector — dashed arrow showing home direction (DMX movers + cameras).
-      // Tagged `restArrow` (not beamCone) so the Orientation Vectors toggle
-      // controls it independently of Light Cones / Camera Cones (#529).
-      if(_fix3d&&(_fix3d.fixtureType==='dmx'||_fix3d.fixtureType==='camera')){
-        var hasPanTilt=_fix3d.fixtureType==='camera'||
-          (window._profileCache&&_fix3d.dmxProfileId&&window._profileCache[_fix3d.dmxProfileId]&&window._profileCache[_fix3d.dmxProfileId].panRange>0);
-        if(hasPanTilt||_fix3d.fixtureType==='camera'){
-          // #603 — the rest-direction arrow previously read only the yaw
-          // slot and hardcoded Y=0, so a camera with rx=30° pitch-down
-          // still drew its green "home direction" arrow horizontal —
-          // looked like the camera was aimed at the horizon instead of
-          // the stage floor. Mirrors the live-aim math at line ~287:
-          // Three.js is Y-up, positive stage pitch = tilt down = negative
-          // Y in Three.js. #892 — axis reads route through
-          // rotationFromLayout (#600 schema v2: yaw/pan lives at rz).
-          var _restA=rotationFromLayout(_fix3d.rotation);
-          var rxRad=_restA.tilt*Math.PI/180;  // pitch (+ = down)
-          var ryRad=_restA.pan*Math.PI/180;   // yaw
-          var cp=Math.cos(rxRad), sp=Math.sin(rxRad);
-          var cy=Math.cos(ryRad), sy=Math.sin(ryRad);
-          var homeDir=new THREE.Vector3(sy*cp,-sp,cy*cp).normalize();
-          var vecLen=0.4;
-          var homeEnd=homeDir.clone().multiplyScalar(vecLen);
-          var restColor=_fix3d.calibrated?0x22c55e:(_fix3d.fixtureType==='camera'?0x22d3ee:0xf59e0b);
-          var restGeo=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0),homeEnd]);
-          var restMat=new THREE.LineDashedMaterial({color:restColor,dashSize:0.04,gapSize:0.02,opacity:0.7,transparent:true});
-          var restLine=new THREE.Line(restGeo,restMat);
-          restLine.computeLineDistances();
-          restLine.userData.restArrow=true;restLine.visible=_layShowOrient;
-          grp.add(restLine);
-          var arrowGeo=new THREE.ConeGeometry(0.02,0.06,8);
-          var arrowMat=new THREE.MeshBasicMaterial({color:restColor,opacity:0.8,transparent:true});
-          var arrow=new THREE.Mesh(arrowGeo,arrowMat);
-          arrow.position.copy(homeEnd);
-          arrow.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0),homeDir));
-          arrow.userData.restArrow=true;arrow.visible=_layShowOrient;
-          grp.add(arrow);
-          var restLbl=_s3dLabel(_fix3d.fixtureType==='camera'?(_fix3d.name||'cam'+(_fix3d.cameraIdx||0)):'0,0');
-          restLbl.position.copy(homeEnd.clone().add(homeDir.clone().multiplyScalar(0.05)));
-          restLbl.userData.restArrow=true;restLbl.visible=_layShowOrient;
-          grp.add(restLbl);
-        }
-      }
-
-      // LED string lines + dots (positions relative to group origin = 0,0,0).
-      // Tagged `ledString` so the LED Strings toggle can hide them without a
-      // full layout redraw (#529).
-      var _sc=c.sc||c.strings&&c.strings.length||0;
-      if(c.strings&&_sc>0){
-        for(var si=0;si<_sc&&si<c.strings.length;si++){
-          var s=c.strings[si];if(!s||!s.leds)continue;
-          var strCol=new THREE.Color(_strCol[si%_strCol.length]);
-          var lenMm=s.mm||0;if(lenMm<500)lenMm=Math.max(s.leds*16,500);
-          var lenM=lenMm/1000;
-          // #864 — per-string position offset. Stage→Three.js: X→X,
-          // Y(depth)→Z, Z(height)→Y. A string without x/y/z starts at
-          // the fixture group origin.
-          var startLocal=new THREE.Vector3(0,0,0);
-          if(typeof s.x==='number'&&typeof s.y==='number'&&typeof s.z==='number'){
-            startLocal.set((s.x-(c.x||0))/1000,(s.z-(c.z||0))/1000,(s.y-(c.y||0))/1000);
-          }
-          // #866 — direction comes from the per-string `rotation`
-          // ([rx, ry, rz] degrees, same convention as cameras and DMX
-          // fixtures, #586/#600). Default forward is stage +Y; rotation
-          // re-aims that. Falls back to the legacy `sdir` token when
-          // the string has no rotation. Stage→Three.js axis swap on the
-          // resulting direction: stage X→three X, stage Y→three Z,
-          // stage Z→three Y.
-          var dxL,dyL,dzL;
-          var sRot=Array.isArray(s.rotation)&&s.rotation.length===3
-                   ?s.rotation:null;
-          if(sRot){
-            var sd=_s3dStringDirFromRot(sRot);
-            dxL=sd[0]; dyL=sd[2]; dzL=sd[1];
-          }else{
-            var dir=_s3dDir(s.sdir||0);
-            dxL=dir.x; dyL=dir.y; dzL=dir.z;
-          }
-          var endLocal=startLocal.clone().add(new THREE.Vector3(dxL*lenM,dyL*lenM,dzL*lenM));
-          var pts=[startLocal,endLocal];
-          var lineGeo=new THREE.BufferGeometry().setFromPoints(pts);
-          var lineMat=new THREE.LineBasicMaterial({color:strCol,linewidth:2});
-          var strLine=new THREE.Line(lineGeo,lineMat);
-          strLine.userData.ledString=true;strLine.visible=_layShowStrings;
-          grp.add(strLine);
-
-          // LED dots along string
-          var dotCount=Math.min(s.leds,50);
-          for(var di=0;di<dotCount;di++){
-            var t=(di+0.5)/dotCount;
-            var dp=new THREE.Vector3().lerpVectors(startLocal,endLocal,t);
-            var dotGeo=new THREE.SphereGeometry(0.03,4,4);
-            var dotMat=new THREE.MeshBasicMaterial({color:strCol});
-            var dot=new THREE.Mesh(dotGeo,dotMat);
-            dot.position.copy(dp);
-            dot.userData.ledString=true;dot.visible=_layShowStrings;
-            grp.add(dot);
-          }
-        }
-      }
+      ftDesc.buildLayoutMesh(c,{grp:grp,fix:_fix3d});
 
       // Text label (sprite, above group) — tagged so Labels toggle hides it.
       var label=_s3dLabel(c.name||(c.hostname||'ID '+c.id));

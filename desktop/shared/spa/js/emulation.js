@@ -310,8 +310,11 @@ function emu3dBuildFixtures(){
     var placed=layoutFixtures.filter(function(f){return f.positioned;});
     placed.forEach(function(c){
       var pos=_s3dPos(c);
-      var ft=c.fixtureType||'led';
-      var col=ft==='dmx'?0x7c3aed:ft==='camera'?0x0e7490:0x22cc66;
+      // #899 — node colour, shape, and type-specific meshes come from the
+      // fixture-type registry (fixture-types.js).
+      var ft=fixtureTypeKey(c);
+      var ftDesc=fixtureTypeDesc(c);
+      var col=ftDesc.runtimeNodeColor(c);
 
       var grp=new THREE.Group();
       grp.position.copy(pos);
@@ -319,19 +322,16 @@ function emu3dBuildFixtures(){
       grp.userData.fixtureId=c.id;
       grp.userData.fixtureType=ft;
       grp.userData.childId=c.childId;
-      // Store pan/tilt metadata for live beam animation
-      if(ft==='dmx'&&c.dmxProfileId&&window._profileCache&&window._profileCache[c.dmxProfileId]){
-        var prof=window._profileCache[c.dmxProfileId];
-        grp.userData.panRange=prof.panRange||540;
-        grp.userData.tiltRange=prof.tiltRange||270;
-      }
       // #600 — pan now lives at rotation[2] (was rotation[1]). Route
       // through rotationFromLayout so the site reads axis-semantic.
       grp.userData.basePan=rotationFromLayout(c.rotation).pan;
       grp.userData.mountedInverted=!!c.mountedInverted;
 
-      // Sphere node
-      var geo=new THREE.SphereGeometry(0.15,16,12);
+      // Node mesh — sphere for known types; unknown types (radar before
+      // #911) render as a neutral box (#899 fallback).
+      var geo=ftDesc.nodeShape==='box'
+        ?new THREE.BoxGeometry(0.26,0.26,0.26)
+        :new THREE.SphereGeometry(0.15,16,12);
       var mat=new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0.9});
       var sphere=new THREE.Mesh(geo,mat);
       sphere.userData.nodeSphere=true;
@@ -342,136 +342,12 @@ function emu3dBuildFixtures(){
       var ringMat=new THREE.MeshBasicMaterial({color:col,side:THREE.DoubleSide,opacity:0.3,transparent:true});
       grp.add(new THREE.Mesh(ringGeo,ringMat));
 
-      // DMX beam cone + camera FOV cone. Camera cones used to be skipped
-      // here so the View-menu "Camera Cones" toggle on Dashboard had nothing
-      // to find (#765). Build them with the correct userData tag so the
-      // shared toggle traversal in scene-3d.js picks them up.
-      if(ft==='dmx'||ft==='camera'){
-        var _fRot=c.rotation||[0,0,0];
-        var aim=_rotToAim(_fRot,[c.x||0,c.y||0,c.z||0],3000,c.mountedInverted);
-        var aimLocal=new THREE.Vector3((aim[0]-(c.x||0))/1000,(aim[2]-(c.z||0))/1000,(aim[1]-(c.y||0))/1000);
-        var beamLen=aimLocal.length();
-        // Default beam length if rotation is zero (pointing forward)
-        if(beamLen<0.01){aimLocal.set(0,-1,0);beamLen=3;}
-        grp.userData.beamLen=beamLen;
-        var bwDeg=15;
-        if(ft==='camera'){
-          bwDeg=c.effectiveFovDeg||c.fovDeg||60;
-        }else if(c.dmxProfileId&&window._profileCache&&window._profileCache[c.dmxProfileId]){
-          bwDeg=window._profileCache[c.dmxProfileId].beamWidth||15;
-        }
-        var bwRad=bwDeg*Math.PI/180;
-        var topR=Math.tan(bwRad/2)*beamLen;
-        var coneGeo=new THREE.ConeGeometry(topR,beamLen,16,1,true);
-        var coneCol=ft==='camera'?0x22d3ee:0xffff88;
-        var coneMat=new THREE.MeshBasicMaterial({color:coneCol,opacity:ft==='camera'?0.12:0.1,transparent:true,side:THREE.DoubleSide,depthWrite:false});
-        var cone=new THREE.Mesh(coneGeo,coneMat);
-        // #765 — tag matches the toggle the operator expects to control it.
-        if(ft==='camera'){
-          cone.userData.cameraCone=true;
-          if(typeof _layShowCamCones!=='undefined')cone.visible=_layShowCamCones;
-        }else{
-          cone.userData.beamCone=true;
-          if(typeof _layShowCones!=='undefined')cone.visible=_layShowCones;
-        }
-        var midPt=aimLocal.clone().multiplyScalar(0.5);
-        cone.position.copy(midPt);
-        var dir=aimLocal.clone().normalize();
-        cone.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,-1,0),dir));
-        grp.add(cone);
-      }
-
-      // #765 — Orientation Vectors: dashed home-direction arrow + label for
-      // DMX movers and cameras. Tagged `restArrow` so the shared toggle in
-      // scene-3d.js controls visibility on Dashboard / Runtime as well as
-      // Layout. Mirrors the math in scene-3d.js:518–544 — keep in sync if
-      // either side changes.
-      if(ft==='dmx'||ft==='camera'){
-        var hasPanTilt=ft==='camera'||
-          (window._profileCache&&c.dmxProfileId&&window._profileCache[c.dmxProfileId]&&window._profileCache[c.dmxProfileId].panRange>0);
-        if(hasPanTilt){
-          // #892 — axis reads route through rotationFromLayout (#600
-          // schema v2: yaw/pan lives at rz, not the old ry slot).
-          var _roA=rotationFromLayout(c.rotation);
-          var rxR=_roA.tilt*Math.PI/180;
-          var ryR=_roA.pan*Math.PI/180;
-          var cp=Math.cos(rxR), sp=Math.sin(rxR);
-          var cy=Math.cos(ryR), sy=Math.sin(ryR);
-          var homeDir=new THREE.Vector3(sy*cp,-sp,cy*cp).normalize();
-          var vecLen=0.4;
-          var homeEnd=homeDir.clone().multiplyScalar(vecLen);
-          var restCol=c.calibrated?0x22c55e:(ft==='camera'?0x22d3ee:0xf59e0b);
-          var restGeo=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0),homeEnd]);
-          var restMat=new THREE.LineDashedMaterial({color:restCol,dashSize:0.04,gapSize:0.02,opacity:0.7,transparent:true});
-          var restLine=new THREE.Line(restGeo,restMat);
-          restLine.computeLineDistances();
-          restLine.userData.restArrow=true;
-          if(typeof _layShowOrient!=='undefined')restLine.visible=_layShowOrient;
-          grp.add(restLine);
-          var arrowGeo=new THREE.ConeGeometry(0.02,0.06,8);
-          var arrowMat=new THREE.MeshBasicMaterial({color:restCol,opacity:0.8,transparent:true});
-          var arrow=new THREE.Mesh(arrowGeo,arrowMat);
-          arrow.position.copy(homeEnd);
-          arrow.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0),homeDir));
-          arrow.userData.restArrow=true;
-          if(typeof _layShowOrient!=='undefined')arrow.visible=_layShowOrient;
-          grp.add(arrow);
-        }
-      }
-
-      // LED string dots (stored for color updates)
-      // #864 / #866 — per-string position offset + per-string
-      // rotation. Same convention as scene-3d.js's Layout-tab path:
-      // start = (s.x, s.y, s.z) stage-mm if all three set, else
-      // fixture group origin; direction from s.rotation via the
-      // shared `_s3dStringDirFromRot` helper (mirror of camera_math
-      // build_camera_to_stage); legacy `sdir` only when no rotation.
-      // Stage→Three.js axis swap: stage X→three X, stage Y→three Z,
-      // stage Z→three Y.
-      if(c.strings&&c.strings.length){
-        for(var si=0;si<c.strings.length;si++){
-          var s=c.strings[si];if(!s||!s.leds)continue;
-          var lenMm=s.mm||0;if(lenMm<500)lenMm=Math.max(s.leds*16,500);
-          var lenM=lenMm/1000;
-
-          var startLocal=new THREE.Vector3(0,0,0);
-          if(typeof s.x==='number'&&typeof s.y==='number'&&typeof s.z==='number'){
-            startLocal.set((s.x-(c.x||0))/1000,(s.z-(c.z||0))/1000,(s.y-(c.y||0))/1000);
-          }
-
-          var dxL,dyL,dzL;
-          var sRot=Array.isArray(s.rotation)&&s.rotation.length===3
-                   ?s.rotation:null;
-          if(sRot&&typeof _s3dStringDirFromRot==='function'){
-            var sd=_s3dStringDirFromRot(sRot);
-            dxL=sd[0]; dyL=sd[2]; dzL=sd[1];
-          }else{
-            var sdir=_s3dDir(s.sdir||0);
-            dxL=sdir.x; dyL=sdir.y; dzL=sdir.z;
-          }
-          var endLocal=startLocal.clone().add(new THREE.Vector3(dxL*lenM,dyL*lenM,dzL*lenM));
-
-          // Line
-          var lineGeo=new THREE.BufferGeometry().setFromPoints([startLocal,endLocal]);
-          var lineMat=new THREE.LineBasicMaterial({color:0x555555});
-          grp.add(new THREE.Line(lineGeo,lineMat));
-          // LED dots
-          var dotCount=Math.min(s.leds,50);
-          for(var di=0;di<dotCount;di++){
-            var t=(di+0.5)/dotCount;
-            var dp=new THREE.Vector3().lerpVectors(startLocal,endLocal,t);
-            var dotGeo=new THREE.SphereGeometry(0.03,4,4);
-            var dotMat=new THREE.MeshBasicMaterial({color:0x333340});
-            var dot=new THREE.Mesh(dotGeo,dotMat);
-            dot.position.copy(dp);
-            dot.userData.ledDot=true;
-            dot.userData.stringIdx=si;
-            dot.userData.dotIdx=di;
-            dot.userData.dotCount=dotCount;
-            grp.add(dot);
-          }
-        }
-      }
+      // Type-specific meshes (#899): pan/tilt metadata + beam cone + rest
+      // arrow for DMX movers; FOV cone + rest arrow for cameras; string
+      // lines + LED dots for LED fixtures. Bodies moved verbatim into
+      // fixture-types.js (_ftAimConeRuntime / _ftRestArrowRuntime /
+      // _ftLedStringsRuntime).
+      ftDesc.buildRuntimeMesh(c,{grp:grp});
 
       // Label
       var label=_s3dLabel(c.name||('ID '+c.id));
@@ -644,112 +520,11 @@ function emu3dUpdateColors(){
       }
     }
 
-    if(ft==='dmx'){
-      // #810 — prefer the live canonical aim from /api/fixtures/live so
-      // Track-action sweeps (live-only, not in the bake) animate the
-      // cone. Live colour also wins when present so the cone tint
-      // matches the wire while a claim/track is running. Fall back to
-      // the baked preview when no live entry exists yet.
-      var liveEntry=_emuLive&&_emuLive.data?_emuLive.data[String(fid)]:null;
-      var src=null;
-      if(liveEntry&&typeof liveEntry==='object')src=liveEntry;
-      else if(pd&&typeof pd==='object')src=pd;
-
-      // Update sphere + cone color
-      var br=0x7c,bg=0x3a,bb=0xed,dimmer=0.1;
-      if(src){
-        if(src.r!==undefined){br=src.r;bg=src.g;bb=src.b;}
-        if(src.dimmer>0)dimmer=(src.dimmer/255)*0.4;
-        else if(br+bg+bb>10)dimmer=0.3;
-      }
-      var hexCol=(br<<16)|(bg<<8)|bb;
-
-      // Update beam cone direction. Order: live.aim (canonical, post-#806/#809)
-      // → live pan/tilt forward IK → baked-preview pan/tilt forward IK.
-      var aimDir=null;
-      if(liveEntry&&Array.isArray(liveEntry.aim)&&liveEntry.aim.length>=3){
-        // Stage (X, Y, Z) → Three.js Y-up (X, Z_stage, Y_stage)
-        var a=liveEntry.aim;
-        aimDir=new THREE.Vector3(a[0]||0, a[2]||0, a[1]||0);
-        if(aimDir.lengthSq()>1e-6)aimDir.normalize();
-        else aimDir=null;
-      }
-      if(!aimDir){
-        var ptSrc=(liveEntry&&liveEntry.pan!==undefined&&liveEntry.tilt!==undefined)
-          ? liveEntry : (pd&&pd.pan!==undefined&&pd.tilt!==undefined ? pd : null);
-        if(ptSrc){
-          var panRange=grp.userData.panRange||540;
-          var tiltRange=grp.userData.tiltRange||270;
-          var panDeg=(ptSrc.pan-0.5)*panRange;
-          var tiltDeg=(ptSrc.tilt-0.5)*tiltRange;
-          if(grp.userData.mountedInverted)tiltDeg=-tiltDeg;
-          var basePan=(grp.userData.basePan||0);
-          var panRad=(basePan+panDeg)*Math.PI/180;
-          var tiltRad=tiltDeg*Math.PI/180;
-          aimDir=new THREE.Vector3(Math.sin(panRad)*Math.cos(tiltRad),
-            -Math.sin(tiltRad),Math.cos(panRad)*Math.cos(tiltRad));
-        }
-      }
-      if(aimDir){
-        var beamLen=grp.userData.beamLen||3;
-        grp.children.forEach(function(child){
-          if(child.userData.beamCone){
-            var mid=aimDir.clone().multiplyScalar(beamLen/2);
-            child.position.copy(mid);
-            child.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(
-              new THREE.Vector3(0,-1,0),aimDir.clone().normalize()));
-          }
-        });
-      }
-      grp.children.forEach(function(child){
-        if(child.userData.nodeSphere){
-          child.material.color.setHex(hexCol||0x7c3aed);
-          child.material.opacity=src?0.95:0.5;
-        }
-        if(child.userData.beamCone){
-          child.material.color.setHex(hexCol||0xffff88);
-          child.material.opacity=src?dimmer:0.08;
-        }
-      });
-    } else if(ft==='led'){
-      // Update LED dots from preview
-      var previewColors=null;
-      if(pd&&Array.isArray(pd)){previewColors=pd;}
-      // Also check by childId
-      if(!previewColors&&_emuPreview&&_emuRunning&&grp.userData.childId){
-        var cid=grp.userData.childId;
-        // Find fixture matching this child
-        (_emuStage.fixtures||[]).forEach(function(f){
-          if(f.childId===cid&&_emuPreview[String(f.id)]){
-            var frames=_emuPreview[String(f.id)];
-            if(frames&&frames.length>0)previewColors=frames[_emuT%frames.length];
-          }
-        });
-      }
-      grp.children.forEach(function(child){
-        if(!child.userData.ledDot)return;
-        var si=child.userData.stringIdx,di=child.userData.dotIdx,dc=child.userData.dotCount;
-        var pc=null;
-        if(previewColors&&si<previewColors.length)pc=previewColors[si];
-        var isAct=(pc&&typeof pc==='object'&&!Array.isArray(pc)&&pc.t!==undefined);
-        var r=40,g=40,b=45;
-        if(pc&&Array.isArray(pc)&&(pc[0]+pc[1]+pc[2])>3){r=pc[0];g=pc[1];b=pc[2];}
-        else if(isAct){
-          var eMs=(pc.e||0)*1000+(Date.now()%1000);
-          var px=_emuPixel(pc,di,dc,eMs);
-          if(px){r=px[0];g=px[1];b=px[2];}
-        }
-        child.material.color.setRGB(r/255,g/255,b/255);
-        // Scale lit dots larger
-        var lit=(r+g+b)>15;
-        child.scale.setScalar(lit?2.0:1.0);
-      });
-      // Update node sphere color to average
-      var nodeSphere=grp.children[0];
-      if(nodeSphere&&nodeSphere.userData.nodeSphere){
-        nodeSphere.material.opacity=(_emuRunning&&pd)?0.95:0.5;
-      }
-    }
+    // #899 — per-type live update moved into the fixture-type registry
+    // (fixture-types.js _ftDmxRuntimeUpdate / _ftLedRuntimeUpdate). Types
+    // without an updater (cameras, unknown types) render statically.
+    var ftDesc=fixtureTypeDesc(ft);
+    if(ftDesc.updateRuntimeMesh)ftDesc.updateRuntimeMesh(grp,{pd:pd,fid:fid});
   });
 }
 

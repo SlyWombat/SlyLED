@@ -15,8 +15,11 @@ function loadDash(){
     // Status bar — count fixtures (not children) for accurate reporting
     ra('GET','/api/fixtures',null,function(fxs){
       if(!fxs)return;
-      var light=fxs.filter(function(f){return f.fixtureType!=='camera';});
-      var cams=fxs.filter(function(f){return f.fixtureType==='camera';});
+      // #899 — bucket by the registry's countsAsCamera capability instead
+      // of a hardcoded type check. Unknown types (e.g. a radar fixture from
+      // a newer server, #911) fall into the generic fixture bucket.
+      var light=fxs.filter(function(f){return !fixtureTypeDesc(f).caps.countsAsCamera;});
+      var cams=fxs.filter(function(f){return fixtureTypeDesc(f).caps.countsAsCamera;});
       var onCnt=d?d.filter(function(c){return c.status===1;}).length:0;
       var parts=[];
       if(light.length)parts.push(light.length+' fixture'+(light.length>1?'s':''));

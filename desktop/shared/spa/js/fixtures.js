@@ -31,8 +31,8 @@ function renderFixturesSidebar(){
   if(unplaced.length){
     h+='<div style="color:#64748b;font-size:.75em;margin-bottom:.3em">Drag to place:</div>';
     unplaced.forEach(function(f){
-      var ft=f.fixtureType||'led';
-      var icon=ft==='dmx'?'<span style="font-size:.6em;background:#7c3aed;color:#fff;padding:0 3px;border-radius:2px">DMX</span>':ft==='camera'?'<span style="font-size:.6em;background:#0e7490;color:#fff;padding:0 3px;border-radius:2px">CAM</span>':'';
+      // #899 — type chip comes from the fixture-type registry.
+      var icon=fixtureTypeDesc(f).sidebarBadgeHtml(f);
       h+='<div class="li" draggable="true" ondragstart="layDS(event,'+f.id+')" style="cursor:grab">'
         +'<div style="color:#ccc;font-weight:bold;font-size:.85em">'+escapeHtml(f.name)+' '+icon+'</div>'
         +'<div style="color:#666;font-size:.75em">'+f.type+'</div></div>';
@@ -45,25 +45,11 @@ function renderFixturesSidebar(){
     h+='<div style="color:#64748b;font-size:.75em;margin-bottom:.3em">On stage:</div>';
   }
   placed.forEach(function(f){
-    var ft=f.fixtureType||'led';
     var icon=f.type==='point'?'\u2b24':f.type==='group'?'\u25a3':'\u2501';
-    // Q5 - tiered placement-quality badge. H (green) = homography,
-    // FOV (amber) = camera-pose fallback, RAW (red) = no cal + no pos.
-    var ftBadge;
-    if(ft==='dmx'){
-      ftBadge='<span style="font-size:.6em;background:#7c3aed;color:#fff;padding:0 3px;border-radius:2px;margin-left:2px">DMX</span>';
-    }else if(ft==='camera'){
-      ftBadge='<span style="font-size:.6em;background:#0e7490;color:#fff;padding:0 3px;border-radius:2px;margin-left:2px">CAM</span>';
-      if(f.calibrated){
-        ftBadge+='<span style="font-size:.6em;background:#065f46;color:#34d399;padding:0 3px;border-radius:2px;margin-left:2px" title="Homography calibration from surveyed markers">H</span>';
-      }else if(f.x!=null||f.y!=null||f.z!=null){
-        ftBadge+='<span style="font-size:.6em;background:#78350f;color:#fbbf24;padding:0 3px;border-radius:2px;margin-left:2px" title="No homography - FOV projection fallback (less accurate)">FOV</span>';
-      }else{
-        ftBadge+='<span style="font-size:.6em;background:#7f1d1d;color:#fca5a5;padding:0 3px;border-radius:2px;margin-left:2px" title="No cal and no position - tracking holds last-good for this camera">RAW</span>';
-      }
-    }else{
-      ftBadge='';
-    }
+    // #899 \u2014 per-type chip (incl. the camera Q5 tiered placement-quality
+    // badge: H = homography, FOV = pose fallback, RAW = no cal + no pos)
+    // comes from the fixture-type registry.
+    var ftBadge=fixtureTypeDesc(f).sidebarPlacedBadgeHtml(f);
     h+='<div style="padding:.2em 0;border-bottom:1px solid #1e293b;display:flex;align-items:center;gap:.3em">';
     h+='<span style="font-size:.8em">'+icon+'</span>';
     h+='<span style="flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;cursor:pointer;font-size:.82em" onclick="selectOnCanvas(\'fixture\','+f.id+')">'+escapeHtml(f.name)+ftBadge+'</span>';
@@ -103,69 +89,15 @@ function editFixture(id){
     return;
   }
   var ft=f.fixtureType||'led';
+  // #899 — per-type edit fields / extras / gating come from the
+  // fixture-type registry (fixture-types.js).
+  var ftDesc=fixtureTypeDesc(f);
   // #881 — granular help: dmx / led / camera / group edit modals each
   // get their own help fragment under setup.edit-fixture.<type>.
   if(typeof _helpModalSet==='function')_helpModalSet('setup.edit-fixture.'+ft);
   var h='<label>Name</label><input id="fx-name" value="'+escapeHtml(f.name)+'" style="width:100%">';
   h+='<label>Geometry</label><select id="fx-type"><option value="linear"'+(f.type==='linear'?' selected':'')+'>Linear</option><option value="point"'+(f.type==='point'?' selected':'')+'>Point</option><option value="group"'+(f.type==='group'?' selected':'')+'>Group</option></select>';
-  if(ft==='dmx'){
-    h+='<label>Universe</label><input id="fx-uni" type="number" value="'+(f.dmxUniverse||1)+'" min="1" style="width:100%;margin-bottom:.4em">';
-    h+='<label>Start Address (1–512)</label><input id="fx-addr" type="number" value="'+(f.dmxStartAddr||1)+'" min="1" max="512" style="width:100%;margin-bottom:.4em">';
-    h+='<label>Channel Count</label><input id="fx-ch" type="number" value="'+(f.dmxChannelCount||3)+'" min="1" style="width:100%;margin-bottom:.4em">';
-    // Unified Local + Community + OFL search — mirrors Add Fixture so
-    // operators don't have to memorise a profile id by hand (was a plain
-    // "Profile ID (optional)" text field before; now searches the full
-    // 700-fixture library).
-    h+='<div style="margin-bottom:.6em;padding:.5em;background:#0f172a;border:1px solid #1e3a5f;border-radius:4px">';
-    h+='<label style="font-size:.82em;color:#93c5fd">Search All Fixtures (Local + Community + OFL)</label>';
-    h+='<div style="display:flex;gap:.3em;margin:.3em 0"><input id="fx-ofl-q" placeholder="e.g. par, moving head, chauvet..." style="flex:1;padding:.3em;font-size:.85em" onkeydown="if(event.key===\'Enter\')_fxOflSearch()">';
-    h+='<button class="btn" style="font-size:.75em;padding:.2em .5em;background:#1e3a5f;color:#93c5fd" onclick="_fxOflSearch()">Search</button>';
-    h+='<button class="btn" style="font-size:.75em;padding:.2em .5em;background:#1e293b;color:#94a3b8" onclick="_fxBrowseAll()">Browse All</button></div>';
-    h+='<div id="fx-ofl-results" style="max-height:200px;overflow-y:auto;font-size:.8em"></div>';
-    h+='</div>';
-    h+='<label>Profile <span style="color:#64748b;font-size:.75em">(or pick from the search above)</span></label>';
-    h+='<select id="fx-prof" data-current="'+escapeHtml(f.dmxProfileId||'')+'" onchange="_editFxProfileChange()" style="width:100%">';
-    h+='<option value="">-- None (generic channels) --</option>';
-    if(f.dmxProfileId)h+='<option value="'+escapeHtml(f.dmxProfileId)+'" selected>'+escapeHtml(f.dmxProfileId)+' (loading\u2026)</option>';
-    h+='</select>';
-    h+='<div style="margin-top:.8em;border-top:1px solid #1e293b;padding-top:.6em">';
-    h+='<div style="display:flex;justify-content:space-between;align-items:center">';
-    h+='<span style="font-weight:bold;font-size:.85em">Test Channels</span>';
-    h+='<button class="btn btn-on" onclick="loadFixtureChannels('+id+')" style="font-size:.65em">Load</button>';
-    h+='</div>';
-    h+='<div id="fx-test-ch"></div>';
-    h+='</div>';
-    // #687 \u2014 Motor Calibration / Set Home blocks render AFTER position +
-    // rotation in the new ordering. Marker placeholder; the actual HTML
-    // lives below the position/rotation block. Stored on a window state
-    // for editFixture to splice in at the right spot.
-  }else if(ft==='camera'){
-    h+='<label>Camera Node IP</label><input id="fx-cam-ip" value="'+escapeHtml(f.cameraIp||'')+'" placeholder="e.g. 192.168.10.50" style="width:100%;margin-bottom:.4em">';
-    h+='<label>FOV (degrees)</label><input id="fx-fov" type="number" value="'+(f.fovDeg||60)+'" min="1" max="180" style="width:100%;margin-bottom:.4em">';
-    h+='<label>Stream URL <span style="color:#64748b;font-size:.75em">(optional)</span></label>';
-    h+='<input id="fx-cam-url" value="'+escapeHtml(f.cameraUrl||'')+'" style="width:100%;margin-bottom:.4em">';
-    h+='<div style="display:flex;gap:.5em"><div style="flex:1"><label>Width (px)</label><input id="fx-cam-rw" type="number" value="'+(f.resolutionW||1920)+'" style="width:100%"></div>';
-    h+='<div style="flex:1"><label>Height (px)</label><input id="fx-cam-rh" type="number" value="'+(f.resolutionH||1080)+'" style="width:100%"></div></div>';
-    // Tracking config
-    h+='<div style="border-top:1px solid #1e293b;margin-top:.8em;padding-top:.6em">';
-    h+='<div style="font-weight:bold;font-size:.85em;margin-bottom:.4em;color:#f472b6">Tracking Configuration</div>';
-    h+='<label>Detect Classes</label>';
-    h+='<div id="fx-track-classes" style="max-height:120px;overflow-y:auto;border:1px solid #333;border-radius:4px;padding:.3em;background:#1a1a1a;margin-bottom:.4em">';
-    var selCls=f.trackClasses||["person"];
-    TRACK_CLASSES.forEach(function(c){
-      var chk=selCls.indexOf(c.id)>=0?' checked':'';
-      h+='<label style="display:block;cursor:pointer;padding:.1em 0;font-size:.82em"><input type="checkbox" class="fx-trk-cls" value="'+c.id+'"'+chk+'> '+c.label+'</label>';
-    });
-    h+='</div>';
-    h+='<div style="display:flex;gap:.5em;flex-wrap:wrap">';
-    h+='<div style="flex:1;min-width:80px"><label style="font-size:.8em">FPS</label><input id="fx-trk-fps" type="number" value="'+(f.trackFps||2)+'" min="0.5" max="10" step="0.5" style="width:100%"></div>';
-    h+='<div style="flex:1;min-width:80px"><label style="font-size:.8em">Threshold</label><input id="fx-trk-thr" type="number" value="'+(f.trackThreshold||0.4)+'" min="0.1" max="0.95" step="0.05" style="width:100%"></div>';
-    h+='<div style="flex:1;min-width:60px"><label style="font-size:.8em">TTL (s)</label><input id="fx-trk-ttl" type="number" value="'+(f.trackTtl||5)+'" min="1" max="60" style="width:100%"></div>';
-    h+='<div style="flex:1;min-width:80px"><label style="font-size:.8em">Re-ID (mm)</label><input id="fx-trk-reid" type="number" value="'+(f.trackReidMm||500)+'" min="50" max="5000" step="50" style="width:100%"></div>';
-    h+='</div>';
-    h+='<p style="color:#64748b;font-size:.72em;margin-top:.2em">FPS: detection rate. Threshold: min confidence. TTL: seconds before lost track expires. Re-ID: max distance to match same object.</p>';
-    h+='</div>';
-  }
+  h+=ftDesc.renderEditFields(f,id);
   // Position (mm)
   h+='<label>Position (mm)</label>';
   h+='<div style="display:flex;gap:.3em;margin-bottom:.6em"><label style="font-size:.75em;color:#64748b">X</label><input id="fx-px" type="number" value="'+(f.x||0)+'" style="width:80px"> <label style="font-size:.75em;color:#64748b">Y</label><input id="fx-py" type="number" value="'+(f.y||0)+'" style="width:80px"> <label style="font-size:.75em;color:#64748b">Z</label><input id="fx-pz" type="number" value="'+(f.z||0)+'" style="width:80px"></div>';
@@ -179,7 +111,7 @@ function editFixture(id){
   // overall fixture rotation has no useful meaning (and conflicts with
   // the per-string rotation that's authoritative downstream — see
   // spatial_engine.resolve_linear_fixture).
-  if(ft!=='led'){
+  if(ftDesc.caps.hasRotationEditor){
     h+='<label>Rotation (degrees) <span style="color:#64748b;font-size:.75em">Tilt, Roll, Pan</span></label>';
     var rot=f.rotation||[0,0,0];
     // #788 follow-up — display Tilt as -rotation[0]. Internal rx>0 aims
@@ -194,131 +126,12 @@ function editFixture(id){
     // saveFixture) so the operator-typed value matches the prompt.
     h+='<p style="color:#64748b;font-size:.75em;margin-top:.3em">Pan=0 faces forward (+Y). Pan=90 faces stage-left (+X).<br>Tilt=0 is horizontal. <b>Positive Tilt aims above horizon</b> (Tilt=+90 is straight up); negative Tilt aims below horizon (Tilt=-90 is straight down).</p>';
   }
-  if(ft==='dmx'){
-    h+='<label style="display:flex;align-items:center;gap:.4em;margin-top:.5em;cursor:pointer"><input id="fx-inverted" type="checkbox"'+(f.mountedInverted?' checked':'')+' style="width:auto"> <span style="font-size:.82em">Mounted upside-down (inverted)</span></label>';
-    h+='<p style="color:#64748b;font-size:.72em;margin-top:.2em">Reverses pan and tilt motor direction for truss-mounted fixtures.</p>';
-    // #687 + #744 — Set Home block (between Mount and Motor Calibration).
-    // The badge reflects the THREE-state capability gate from #738 — a
-    // primary-only fixture (homeSetAt truthy but homeSecondary null) is
-    // not Calibrate-ready. Showing "✓ Home set" for that state misled
-    // operators into thinking they were ready when Calibrate would
-    // refuse with state:no_home.
-    var hasPrimary = f.homePanDmx16!=null && f.homeTiltDmx16!=null;
-    var hasSecondary = !!f.homeSecondary;
-    var setAt = f.homeSetAt ? new Date(f.homeSetAt).toLocaleString() : '';
-    h+='<div style="margin-top:.8em;border-top:1px solid #1e293b;padding-top:.6em">';
-    var badge;
-    if(hasPrimary && hasSecondary){
-      badge='<span style="color:#4ade80">✓ '+escapeHtml(setAt)+'</span>';
-    } else if(hasPrimary){
-      badge='<span style="color:#fbbf24">◐ Primary set, secondary missing — re-run Set Home</span>';
-    } else {
-      badge='<span style="color:#f59e0b">⚠ required for calibration</span>';
-    }
-    h+='<div style="font-weight:bold;font-size:.85em;margin-bottom:.4em">Set Home '+badge+'</div>';
-    h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.4em">Drive the fixture manually until the beam aims along the Rotation vector above, then Confirm. This anchors calibration to one operator-verified observation.</div>';
-    h+='<button class="btn" onclick="_setHomeOpen('+id+')" style="background:#0e7490;color:#a5f3fc;font-size:.85em">'+(hasPrimary?'Re-Set Home':'Set Home')+'</button>';
-    if(hasPrimary){
-      h+=' <button class="btn" onclick="_setHomeClear('+id+')" style="background:#1e293b;color:#94a3b8;font-size:.78em;margin-left:.4em" title="Clear the saved home anchor (will require Set Home again before next cal)">Clear</button>';
-    }
-    h+='</div>';
-    // Motor Calibration block (moved here from above)
-    var orient=f.orientation||{};
-    h+='<div style="margin-top:.8em;border-top:1px solid #1e293b;padding-top:.6em">';
-    h+='<div style="font-weight:bold;font-size:.85em;margin-bottom:.4em">Motor Calibration '
-      +(orient.verified?'<span style="color:#4ade80">✓ Calibrated</span>':'<span style="color:#64748b">(optional)</span>')+'</div>';
-    if(orient.verified){
-      h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.3em">'
-        +'Pan: '+(orient.panSign>0?'normal':'⇄ reversed')
-        +' | Tilt: '+(orient.tiltSign<0?'normal':'⇅ reversed')
-        +'</div>';
-    } else {
-      h+='<div style="font-size:.78em;color:#64748b;margin-bottom:.3em">Use the upside-down checkbox above if truss-mounted. Run this test with live DMX for precise motor direction calibration.</div>';
-    }
-    h+='<button class="btn" onclick="_orientTest('+id+')" style="background:#4c1d95;color:#e9d5ff;font-size:.8em">Test with DMX</button>';
-    // #738 capability gate: Calibrate-ready needs primary Home + Secondary
-    // direction calls. Pre-#788 this read an undefined `hasHome` which
-    // raised ReferenceError mid-render and blanked the modal for every
-    // DMX fixture (LED fixtures skipped this block entirely so the bug
-    // looked like "Edit only works for LEDs").
-    var calDisabled = !(hasPrimary && hasSecondary);
-    var calStyle = 'background:#6b21a8;color:#d8b4fe;margin-left:.5em' + (calDisabled?';opacity:.5;cursor:not-allowed':'');
-    var calOnClick = calDisabled
-      ? 'alert(\'Set Home + Movement Direction before calibrating. Click Set Home above and drive the fixture along its rotation vector.\');return false;'
-      : 'closeModal();_moverCalStart('+id+')';
-    var calTitle = calDisabled ? 'Set Home first' : '';
-    h+='<button class="btn" onclick="'+calOnClick+'" style="'+calStyle+'" title="'+calTitle+'">Calibrate'+(f.moverCalibrated?' ✓':'')+'</button>';
-    h+='</div>';
-  }
-  // #864 / #866 — per-string position + rotation editor for multi-string
-  // LED fixtures. The fixture's `strings` array always carries 8 slots
-  // (PONG protocol constant) but only the slots with leds>0 are real
-  // strings reported by the firmware — show inputs for those only.
-  // Each row captures: stage-mm start position (x,y,z) and a rotation
-  // [rx, ry, rz] in degrees using the same convention as cameras and
-  // DMX fixtures (#586/#600). Default forward = stage +Y; rotation
-  // re-aims that. Length is `mm` from firmware (read-only). The
-  // rotation replaces the legacy NESW `sdir` token for rendering
-  // purposes — sdir stays on the record for back-compat.
-  var activeStrings=[];
-  if(ft==='led'&&f.strings){
-    for(var aiS=0;aiS<f.strings.length;aiS++){
-      if(f.strings[aiS]&&(f.strings[aiS].leds||0)>0)activeStrings.push(aiS);
-    }
-  }
-  if(ft==='led'&&activeStrings.length>0){
-    h+='<div style="margin-top:.8em;border-top:1px solid #1e293b;padding-top:.6em">';
-    h+='<div style="font-weight:bold;font-size:.85em;margin-bottom:.4em">Per-String Position &amp; Rotation <span style="color:#64748b;font-size:.75em">('+activeStrings.length+' active string'+(activeStrings.length===1?'':'s')+' reported)</span></div>';
-    for(var aIdx=0;aIdx<activeStrings.length;aIdx++){
-      var ss=activeStrings[aIdx];
-      var sObj=f.strings[ss]||{};
-      var sx=(sObj.x!=null)?sObj.x:'';
-      var sy=(sObj.y!=null)?sObj.y:'';
-      var sz=(sObj.z!=null)?sObj.z:'';
-      var srot=Array.isArray(sObj.rotation)?sObj.rotation:[];
-      // #866 — Tilt is shown / typed in the operator-facing convention
-      // (Tilt+ = above horizon, #783) to match the fixture-level
-      // rotation editor. Internal storage keeps rx>0 = pitch DOWN
-      // (#586/#600), so we negate on display and on save. Stored value
-      // in `srot[0]` is internal-frame; UI shows `-srot[0]`.
-      var tiltDisplay=(typeof srot[0]==='number')?(-srot[0]):'';
-      var ryVal=(typeof srot[1]==='number')?srot[1]:'';
-      var rzVal=(typeof srot[2]==='number')?srot[2]:'';
-      var sLeds=sObj.leds||0;
-      var sMm=sObj.mm||0;
-      h+='<div style="margin-bottom:.55em;padding:.4em .5em;background:#0f172a;border-radius:4px">';
-      h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.25em"><b>String '+(ss+1)+'</b> <span style="color:#64748b">'+sLeds+' LEDs · '+sMm+' mm</span></div>';
-      h+='<div style="display:flex;align-items:center;gap:.3em;margin-bottom:.25em">';
-      h+='<span style="font-size:.7em;color:#64748b;min-width:60px">Start</span>';
-      h+='<label style="font-size:.7em;color:#64748b">X</label><input id="fx-str-'+ss+'-x" type="number" value="'+sx+'" placeholder="inherit" style="width:70px">';
-      h+='<label style="font-size:.7em;color:#64748b">Y</label><input id="fx-str-'+ss+'-y" type="number" value="'+sy+'" placeholder="inherit" style="width:70px">';
-      h+='<label style="font-size:.7em;color:#64748b">Z</label><input id="fx-str-'+ss+'-z" type="number" value="'+sz+'" placeholder="inherit" style="width:70px">';
-      h+='</div>';
-      h+='<div style="display:flex;align-items:center;gap:.3em;flex-wrap:wrap">';
-      h+='<span style="font-size:.7em;color:#64748b;min-width:60px">Rotation</span>';
-      h+='<label style="font-size:.7em;color:#64748b" title="Tilt: + above horizon, - below">Tilt</label><input id="fx-str-'+ss+'-rx" type="number" step="any" value="'+tiltDisplay+'" placeholder="0" style="width:70px">';
-      h+='<label style="font-size:.7em;color:#64748b" title="Roll about strip axis">Roll</label><input id="fx-str-'+ss+'-ry" type="number" step="any" value="'+ryVal+'" placeholder="0" style="width:70px">';
-      h+='<label style="font-size:.7em;color:#64748b" title="Pan: + toward stage-left">Pan</label><input id="fx-str-'+ss+'-rz" type="number" step="any" value="'+rzVal+'" placeholder="0" style="width:70px">';
-      h+=' <span style="font-size:.65em;color:#64748b;margin-left:.4em">presets:</span>';
-      // Preset values are in the operator-facing convention (Tilt+ =
-      // up). _fxSetStrRot negates rx on save same as the manual input.
-      h+=' <button class="btn" type="button" style="font-size:.65em;padding:.1em .4em" onclick="_fxSetStrRot('+ss+',90,0,0)" title="Vertical up: Tilt +90">↑ up</button>';
-      h+=' <button class="btn" type="button" style="font-size:.65em;padding:.1em .4em" onclick="_fxSetStrRot('+ss+',-90,0,0)" title="Vertical down: Tilt -90">↓ down</button>';
-      h+=' <button class="btn" type="button" style="font-size:.65em;padding:.1em .4em" onclick="_fxSetStrRot('+ss+',0,0,90)" title="Stage-left: Pan +90">+X</button>';
-      h+=' <button class="btn" type="button" style="font-size:.65em;padding:.1em .4em" onclick="_fxSetStrRot('+ss+',0,0,-90)" title="Stage-right: Pan -90">-X</button>';
-      h+=' <button class="btn" type="button" style="font-size:.65em;padding:.1em .4em" onclick="_fxSetStrRot('+ss+',0,0,0)" title="Default forward (+Y)">+Y</button>';
-      h+=' <button class="btn" type="button" style="font-size:.65em;padding:.1em .4em" onclick="_fxSetStrRot('+ss+',0,0,180)" title="Toward audience (-Y)">-Y</button>';
-      h+='</div>';
-      h+='</div>';
-    }
-    h+='<p style="color:#64748b;font-size:.72em;margin-top:.2em">Start = stage-mm anchor of the first LED (leave blank to inherit fixture position). Rotation in degrees: <b>Tilt+ aims above horizon</b> (Tilt=+90 is straight up), Roll about strip axis, Pan+ aims stage-left. Same convention as cameras and DMX fixtures. Strip length is firmware-reported mm.</p>';
-    h+='</div>';
-  }
+  h+=ftDesc.renderEditExtras(f,id);
   h+='<div style="margin-top:.8em"><button class="btn btn-on" onclick="saveFixture('+id+',\''+ft+'\')">Save</button></div>';
   document.getElementById('modal-title').textContent='Edit Fixture: '+f.name;
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='block';
-  if(ft==='dmx')_editFxLoadProfiles();
+  if(ftDesc.afterEditOpen)ftDesc.afterEditOpen(id);
 }
 
 // Populate the profile dropdown on the edit modal from the local library,
@@ -633,72 +446,15 @@ function saveFixture(id,ft){
   if(fxRxEl){
     body.rotation=[-(parseFloat(fxRxEl.value)||0),parseFloat(document.getElementById('fx-ry').value)||0,parseFloat(document.getElementById('fx-rz').value)||0];
   }
-  if(ft==='dmx'){
-    body.dmxUniverse=parseInt(document.getElementById('fx-uni').value)||1;
-    body.dmxStartAddr=parseInt(document.getElementById('fx-addr').value)||1;
-    body.dmxChannelCount=parseInt(document.getElementById('fx-ch').value)||3;
-    body.dmxProfileId=document.getElementById('fx-prof').value.trim()||null;
-    var invEl=document.getElementById('fx-inverted');
-    if(invEl)body.mountedInverted=invEl.checked;
-  }else if(ft==='camera'){
-    body.cameraIp=document.getElementById('fx-cam-ip').value.trim();
-    body.fovDeg=parseInt(document.getElementById('fx-fov').value)||60;
-    body.cameraUrl=document.getElementById('fx-cam-url').value.trim();
-    body.resolutionW=parseInt(document.getElementById('fx-cam-rw').value)||1920;
-    body.resolutionH=parseInt(document.getElementById('fx-cam-rh').value)||1080;
-    var clsCbs=document.querySelectorAll('.fx-trk-cls:checked');
-    var classes=[];clsCbs.forEach(function(cb){classes.push(cb.value);});
-    if(!classes.length)classes=["person"];
-    body.trackClasses=classes;
-    body.trackFps=parseFloat(document.getElementById('fx-trk-fps').value)||2;
-    body.trackThreshold=parseFloat(document.getElementById('fx-trk-thr').value)||0.4;
-    body.trackTtl=parseInt(document.getElementById('fx-trk-ttl').value)||5;
-    body.trackReidMm=parseInt(document.getElementById('fx-trk-reid').value)||500;
-  }
+  // #899 — per-type field collection moved into the fixture-type
+  // registry (fixture-types.js collectEditFields). A returned string is a
+  // validation error: surface it and abort the save.
+  var ftErr=fixtureTypeDesc(ft).collectEditFields(body,id);
+  if(ftErr){alert(ftErr);return;}
   // Save position from edit dialog
   var nx=parseInt(document.getElementById('fx-px').value)||0;
   var ny=parseInt(document.getElementById('fx-py').value)||0;
   var nz=parseInt(document.getElementById('fx-pz').value)||0;
-  // #864 / #866 — fold per-string position and rotation into the
-  // strings payload. Editor only renders rows for active strings
-  // (leds>0); inactive slots (leds=0) round-trip unchanged. Position
-  // (x,y,z) and rotation (rx,ry,rz) are independently optional but
-  // each group is all-or-nothing — partial start XYZ or partial
-  // rotation is rejected to avoid silent half-set inheritance bugs.
-  if(ft==='led'){
-    var origFx=null;_fixtures.forEach(function(fx){if(fx.id===id)origFx=fx;});
-    if(origFx&&origFx.strings&&document.querySelector('[id^="fx-str-"][id$="-x"]')){
-      var perStrErr=null;
-      var newStrings=origFx.strings.map(function(s,ss){
-        var copy={};for(var k in s){if(k!=='x'&&k!=='y'&&k!=='z'&&k!=='rotation'&&k!=='aim')copy[k]=s[k];}
-        var ex=document.getElementById('fx-str-'+ss+'-x');
-        if(!ex)return copy; // inactive string slot — keep as-is
-        var ey=document.getElementById('fx-str-'+ss+'-y');
-        var ez=document.getElementById('fx-str-'+ss+'-z');
-        var vx=ex.value.trim(),vy=ey?ey.value.trim():'',vz=ez?ez.value.trim():'';
-        var filled=(vx!=='')+(vy!=='')+(vz!=='');
-        if(filled===3){copy.x=parseFloat(vx);copy.y=parseFloat(vy);copy.z=parseFloat(vz);}
-        else if(filled!==0){perStrErr='String '+(ss+1)+' Start: fill all of X / Y / Z, or leave them all blank.';return copy;}
-        var erx=document.getElementById('fx-str-'+ss+'-rx');
-        var ery=document.getElementById('fx-str-'+ss+'-ry');
-        var erz=document.getElementById('fx-str-'+ss+'-rz');
-        var vrx=erx?erx.value.trim():'',vry=ery?ery.value.trim():'',vrz=erz?erz.value.trim():'';
-        var rFilled=(vrx!=='')+(vry!=='')+(vrz!=='');
-        if(rFilled===3){
-          // #866 — operator typed Tilt in the +up convention; negate
-          // back to internal rx>0=down so spatial_engine /
-          // build_camera_to_stage see the canonical convention. Same
-          // negation the fixture-level Rotation editor performs.
-          copy.rotation=[-parseFloat(vrx),parseFloat(vry),parseFloat(vrz)];
-        }else if(rFilled!==0){
-          perStrErr='String '+(ss+1)+' Rotation: fill all of rx / ry / rz, or leave them all blank.';return copy;
-        }
-        return copy;
-      });
-      if(perStrErr){alert(perStrErr);return;}
-      body.strings=newStrings;
-    }
-  }
   ra('PUT','/api/fixtures/'+id,body,function(r){
     if(!r||!r.ok){closeModal();return;}
     // Update layout position
