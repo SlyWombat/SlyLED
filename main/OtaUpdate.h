@@ -2,8 +2,9 @@
  * OtaUpdate.h — Over-The-Air firmware update for ESP32 and D1 Mini.
  *
  * Downloads firmware binary from a URL (GitHub Releases or parent proxy),
- * verifies SHA-256 hash, and applies the update. ESP32 uses dual-bank
- * OTA partitions; D1 Mini uses single-slot ESP8266httpUpdate.
+ * verifies its SHA-256 hash while streaming (#890), and applies the update
+ * only when the hash matches. ESP32/gyro use dual-bank OTA partitions;
+ * D1 Mini uses the single-slot ESP8266 Updater.
  *
  * Giga R1 does not support OTA — USB/DFU only.
  */
@@ -31,7 +32,8 @@ extern volatile uint8_t otaProgress;  // 0-100
 
 // Start an OTA update. Returns true if update was applied (caller should reboot).
 // url: HTTP URL to firmware binary
-// expectedSha256: 64-char hex string (or empty to skip verification)
+// expectedSha256: 64-char hex string, case-insensitive. Empty or all-zero
+//                 skips verification (legacy senders without a hash).
 // newMajor/newMinor/newPatch: version of the incoming firmware (for anti-rollback)
 bool otaStartUpdate(const char* url, const char* expectedSha256,
                     uint8_t newMajor, uint8_t newMinor, uint8_t newPatch);
