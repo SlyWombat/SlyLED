@@ -124,7 +124,7 @@ def _spa_mtime():
     return newest
 
 
-def validate():
+def validate(skip_freshness=False):
     fails = []          # (check, detail)
     referenced = {}     # png name -> list of (doc, alt)
     spa_mtime = _spa_mtime()
@@ -158,8 +158,11 @@ def validate():
         fails.append(("orphan",
                        f"screenshots/{name} is not referenced by any doc"))
 
-    # 3. Freshness
-    for name, uses in sorted(referenced.items()):
+    # 3. Freshness — skippable (#904): any SPA source edit legitimately stales
+    # every referenced capture until a live-rig recapture session, so the fast
+    # per-PR CI job runs with --skip-freshness while the weekly strict run
+    # keeps the recapture reminder red until it actually happens.
+    for name, uses in sorted(referenced.items()) if not skip_freshness else []:
         f = SHOT_DIR / name
         if f.exists() and f.stat().st_mtime < spa_mtime:
             fails.append(("stale",
@@ -187,8 +190,10 @@ def validate():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true", help="machine-readable output")
+    ap.add_argument("--skip-freshness", action="store_true",
+                    help="skip check 3 (stale-vs-SPA); used by the per-PR CI job")
     args = ap.parse_args()
-    r = validate()
+    r = validate(skip_freshness=args.skip_freshness)
     if args.json:
         print(json.dumps(r, indent=2))
     else:
