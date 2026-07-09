@@ -214,6 +214,8 @@ Run on real hardware; results recorded back into this doc as a revision:
 
 ## 12. Proposed GitHub issues
 
+**Filed 2026-07-09:** 1 → #902 (merged into the registry-driven build refactor), 2 → #908, 3 → #909, 4 → #910, 5 → #911, 6 → #912, 7 → #913, 8 → #914, 9 → #915, 10 → #916, 11 → #917. Full cross-repo sequencing in `docs/NEXT_STEPS.md` §7–§8.
+
 Ordered; 1–2 are blocking, 3–8 largely serial, 9–11 parallel/optional:
 
 1. **Toolchain: isolated C61 build environment** — arduino-esp32 ≥3.3.5 under its own `ARDUINO_DIRECTORIES_DATA` + `arduino-cli-mmwave.yaml` + `build_mmwave.ps1` wrapper; verify a stable target still builds untouched via the normal path. *Blocks all; touches no stable target.*

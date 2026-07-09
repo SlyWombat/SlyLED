@@ -110,7 +110,20 @@ Rationale: Phase 0/1 items are exactly what makes every later phase safe to do w
 
 **Existing issues this plan directly advances:** #739 (P0 — C1 is the likely fix), #875 (C2), #880 (C9), #859 (B4), #888/#15-#19 (B5 closes the loose ends), #787–#797 test overhaul program (G1/G4 are its backbone), #634/#640/#641 track actions (consumers of §4), #409 simulated person-tracking validation (natural acceptance test for radar fusion), #806 aim-vector-as-canonical-state (align with E1/E2 design), #1 mDNS discovery + #2 WebSocket streaming (unchanged long-horizon).
 
-**New issues to file** (≈24): one per C1–C10 (10, some combined), E1–E5 (5), G1–G5 (5, G2+G5 could be one "truth sweep"), plus the 11 MMwave issues from the design doc (of which Issue 1 merges into E4's). Suggest filing Phase-0 and MMwave issues immediately and batching the rest as milestones.
+**Filed 2026-07-09** (G2+G5 combined as one truth-sweep issue; MMwave design Issue 1 merged into E4):
+
+| Plan item | Issue | Plan item | Issue | Plan item | Issue |
+|---|---|---|---|---|---|
+| C1 | #889 | C10 | #898 | M2 bench | #908 |
+| C2 | #890 | E1 | #899 | M3 sketch | #909 |
+| C3 | #891 | E2 | #900 | M4 0x70 | #910 |
+| C4 | #892 | E3 | #901 | M5 fixture | #911 |
+| C5 | #893 | E4 | #902 | M6 fusion | #912 |
+| C6 | #894 | E5 | #903 | M7 calibration | #913 |
+| C7 | #895 | G1 | #904 | M8 field test | #914 |
+| C8 | #896 | G2+G5 | #905 | M9 FTM spike | #915 |
+| C9 | #897 | G3 | #906 | M10 privacy | #916 |
+| | | G4 | #907 | M11 manual | #917 |
 
 ---
 
