@@ -173,6 +173,87 @@ class ModelSerializationTest {
         assertTrue(output.contains("\"b\":255"))
     }
 
+    // ── #912 StageObject source provenance ────────────────────────────
+
+    @Test
+    fun `deserialize StageObject without source (old server)`() {
+        val input = """{"id":2,"name":"Wall","objectType":"wall","mobility":"static","color":"#334155","opacity":30,"transform":{"pos":[100.0,200.0,0.0],"rot":[0,0,0],"scale":[2000.0,1500.0,100.0]}}"""
+        val obj = json.decodeFromString<StageObject>(input)
+        assertEquals(2, obj.id)
+        assertNull(obj.source)
+        assertFalse(obj.temporal)
+    }
+
+    @Test
+    fun `deserialize radar-sourced person from captured server JSON`() {
+        // Shape mirrors parent_server._radar_person_create (#910/#912):
+        // float ttl, _temporal/_expiresAt underscore keys, source stamp.
+        val input = """{"id":7,"name":"Person (radar) 7","objectType":"person","mobility":"moving","_temporal":true,"ttl":2.0,"_expiresAt":1767000000.5,"color":"#f472b6","opacity":40,"transform":{"pos":[1200.0,2400.0,850.0],"rot":[0,0,0],"scale":[500.0,1700.0,500.0]},"source":{"type":"radar","fixtureId":3,"node":"MMW-A1B2"}}"""
+        val obj = json.decodeFromString<StageObject>(input)
+        assertEquals("person", obj.objectType)
+        assertTrue(obj.temporal)
+        assertEquals(2.0, obj.ttl, 0.0)
+        assertEquals("radar", obj.source?.type)
+        assertEquals(3, obj.source?.fixtureId)
+        assertEquals("MMW-A1B2", obj.source?.node)
+        assertNull(obj.source?.cameraId)
+    }
+
+    @Test
+    fun `deserialize camera-sourced person carries cameraId not fixtureId`() {
+        // Camera provenance stamp (#900): {"type":"camera","cameraId":N}.
+        val input = """{"id":9,"name":"Person 9","objectType":"person","mobility":"moving","_temporal":true,"ttl":5,"color":"#f472b6","opacity":40,"transform":{"pos":[0,0,850.0],"rot":[0,0,0],"scale":[400.0,1700.0,400.0]},"source":{"type":"camera","cameraId":4}}"""
+        val obj = json.decodeFromString<StageObject>(input)
+        assertEquals("camera", obj.source?.type)
+        assertEquals(4, obj.source?.cameraId)
+        assertNull(obj.source?.fixtureId)
+        assertEquals(5.0, obj.ttl, 0.0)  // integer ttl still parses
+    }
+
+    @Test
+    fun `StageObject round-trips with and without source`() {
+        val withSource = StageObject(
+            id = 1, name = "P", objectType = "person", mobility = "moving",
+            temporal = true, ttl = 2.0,
+            source = ObjectSource(type = "radar", fixtureId = 3, node = "MMW-A1B2"),
+        )
+        val decodedWith = json.decodeFromString<StageObject>(
+            json.encodeToString(StageObject.serializer(), withSource))
+        assertEquals(withSource, decodedWith)
+
+        val withoutSource = StageObject(id = 2, name = "Wall")
+        val encoded = json.encodeToString(StageObject.serializer(), withoutSource)
+        val decodedWithout = json.decodeFromString<StageObject>(encoded)
+        assertEquals(withoutSource, decodedWithout)
+        assertNull(decodedWithout.source)
+    }
+
+    @Test
+    fun `Child isRadarNode from MMW hostname prefix`() {
+        // Radar nodes have no HTTP /status, so type stays "slyled" and
+        // boardType stays blank — the hostname prefix is the signal.
+        val radar = json.decodeFromString<Child>(
+            """{"id":4,"ip":"10.0.0.9","hostname":"MMW-A1B2","sc":0,"strings":[],"status":1,"type":"slyled"}""")
+        assertTrue(radar.isRadarNode)
+        val led = json.decodeFromString<Child>(
+            """{"id":5,"ip":"10.0.0.10","hostname":"SLYC-1152","sc":1,"strings":[],"status":1,"type":"slyled"}""")
+        assertFalse(led.isRadarNode)
+        // Future server stamping the registry board id also matches.
+        assertTrue(led.copy(boardType = "mmwave").isRadarNode)
+        assertTrue(led.copy(type = "mmwave").isRadarNode)
+    }
+
+    @Test
+    fun `deserialize radar Fixture descriptor`() {
+        val input = """{"id":11,"name":"Stage radar","type":"point","fixtureType":"radar","radarNode":"MMW-A1B2","rangeMm":8000,"fovDeg":120.0,"radarEnabled":true,"x":500,"y":0,"z":1200}"""
+        val f = json.decodeFromString<Fixture>(input)
+        assertEquals("radar", f.fixtureType)
+        assertEquals("MMW-A1B2", f.radarNode)
+        assertEquals(8000, f.rangeMm)
+        assertEquals(120.0, f.fovDeg!!, 0.0)
+        assertEquals(true, f.radarEnabled)
+    }
+
     @Test
     fun `ActionTypes constants`() {
         // #906 — 19 entries, one per wire type 0-18, matching

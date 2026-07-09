@@ -68,6 +68,15 @@ data class Child(
     val startupDone: Boolean = true
 ) {
     val onlineStatus: OnlineStatus get() = OnlineStatus.fromInt(status)
+    /** #910 — MMwave radar presence node. The node has no HTTP /status
+     *  endpoint, so `type` stays the "slyled" default and `boardType`
+     *  stays blank; identification is the announced hostname prefix
+     *  ("MMW-", mmwave/MmwConfig.h). The type/boardType checks cover a
+     *  future server that stamps the registry board id ("mmwave"). */
+    val isRadarNode: Boolean get() =
+        hostname.startsWith("MMW-", ignoreCase = true) ||
+        type.equals("mmwave", ignoreCase = true) ||
+        boardType.equals("mmwave", ignoreCase = true)
     /** RSSI as dBm (server stores as positive magnitude, e.g. 69 → -69 dBm). */
     val rssiDbm: Int? get() = rssi?.let { if (it > 0) -it else it }
     /** Signal bars 0-4 from RSSI. */
@@ -237,7 +246,7 @@ data class Fixture(
     val name: String = "",
     val childId: Int? = null,
     val type: String = "linear",  // linear, point, surface, group
-    val fixtureType: String = "led",  // "led", "dmx", or "camera"
+    val fixtureType: String = "led",  // "led", "dmx", "camera", or "radar" (#911)
     val dmxUniverse: Int? = null,
     val dmxStartAddr: Int? = null,
     val dmxChannelCount: Int? = null,
@@ -247,6 +256,10 @@ data class Fixture(
     val cameraUrl: String? = null,
     val resolutionW: Int? = null,
     val resolutionH: Int? = null,
+    // #911 — radar fixture descriptor (fixtureType "radar")
+    val radarNode: String? = null,
+    val rangeMm: Int? = null,
+    val radarEnabled: Boolean? = null,
     val childIds: List<Int> = emptyList(),
     val strings: List<FixtureString> = emptyList(),
     val rotation: List<Double> = listOf(0.0, 0.0, 0.0),
@@ -300,8 +313,23 @@ data class StageObject(
     val stageLocked: Boolean = false,
     @SerialName("_temporal")
     val temporal: Boolean = false,
-    val ttl: Int = 0,
+    // Double, not Int — radar-sourced persons carry a float TTL
+    // (parent_server _radar_person_create writes float(ttl_s) → "2.0"
+    // on the wire; an Int field would fail the whole /api/objects decode).
+    val ttl: Double = 0.0,
     val patrol: PatrolConfig? = null,
+    // #900/#912 — provenance stamp on temporal objects. null from older
+    // servers and for operator-placed objects. type is "radar"
+    // (fixtureId + node) or "camera" (cameraId).
+    val source: ObjectSource? = null,
+)
+
+@Serializable
+data class ObjectSource(
+    val type: String = "",
+    val fixtureId: Int? = null,
+    val cameraId: Int? = null,
+    val node: String? = null,
 )
 
 @Serializable

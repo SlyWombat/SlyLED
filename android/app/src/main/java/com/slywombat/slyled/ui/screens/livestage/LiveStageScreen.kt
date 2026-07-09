@@ -728,7 +728,12 @@ private fun StageCanvas(
             val ox = pos[0].toFloat(); val oy = pos[1].toFloat(); val oz = pos[2].toFloat()
             val s = scaleAt(ox, oy, oz)
             if (s <= 0f) continue
-            val col = try { Color(android.graphics.Color.parseColor(obj.color ?: "#f472b6")) } catch (_: Exception) { Color(0xFFf472b6) }
+            // #912 — radar-sourced persons get the amber accent (SPA
+            // parity: emulation.js tints the person body 0xfbbf24 when
+            // source.type === 'radar'). Camera/manual objects keep the
+            // server-supplied colour (pink for persons).
+            val col = if (obj.source?.type == "radar") Color(0xFFFBBF24)
+                else try { Color(android.graphics.Color.parseColor(obj.color ?: "#f472b6")) } catch (_: Exception) { Color(0xFFf472b6) }
 
             // Box dimensions from transform.scale: [width(X), height(Z), depth(Y)]
             val scl = obj.transform.scale

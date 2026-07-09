@@ -181,7 +181,8 @@ class RenderingDataTest {
             "transform":{"pos":[5000,900,3000],"rot":[0,0,0],"scale":[500,1800,500]}}"""
         val s = json.decodeFromString<StageObject>(input)
         assertTrue(s.temporal)
-        assertEquals(60, s.ttl)
+        // ttl is Double since #912 — radar persons carry a float TTL on the wire
+        assertEquals(60.0, s.ttl, 0.0)
         assertEquals("moving", s.mobility)
     }
 
@@ -190,7 +191,7 @@ class RenderingDataTest {
         val input = """{"id":5,"name":"Wall","objectType":"wall"}"""
         val s = json.decodeFromString<StageObject>(input)
         assertFalse(s.temporal)
-        assertEquals(0, s.ttl)
+        assertEquals(0.0, s.ttl, 0.0)
     }
 
     // ── Patrol config (#194) ───────────────────────────────────────────

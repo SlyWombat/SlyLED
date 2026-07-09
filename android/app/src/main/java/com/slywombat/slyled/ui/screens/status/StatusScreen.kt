@@ -290,7 +290,7 @@ private fun PerformerCard(child: Child) {
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    BoardBadge(type = child.type)
+                    BoardBadge(child = child)
                     StatusBadge(online = isOnline)
                 }
             }
@@ -414,13 +414,19 @@ private fun CameraCard(
 }
 
 @Composable
-private fun BoardBadge(type: String) {
-    val (label, color) = when (type.lowercase()) {
-        "esp32" -> "ESP32" to CyanSecondary
-        "d1mini", "d1_mini" -> "D1 Mini" to OrangeWled
-        "giga" -> "Giga" to Color(0xFFa78bfa)
-        "wled" -> "WLED" to OrangeWled
-        else -> "SlyLED" to MaterialTheme.colorScheme.primary
+private fun BoardBadge(child: Child) {
+    // #910 — radar nodes announce hostname "MMW-XXXX" and expose no HTTP
+    // /status, so Child.type stays "slyled"; detect via Child.isRadarNode
+    // before the type map. Amber = the radar accent (SPA parity).
+    val (label, color) = when {
+        child.isRadarNode -> "RADAR" to OrangeWled
+        else -> when (child.type.lowercase()) {
+            "esp32" -> "ESP32" to CyanSecondary
+            "d1mini", "d1_mini" -> "D1 Mini" to OrangeWled
+            "giga" -> "Giga" to Color(0xFFa78bfa)
+            "wled" -> "WLED" to OrangeWled
+            else -> "SlyLED" to MaterialTheme.colorScheme.primary
+        }
     }
     SuggestionChip(
         onClick = {},
