@@ -51,6 +51,16 @@ struct StatusScreen: View {
                 }
             }
             Spacer()
+            // #910 — radar nodes ("MMW-" hostname prefix) get the amber
+            // RADAR chip, parallel to Android's BoardBadge radar case.
+            if c.isRadarNode {
+                Text("RADAR")
+                    .font(.kpLabelSm)
+                    .foregroundStyle(Color.kpOrangeWled)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.kpOrangeWled.opacity(0.15), in: Capsule())
+            }
             VStack(alignment: .trailing, spacing: 2) {
                 if let dbm = c.rssiDbm {
                     Text("\(dbm) dBm").font(.kpCaption).foregroundStyle(Color.kpLightSlate)

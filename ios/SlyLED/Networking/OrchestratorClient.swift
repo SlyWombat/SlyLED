@@ -62,6 +62,12 @@ final class OrchestratorClient: ObservableObject {
         try await getDecoded("api/fixtures/live")
     }
 
+    // ── Stage objects ─────────────────────────────────────────────────
+
+    // Static walls/props + temporal tracked persons (camera + radar,
+    // #900/#912). Polled at the Android cadence (1.5 s) by LiveStageViewModel.
+    func getObjects() async throws -> [StageObject] { try await getDecoded("api/objects") }
+
     // Quick-action writes (Flash / Home / Blackout). 0..1 normalized.
     func dmxTest(_ fixtureId: Int, body: DmxTest) async throws -> OkResponse {
         try await postDecoded("api/fixtures/\(fixtureId)/dmx-test", body: body)

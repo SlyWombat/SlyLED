@@ -24,6 +24,10 @@ For the full port plan and surface-by-surface mapping, see [`docs/design/ios_par
 - **Haptics catalogue** matching Android (`Haptics.swift`), with `CoreHaptics` for the strobe-press low rumble.
 - **Connection state machine** — `Connected → Degraded → Disconnected` with a 5 s write-queue policy.
 
+## Post-v0.7.0 (unreleased, on main)
+
+- **Tracked-object rendering (B5, #912)** — `LiveStageScreen` polls `/api/objects` at the Android cadence (1.5 s) and draws temporal person footprints on the stage canvas: amber when radar-sourced (`source.type == "radar"`, matching the SPA and Android), pink otherwise. `StatusScreen` shows an amber RADAR chip for `MMW-*` radar nodes. Closes the objects-rendering gap vs Android v1.8.2 (Android renders tracked objects; iOS v0.7.0 did not). Not yet validated by a macOS CI build.
+
 ## Roadmap from here
 
 | Tag | Scope |

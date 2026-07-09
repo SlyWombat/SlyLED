@@ -67,6 +67,36 @@ struct LiveStageScreen: View {
                             ctx.stroke(arrow, with: .color(Color.kpNearWhite.opacity(0.7)), lineWidth: 1.5)
                         }
                     }
+
+                    // Tracked objects (temporal persons — camera + radar,
+                    // #912). Top-down footprint at transform.pos (object
+                    // centre, mm) sized from scale [width(X), height(Z),
+                    // depth(Y)]. Amber = radar-sourced (SPA parity:
+                    // emulation.js tints the person body 0xfbbf24 when
+                    // source.type === 'radar'); pink otherwise — matching
+                    // Android's LiveStage canvas.
+                    for obj in vm.objects where obj.isTracked {
+                        guard let pos = obj.transform?.pos, pos.count >= 2 else { continue }
+                        let px = offset.width + pos[0] * pxPerMm * Double(scale)
+                        let py = offset.height + pos[1] * pxPerMm * Double(scale)
+                        let scl = obj.transform?.scale ?? []
+                        let wMm = scl.count > 0 ? scl[0] : 500
+                        let dMm = scl.count > 2 ? scl[2] : 500
+                        let w = max(10, wMm * pxPerMm * Double(scale))
+                        let d = max(10, dMm * pxPerMm * Double(scale))
+                        let col: Color = obj.isRadarSourced
+                            ? Color(red: 0xFB/255, green: 0xBF/255, blue: 0x24/255)
+                            : Color(red: 0xF4/255, green: 0x72/255, blue: 0xB6/255)
+                        let footprint = CGRect(x: px - w / 2, y: py - d / 2, width: w, height: d)
+                        let capsule = Path(roundedRect: footprint,
+                                           cornerRadius: min(w, d) / 2)
+                        ctx.fill(capsule, with: .color(col.opacity(0.3)))
+                        ctx.stroke(capsule, with: .color(col.opacity(0.8)), lineWidth: 1.5)
+                        if let name = obj.name, !name.isEmpty {
+                            ctx.draw(Text(name).font(.kpLabelSm).foregroundStyle(col),
+                                     at: CGPoint(x: px, y: py - d / 2 - 8))
+                        }
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())

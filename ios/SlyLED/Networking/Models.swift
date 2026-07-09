@@ -63,6 +63,19 @@ struct Child: Codable, Identifiable {
         if dbm >= -80 { return 1 }
         return 0
     }
+
+    // #910 — MMwave radar presence node. The node has no HTTP /status
+    // endpoint, so `type` stays the "slyled" default and `boardType` stays
+    // blank; identification is the announced hostname prefix ("MMW-",
+    // mmwave/MmwConfig.h). The type/boardType checks cover a future server
+    // that stamps the registry board id ("mmwave"). Mirrors Android
+    // Child.isRadarNode (Models.kt).
+    var isRadarNode: Bool {
+        if let h = hostname, h.uppercased().hasPrefix("MMW-") { return true }
+        if type?.lowercased() == "mmwave" { return true }
+        if boardType?.lowercased() == "mmwave" { return true }
+        return false
+    }
 }
 
 // ── Fixtures / Profiles ───────────────────────────────────────────────
@@ -83,6 +96,46 @@ struct Fixture: Codable, Identifiable {
     var positioned: Bool?
     var calibrated: Bool?
     var moverCalibrated: Bool?
+}
+
+// ── Stage objects (/api/objects) ──────────────────────────────────────
+
+struct ObjectTransform: Codable {
+    var pos: [Double]?      // object CENTER, mm (renderer convention, #Q1)
+    var rot: [Double]?
+    var scale: [Double]?    // [width(X), height(Z), depth(Y)], mm
+}
+
+// #900/#912 — provenance stamp on temporal objects. Absent from older
+// servers and for operator-placed objects. type is "radar" (fixtureId +
+// node) or "camera" (cameraId).
+struct ObjectSource: Codable {
+    var type: String?
+    var fixtureId: Int?
+    var cameraId: Int?
+    var node: String?
+}
+
+struct StageObject: Codable, Identifiable {
+    var id: Int
+    var name: String?
+    var objectType: String?  // person / prop / wall / custom
+    var mobility: String?    // static / moving
+    var color: String?
+    var opacity: Int?
+    var transform: ObjectTransform?
+    var temporal: Bool?      // wire key "_temporal"
+    var ttl: Double?         // float on the wire for radar persons (2.0)
+    var source: ObjectSource?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, objectType, mobility, color, opacity, transform, ttl, source
+        case temporal = "_temporal"
+    }
+
+    // Same predicate Android's LiveStage canvas uses for the tracked-object pass.
+    var isTracked: Bool { (temporal ?? false) || mobility == "moving" }
+    var isRadarSourced: Bool { source?.type == "radar" }
 }
 
 struct DmxProfile: Codable, Identifiable {

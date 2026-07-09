@@ -9,9 +9,11 @@ final class LiveStageViewModel: ObservableObject {
     @Published var fixtures: [Fixture] = []
     @Published var live: [String: FixtureLive] = [:]
     @Published var settings: Settings = Settings()
+    @Published var objects: [StageObject] = []
 
     private let client: OrchestratorClient
     private var pollTask: Task<Void, Never>?
+    private var objectsTask: Task<Void, Never>?
 
     init(client: OrchestratorClient) {
         self.client = client
@@ -29,10 +31,22 @@ final class LiveStageViewModel: ObservableObject {
                 try? await Task.sleep(nanoseconds: interval)
             }
         }
+        // Tracked objects (temporal persons — camera + radar, #912) poll at
+        // a fixed 1.5 s, matching Android LiveStageViewModel's objects loop.
+        objectsTask?.cancel()
+        objectsTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                do { self.objects = try await self.client.getObjects() } catch {}
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+            }
+        }
     }
 
     func stop() {
         pollTask?.cancel()
         pollTask = nil
+        objectsTask?.cancel()
+        objectsTask = nil
     }
 }
