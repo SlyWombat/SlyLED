@@ -10,8 +10,14 @@ plugins {
     kotlin("kapt")
 }
 
-// Redirect build output outside OneDrive to avoid file lock issues
-layout.buildDirectory = file("C:/Android/build/slyled-app")
+// Redirect build output outside OneDrive to avoid file lock issues.
+// Windows-only: on CI/Linux the default in-project build dir is fine, and
+// the hardcoded C:/ path is unconvertible there (broke android-tests, #904).
+if (System.getProperty("os.name").startsWith("Windows")) {
+    layout.buildDirectory = file(
+        System.getenv("SLYLED_ANDROID_BUILD_DIR") ?: "C:/Android/build/slyled-app"
+    )
+}
 
 // Load signing config from keystore.properties (gitignored)
 val keystorePropsFile = rootProject.file("keystore.properties")
