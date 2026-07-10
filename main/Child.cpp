@@ -916,10 +916,18 @@ void sendChildConfigPage(WiFiClient& c) {
 // ── POST /config ──────────────────────────────────────────────────────────────
 
 void handlePostChildConfig(WiFiClient& c, int contentLen) {
-  static char body[400];
-  int rlen = (contentLen > 0 && contentLen < (int)sizeof(body) - 1)
-             ? contentLen : (int)sizeof(body) - 1;
-  c.readBytes(body, rlen);
+  // #B3 — sized for the real worst case: an(16 chars ≤48 URL-encoded) +
+  // desc(32 ≤96) + sc + 8 strings × ~44 B (lc=254&lm=65535&lt=2&sd=3&fd=1&
+  // dp=33 pairs) ≈ 511 bytes. The old 400-byte buffer silently truncated
+  // 8-string ESP32 saves and persisted the mangled config to NVS.
+  static char body[768];
+  if (contentLen > (int)sizeof(body) - 1) {
+    // Refuse loudly rather than parse a partial form and save garbage.
+    sendJsonTooLarge(c);
+    return;
+  }
+  int want = (contentLen > 0) ? contentLen : (int)sizeof(body) - 1;
+  int rlen = (int)c.readBytes(body, (size_t)want);
   body[rlen] = '\0';
 
   char tmp[CHILD_DESC_LEN];

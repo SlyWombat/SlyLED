@@ -344,6 +344,12 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
   // build otherwise needs BOOT-button bootloader surgery, so it must not
   // depend on UDP alone for recovery.
   } else if (isPost && strstr(req, " /ota ")) {
+#if defined(BOARD_GIGA_CHILD) || defined(BOARD_GIGA_DMX)
+    // #B3 — Giga has no OTA (USB/DFU only; otaStartUpdate() is a stub that
+    // returns false). This path used to reply ok:true and then do nothing,
+    // leaving the caller believing an update was in flight.
+    sendJsonErr(client, "ota unsupported on giga");
+#else
     // OTA update: POST /ota with JSON body {"url":"...","sha256":"...","major":5,"minor":2}
     char otaBody[512] = {0};
     if (contentLen > 0 && contentLen < (int)sizeof(otaBody))
@@ -375,6 +381,7 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
     } else {
       sendJsonErr(client, "url required");
     }
+#endif  // !(BOARD_GIGA_CHILD || BOARD_GIGA_DMX)
 #endif  // BOARD_CHILD || BOARD_GYRO
 
 #ifdef BOARD_CHILD

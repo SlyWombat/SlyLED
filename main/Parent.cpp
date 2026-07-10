@@ -1226,8 +1226,16 @@ void sendApiLayout(WiFiClient& c) {
 }
 
 void handlePostLayout(WiFiClient& c, int contentLen) {
-  char body[256] = {};
-  if (contentLen > 0 && contentLen < (int)sizeof(body))
+  // #B3 — worst case: 8 children × {"id":7,"x":-30000,"y":-30000} ≈ 270
+  // bytes, which overflowed the old 256-byte buffer. Worse, the overflow
+  // path skipped the read entirely yet still replied ok:true — the layout
+  // update vanished while the SPA believed it saved.
+  char body[512] = {};
+  if (contentLen > (int)sizeof(body) - 1) {
+    sendJsonTooLarge(c);
+    return;
+  }
+  if (contentLen > 0)
     c.readBytes(body, contentLen);
   const char* p = body;
   while ((p = strstr(p, "\"id\":")) != NULL) {

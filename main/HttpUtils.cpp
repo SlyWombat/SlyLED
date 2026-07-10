@@ -43,6 +43,20 @@ void sendJsonErr(WiFiClient& c, const char* msg) {
   c.flush();
 }
 
+// #B3 — 413 for POST bodies larger than a handler's fixed parse buffer.
+// Distinct from sendJsonErr's 400: the body was NOT read and nothing was
+// applied. The old handlers silently truncated (or dropped) the body and
+// still replied ok:true.
+void sendJsonTooLarge(WiFiClient& c) {
+  static const char body[] = "{\"ok\":false,\"err\":\"body too large\"}";
+  sendBuf(c, "HTTP/1.1 413 Payload Too Large\r\n"
+             "Content-Type: application/json\r\n"
+             "Connection: close\r\n"
+             "Content-Length: %d\r\n\r\n", (int)(sizeof(body) - 1));
+  c.print(body);
+  c.flush();
+}
+
 // ── GET /status ───────────────────────────────────────────────────────────────
 
 void sendStatus(WiFiClient& c) {
