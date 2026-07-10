@@ -438,6 +438,75 @@ var API={
   fwCheck:'/api/firmware/check',fwLatest:'/api/firmware/latest',
   oflSearch:'/api/dmx-profiles/ofl/search',oflImport:'/api/dmx-profiles/ofl/import-by-id',
 };
+// ── Connection-state pill (B4, Android parity) ────────────────────────────
+// ra() swallows transport errors into callback(null), so a dead
+// orchestrator used to freeze the UI silently. Every ra() outcome now
+// feeds a tiny global state machine mirroring the Android app's
+// Connected / Reconnecting / Offline pill: hidden while healthy, amber
+// after 3 s without a successful response, red after 10 s (Android's
+// thresholds; the SPA's own polling — 200 ms shared fixtures/live,
+// 1 s tab timers — is the sampling clock, so no new polling is added).
+// A minimum consecutive-failure count keeps one flaky request from
+// flashing the pill. onload counts as connected regardless of HTTP
+// status: the orchestrator answered.
+var _conn={lastOkTs:Date.now(),fails:0,state:'ok',flashTimer:null};
+var _CONN_STYLES={   // palette matches the toast/status chips (#298/#476)
+  reconnecting:{bg:'#78350f',border:'#f59e0b',dot:'#f59e0b',label:'Reconnecting',
+    tip:'Requests to the orchestrator are failing — retrying'},
+  offline:{bg:'#7f1d1d',border:'#ef4444',dot:'#ef4444',label:'Offline',
+    tip:'Orchestrator unreachable — check the SlyLED service'},
+  ok:{bg:'#065f46',border:'#22c55e',dot:'#22c55e',label:'Connected',
+    tip:'Connection restored'}
+};
+function _connPillEl(){
+  var el=document.getElementById('conn-pill');
+  if(!el){
+    if(!document.body)return null;
+    el=document.createElement('div');
+    el.id='conn-pill';
+    el.style.cssText='position:fixed;top:16px;right:60px;z-index:210;display:none;'
+      +'align-items:center;gap:6px;padding:3px 10px;border-radius:999px;'
+      +'font-size:.75em;font-weight:600;letter-spacing:.04em;color:#f1f5f9;'
+      +'border:1px solid transparent;pointer-events:none';
+    el.innerHTML='<span id="conn-pill-dot" style="width:7px;height:7px;border-radius:50%;display:inline-block"></span>'
+      +'<span id="conn-pill-label"></span>';
+    document.body.appendChild(el);
+  }
+  return el;
+}
+function _connRender(state){
+  var el=_connPillEl();if(!el)return;
+  var st=_CONN_STYLES[state];
+  if(!st){el.style.display='none';return;}
+  el.style.display='flex';
+  el.style.background=st.bg;el.style.borderColor=st.border;el.title=st.tip;
+  var d=document.getElementById('conn-pill-dot');if(d)d.style.background=st.dot;
+  var l=document.getElementById('conn-pill-label');if(l)l.textContent=st.label;
+}
+function _connOk(){
+  _conn.fails=0;_conn.lastOkTs=Date.now();
+  if(_conn.state!=='ok'){
+    _conn.state='ok';
+    _connRender('ok');   // brief green "Connected" flash, then hide
+    if(_conn.flashTimer)clearTimeout(_conn.flashTimer);
+    _conn.flashTimer=setTimeout(function(){
+      _conn.flashTimer=null;
+      if(_conn.state==='ok')_connRender(null);
+    },2000);
+  }
+}
+function _connFail(){
+  _conn.fails++;
+  var down=Date.now()-_conn.lastOkTs;
+  var next=null;
+  if(down>=10000&&_conn.fails>=3)next='offline';
+  else if(down>=3000&&_conn.fails>=2)next='reconnecting';
+  if(next&&next!==_conn.state){
+    _conn.state=next;
+    if(_conn.flashTimer){clearTimeout(_conn.flashTimer);_conn.flashTimer=null;}
+    _connRender(next);
+  }
+}
 // ra() — callback-style XHR (used by 240+ call sites)
 // api() — Promise wrapper for async/await chains
 // Both accept API constant paths (e.g. API.children) or literal strings.
@@ -446,9 +515,9 @@ function ra(method,path,body,callback){
   x.open(method,path,true);
   x.timeout=30000;
   if(body)x.setRequestHeader('Content-Type','application/json');
-  x.onload=function(){try{if(callback)callback(JSON.parse(x.responseText));}catch(e){if(callback)callback(null);}};
-  x.onerror=function(){if(callback)callback(null);};
-  x.ontimeout=function(){console.warn('XHR timeout:',method,path);if(callback)callback(null);};
+  x.onload=function(){_connOk();try{if(callback)callback(JSON.parse(x.responseText));}catch(e){if(callback)callback(null);}};
+  x.onerror=function(){_connFail();if(callback)callback(null);};
+  x.ontimeout=function(){_connFail();console.warn('XHR timeout:',method,path);if(callback)callback(null);};
   x.send(body?JSON.stringify(body):null);
 }
 function api(method,path,body){
