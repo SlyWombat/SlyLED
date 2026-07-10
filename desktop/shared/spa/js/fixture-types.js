@@ -334,21 +334,41 @@ function _ftLedStringsRuntime(c, grp){
       var lineGeo=new THREE.BufferGeometry().setFromPoints([startLocal,endLocal]);
       var lineMat=new THREE.LineBasicMaterial({color:0x555555});
       grp.add(new THREE.Line(lineGeo,lineMat));
-      // LED dots
+      // LED dots — one InstancedMesh per string (B4). Each dot used to be
+      // its own Mesh+SphereGeometry+material (~1 draw call per LED; cap
+      // 50/string × 8 strings × N fixtures ≈ thousands of calls on a big
+      // rig). Instancing folds a whole string into one draw call. The
+      // material color stays white so per-instance instanceColor is the
+      // final tint (shader multiplies diffuse × instanceColor); the
+      // lit-dot 2× scale lives in the per-instance matrix. Base dot
+      // geometry/size/positions/idle color are unchanged from the
+      // per-mesh version.
       var dotCount=Math.min(s.leds,50);
+      var dotGeo=new THREE.SphereGeometry(0.03,4,4);
+      var dotMat=new THREE.MeshBasicMaterial({color:0xffffff});
+      var dots=new THREE.InstancedMesh(dotGeo,dotMat,dotCount);
+      var idleCol=new THREE.Color(0x333340);
+      var im=new THREE.Matrix4();
+      var dotPos=new Array(dotCount);
       for(var di=0;di<dotCount;di++){
         var t=(di+0.5)/dotCount;
         var dp=new THREE.Vector3().lerpVectors(startLocal,endLocal,t);
-        var dotGeo=new THREE.SphereGeometry(0.03,4,4);
-        var dotMat=new THREE.MeshBasicMaterial({color:0x333340});
-        var dot=new THREE.Mesh(dotGeo,dotMat);
-        dot.position.copy(dp);
-        dot.userData.ledDot=true;
-        dot.userData.stringIdx=si;
-        dot.userData.dotIdx=di;
-        dot.userData.dotCount=dotCount;
-        grp.add(dot);
+        dotPos[di]=dp;
+        im.makeTranslation(dp.x,dp.y,dp.z);
+        dots.setMatrixAt(di,im);
+        dots.setColorAt(di,idleCol);   // also allocates instanceColor
       }
+      dots.instanceMatrix.needsUpdate=true;
+      if(dots.instanceColor)dots.instanceColor.needsUpdate=true;
+      // The base geometry's bounding sphere doesn't cover the instance
+      // positions in r137 — disable culling so dots never pop out when
+      // the camera moves close (individual meshes were culled per-dot).
+      dots.frustumCulled=false;
+      dots.userData.ledDots=true;
+      dots.userData.stringIdx=si;
+      dots.userData.dotCount=dotCount;
+      dots.userData.dotPos=dotPos;
+      grp.add(dots);
     }
   }
 }
@@ -432,8 +452,15 @@ function _ftDmxRuntimeUpdate(grp, ctx){
 }
 
 // Runtime per-frame updater — LED strings (emulation.js emu3dUpdateColors).
+// B4 — dots are InstancedMesh per string; per-dot colors go through
+// setColorAt/instanceColor and the lit 2× scale through setMatrixAt,
+// instead of per-mesh material.color / scale. Scratch objects avoid
+// per-frame allocations in this 60 Hz path.
+var _ftLedScratch={col:null,mat:null};
 function _ftLedRuntimeUpdate(grp, ctx){
   var pd=ctx.pd;
+  if(!_ftLedScratch.col){_ftLedScratch.col=new THREE.Color();_ftLedScratch.mat=new THREE.Matrix4();}
+  var sCol=_ftLedScratch.col,sMat=_ftLedScratch.mat;
   // Update LED dots from preview
   var previewColors=null;
   if(pd&&Array.isArray(pd)){previewColors=pd;}
@@ -449,22 +476,33 @@ function _ftLedRuntimeUpdate(grp, ctx){
     });
   }
   grp.children.forEach(function(child){
-    if(!child.userData.ledDot)return;
-    var si=child.userData.stringIdx,di=child.userData.dotIdx,dc=child.userData.dotCount;
+    if(!child.userData.ledDots)return;
+    var si=child.userData.stringIdx,dc=child.userData.dotCount;
+    var dotPos=child.userData.dotPos;
     var pc=null;
     if(previewColors&&si<previewColors.length)pc=previewColors[si];
     var isAct=(pc&&typeof pc==='object'&&!Array.isArray(pc)&&pc.t!==undefined);
-    var r=40,g=40,b=45;
-    if(pc&&Array.isArray(pc)&&(pc[0]+pc[1]+pc[2])>3){r=pc[0];g=pc[1];b=pc[2];}
-    else if(isAct){
-      var eMs=(pc.e||0)*1000+(Date.now()%1000);
-      var px=_emuPixel(pc,di,dc,eMs);
-      if(px){r=px[0];g=px[1];b=px[2];}
+    var isArr=(pc&&Array.isArray(pc)&&(pc[0]+pc[1]+pc[2])>3);
+    for(var di=0;di<dc;di++){
+      var r=40,g=40,b=45;
+      if(isArr){r=pc[0];g=pc[1];b=pc[2];}
+      else if(isAct){
+        var eMs=(pc.e||0)*1000+(Date.now()%1000);
+        var px=_emuPixel(pc,di,dc,eMs);
+        if(px){r=px[0];g=px[1];b=px[2];}
+      }
+      sCol.setRGB(r/255,g/255,b/255);
+      child.setColorAt(di,sCol);
+      // Scale lit dots larger — same 2×/1× rule as the per-mesh version;
+      // makeScale().setPosition() reproduces position+uniform-scale.
+      var lit=(r+g+b)>15;
+      var sc=lit?2.0:1.0;
+      var dp=dotPos[di];
+      sMat.makeScale(sc,sc,sc).setPosition(dp.x,dp.y,dp.z);
+      child.setMatrixAt(di,sMat);
     }
-    child.material.color.setRGB(r/255,g/255,b/255);
-    // Scale lit dots larger
-    var lit=(r+g+b)>15;
-    child.scale.setScalar(lit?2.0:1.0);
+    if(child.instanceColor)child.instanceColor.needsUpdate=true;
+    child.instanceMatrix.needsUpdate=true;
   });
   // Update node sphere color to average
   var nodeSphere=grp.children[0];

@@ -253,6 +253,10 @@ function _emu3dClearNodes(){
     grp.traverse(function(obj){
       if(obj.geometry)obj.geometry.dispose();
       if(obj.material){if(obj.material.map)obj.material.map.dispose();obj.material.dispose();}
+      // B4 — LED dots are InstancedMesh now; dispose() releases the
+      // instanceMatrix/instanceColor GPU buffers (geometry.dispose does
+      // not cover instance attributes).
+      if(obj.isInstancedMesh&&obj.dispose)obj.dispose();
     });
     _s3d.scene.remove(grp);
   });
