@@ -34,7 +34,7 @@ Logo assets:
 - **Project lead:** Dave Seaman — dave@drscapital.com
 - **Documentation:** [electricrv.ca/slyled](https://electricrv.ca/slyled)
 - **Source:** [github.com/SlyWombat/SlyLED](https://github.com/SlyWombat/SlyLED)
-- **Licence:** MIT
+- **Licence:** PolyForm Noncommercial 1.0.0 (commercial licences available)
 
 ## Embargoed announcements
 

@@ -14,7 +14,7 @@ AI calibration.
 |---|---|
 | **Project** | SlyLED |
 | **Status** | Public beta — v1.6.3 (April 2026) |
-| **Licence** | MIT |
+| **Licence** | PolyForm Noncommercial 1.0.0 (commercial licences available) |
 | **Repository** | [github.com/SlyWombat/SlyLED](https://github.com/SlyWombat/SlyLED) |
 | **Documentation** | [electricrv.ca/slyled](https://electricrv.ca/slyled) |
 | **Platforms** | Windows installer, macOS bundle, Android APK, open firmware |
@@ -48,9 +48,9 @@ AI calibration.
   on-screen sliders drive moving heads through the same control path.
 - **Dynamic shows that adapt to the rig.** Fourteen themes re-lay a
   full performance at runtime against the current fixture layout.
-- **End-to-end open.** The entire click-to-DMX-byte path is MIT-
-  licensed code in one repository. Operators, educators, and venues
-  can audit it.
+- **End-to-end open.** The entire click-to-DMX-byte path is
+  source-available code in one repository. Operators, educators, and
+  venues can audit it.
 
 ## Milestones
 
