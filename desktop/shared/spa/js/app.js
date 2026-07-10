@@ -328,6 +328,15 @@ function _clearTabTimers(){
   // tabs that actually render the shared 3D scene.
   if(window._remotesTimer){clearInterval(window._remotesTimer);window._remotesTimer=null;}
   if(typeof s3dStopPollRemotes==='function')s3dStopPollRemotes();
+  // #924 — the 3D scene's live fixture-aim feed registers as listener
+  // 's3d' on the shared fixtures/live poller (scene-3d.js
+  // s3dPollFixturesLive, started by s3dInit) and, pre-fix, stayed alive
+  // forever once any 3D tab had been visited — keeping the 5 Hz
+  // /api/fixtures/live poll running on Setup/Actions/Settings/Firmware.
+  // Drop it on every tab switch; showTab re-arms it on the tabs that
+  // actually render the shared scene (dash/runtime/shows/layout), same
+  // as the s3dPollRemotes pattern above.
+  if(typeof s3dStopPollFixturesLive==='function')s3dStopPollFixturesLive();
 }
 // #690-followup — warn before navigating away (tab close, refresh) when
 // any dirty form is open. Currently covers the profile editor and the
@@ -418,6 +427,10 @@ function showTab(t){
   // init; _clearTabTimers above stopped it, so revisits need this.
   // s3dPollRemotes is re-entry-guarded (no-op while already polling).
   if(_s3d.inited&&(liveTab||t==='layout')&&typeof s3dPollRemotes==='function')s3dPollRemotes();
+  // #924 — same re-arm for the shared fixtures/live listener 's3d'
+  // (beam-cone aim updates on the shared scene). _sharedFixLiveAdd
+  // de-dupes by name, so re-adding on every 3D-tab entry is idempotent.
+  if(_s3d.inited&&(liveTab||t==='layout')&&typeof s3dPollFixturesLive==='function')s3dPollFixturesLive();
 }
 
 function _btnSaving(btn){if(!btn)return;btn.dataset.origHtml=btn.innerHTML;btn.dataset.origBg=btn.style.background;btn.textContent='Saving...';btn.disabled=true;btn.style.background='#555';}
