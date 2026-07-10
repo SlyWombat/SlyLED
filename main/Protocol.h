@@ -36,7 +36,7 @@ constexpr uint8_t CMD_RUNNER_STOP    = 0x31;   // parent→child: stop runner
 constexpr uint8_t CMD_STATUS_REQ     = 0x40;
 constexpr uint8_t CMD_STATUS_RESP    = 0x41;
 constexpr uint8_t CMD_OTA_UPDATE     = 0x50;   // parent→child: trigger OTA (URL + sha256 in payload)
-constexpr uint8_t CMD_OTA_STATUS     = 0x51;   // child→parent: OTA progress/result
+constexpr uint8_t CMD_OTA_STATUS     = 0x51;   // child→parent: OTA progress/result (OtaStatusPayload, #B3)
 
 constexpr uint8_t CMD_GYRO_ORIENT    = 0x60;   // gyro→parent: orientation stream (20 Hz default)
 constexpr uint8_t CMD_GYRO_CTRL      = 0x61;   // parent→gyro: enable/disable + target fps
@@ -180,6 +180,19 @@ struct __attribute__((packed)) ActionEventPayload {
   uint8_t  totalSteps;
   uint8_t  event;          // 0=started, 1=ended
 };
+
+// OtaStatusPayload — child→parent (2 bytes), CMD_OTA_STATUS (#B3).
+// Fire-and-forget progress report sent to the node that triggered the OTA
+// (the CMD_OTA_UPDATE sender, or the POST /ota client): once per phase
+// change (downloading / verifying / applying / success / failed / rejected)
+// and at every ≥10% step of download progress. Transmitted by the boards
+// that support OTA — ESP32, D1 Mini, gyro, ESP32 DMX bridge; the Giga
+// variants have no OTA. Orchestrator-side consumption is a follow-up
+// (the mmwave node tracks otaState but does not transmit 0x51 yet either).
+struct __attribute__((packed)) OtaStatusPayload {
+  uint8_t status;          // OTA_STATUS_* code (main/OtaUpdate.h)
+  uint8_t progress;        // 0-100 (%)
+};  // 2 bytes; total packet = 8 + 2 = 10
 
 // ── Gyro board packet structures ──────────────────────────────────────────────
 

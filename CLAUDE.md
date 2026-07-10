@@ -120,7 +120,7 @@ Moving-head aim uses **stage-frame fixture-internal angles**, not mechanical yok
 | 0x40 | STATUS_REQ   | parent→child   | header only |
 | 0x41 | STATUS_RESP  | child→parent   | 8 bytes `<BBBBI` (activeAction, runnerActive, currentStep, rssi, uptime) |
 | 0x50 | OTA_UPDATE   | parent→child   | variable — maj(1) + min(1) + patch(1) + urlLen(2 LE) + url(N) + sha256hex(64); triggers `otaStartUpdate()` + reboot |
-| 0x51 | OTA_STATUS   | child→parent   | reserved — status codes defined (`main/OtaUpdate.h`) but no firmware transmits it yet |
+| 0x51 | OTA_STATUS   | child→parent   | 2 bytes — status(u8, `OTA_STATUS_*` in `main/OtaUpdate.h`) + progress(u8, 0-100); fire-and-forget to the OTA trigger source on each phase change + every ≥10% of download (esp32/d1mini/gyro/dmx — Giga has no OTA; mmwave tracks otaState but does not transmit yet). Orchestrator-side consumption is a follow-up |
 | 0x60 | GYRO_ORIENT  | gyro→parent    | 8 bytes — roll100/pitch100/yaw100 (i16, ×100) + fps(u8) + flags(u8: bit0=streaming, bit1=imuOk, bit2=wifiOk, bit3=RESERVED per #819, bits[5:4]=ui-mode preset); ≤50 Hz stream, 20 Hz default |
 | 0x61 | GYRO_CTRL    | parent→gyro    | 2 bytes — enabled(1) + targetFps(1) (0 = board default 20 Hz, max 50) |
 | 0x62 | GYRO_RECAL   | parent→gyro    | header only — zero IMU reference |

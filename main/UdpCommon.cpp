@@ -138,6 +138,7 @@ void handleUdpPacket(uint8_t cmd, IPAddress sender, uint8_t* payload, int plen) 
         otaSha[64] = '\0';
       }
       if (Serial) Serial.printf("OTA: received update cmd v%d.%d.%d url=%s\n", newMaj, newMin, newPat, otaUrl);
+      otaSetReportTarget(sender);   // #B3 — CMD_OTA_STATUS goes back to the trigger source
       bool ok = otaStartUpdate(otaUrl, otaSha, newMaj, newMin, newPat);
       if (ok) {
         delay(500);
@@ -371,6 +372,7 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
       sendJsonOk(client);
       client.flush();
       delay(200);
+      otaSetReportTarget(client.remoteIP());   // #B3 — CMD_OTA_STATUS to the trigger source
       bool ok = otaStartUpdate(otaUrl, otaSha, otaMaj, otaMin, otaPat);
       if (ok) {
         delay(500);

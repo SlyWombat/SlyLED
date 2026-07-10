@@ -16,12 +16,55 @@
 #if defined(BOARD_CHILD) || defined(BOARD_GYRO)
 
 #include "version.h"
+#include "Protocol.h"
+#include "Globals.h"
+#include "NetUtils.h"
 #include <Arduino.h>
 
 volatile uint8_t otaStatus   = OTA_STATUS_IDLE;
 volatile uint8_t otaProgress = 0;
 
 #if defined(BOARD_ESP32) || defined(BOARD_GYRO) || defined(BOARD_D1MINI)
+
+// ── CMD_OTA_STATUS (0x51) reporting (#B3) ────────────────────────────────────
+// Fire-and-forget: one 10-byte datagram per phase change plus every ≥10%
+// of download progress, sent to the node that triggered the OTA. Packed
+// uint32 storage mirrors the childParentIP pattern (octet 0 in the LSB).
+
+static uint32_t otaReportIp = 0;
+
+void otaSetReportTarget(IPAddress ip) {
+    otaReportIp = (uint32_t)ip[0] | ((uint32_t)ip[1] << 8)
+                | ((uint32_t)ip[2] << 16) | ((uint32_t)ip[3] << 24);
+}
+
+static void otaSendStatus() {
+    uint32_t ip = otaReportIp;
+    if (ip == 0) return;
+    UdpHeader hdr;
+    hdr.magic   = UDP_MAGIC;
+    hdr.version = UDP_VERSION;
+    hdr.cmd     = CMD_OTA_STATUS;
+    hdr.epoch   = (uint32_t)currentEpoch();
+    OtaStatusPayload st;
+    st.status   = otaStatus;
+    st.progress = otaProgress;
+    uint8_t pkt[sizeof(hdr) + sizeof(st)];
+    memcpy(pkt,               &hdr, sizeof(hdr));
+    memcpy(pkt + sizeof(hdr), &st,  sizeof(st));
+    IPAddress dest((uint8_t)(ip & 0xFF), (uint8_t)((ip >> 8) & 0xFF),
+                   (uint8_t)((ip >> 16) & 0xFF), (uint8_t)((ip >> 24) & 0xFF));
+    cmdUDP.beginPacket(dest, UDP_PORT);
+    cmdUDP.write(pkt, sizeof(pkt));
+    cmdUDP.endPacket();
+}
+
+// Assign + report in one step — every phase transition below goes through
+// this so the parent sees downloading/verifying/applying/terminal states.
+static void otaSetStatus(uint8_t st) {
+    otaStatus = st;
+    otaSendStatus();
+}
 
 // ── SHA-256 helpers (#890) ───────────────────────────────────────────────────
 
@@ -55,7 +98,7 @@ static bool otaVersionAllowed(uint8_t newMajor, uint8_t newMinor, uint8_t newPat
     if (newVer <= curVer) {
         if (Serial) Serial.printf("OTA: rejected v%d.%d.%d (current v%d.%d.%d)\n",
                                    newMajor, newMinor, newPatch, APP_MAJOR, APP_MINOR, APP_PATCH);
-        otaStatus = OTA_STATUS_REJECTED;
+        otaSetStatus(OTA_STATUS_REJECTED);
         return false;
     }
     return true;
@@ -81,8 +124,8 @@ static bool otaConfirmed = false;
 bool otaStartUpdate(const char* url, const char* expectedSha256,
                     uint8_t newMajor, uint8_t newMinor, uint8_t newPatch) {
     if (!otaVersionAllowed(newMajor, newMinor, newPatch)) return false;
-    otaStatus = OTA_STATUS_DOWNLOADING;
     otaProgress = 0;
+    otaSetStatus(OTA_STATUS_DOWNLOADING);
     if (Serial) Serial.printf("OTA: downloading from %s\n", url);
 
     // #890 — manual download loop instead of HTTPUpdate so the image can be
@@ -91,27 +134,27 @@ bool otaStartUpdate(const char* url, const char* expectedSha256,
     HTTPClient http;
     http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
     if (!http.begin(client, url)) {
-        otaStatus = OTA_STATUS_FAILED;
+        otaSetStatus(OTA_STATUS_FAILED);
         if (Serial) Serial.println("OTA: failed — bad URL");
         return false;
     }
     int code = http.GET();
     if (code != HTTP_CODE_OK) {
         http.end();
-        otaStatus = OTA_STATUS_FAILED;
+        otaSetStatus(OTA_STATUS_FAILED);
         if (Serial) Serial.printf("OTA: failed — HTTP %d\n", code);
         return false;
     }
     int total = http.getSize();
     if (total <= 0) {
         http.end();
-        otaStatus = OTA_STATUS_FAILED;
+        otaSetStatus(OTA_STATUS_FAILED);
         if (Serial) Serial.println("OTA: failed — no Content-Length");
         return false;
     }
     if (!Update.begin((size_t)total)) {
         http.end();
-        otaStatus = OTA_STATUS_FAILED;
+        otaSetStatus(OTA_STATUS_FAILED);
         if (Serial) Serial.printf("OTA: failed — begin: %s\n", Update.errorString());
         return false;
     }
@@ -122,6 +165,7 @@ bool otaStartUpdate(const char* url, const char* expectedSha256,
 
     uint8_t buf[1024];                // fixed stack buffer — no heap
     int written = 0;
+    uint8_t lastReport = 0;           // #B3 — last CMD_OTA_STATUS progress %
     unsigned long lastData = millis();
     WiFiClient* stream = http.getStreamPtr();
     while (written < total) {
@@ -136,13 +180,17 @@ bool otaStartUpdate(const char* url, const char* expectedSha256,
                     Update.abort();
                     http.end();
                     mbedtls_sha256_free(&sha);
-                    otaStatus = OTA_STATUS_FAILED;
+                    otaSetStatus(OTA_STATUS_FAILED);
                     if (Serial) Serial.printf("OTA: failed — write: %s\n", Update.errorString());
                     return false;
                 }
                 mbedtls_sha256_update(&sha, buf, (size_t)n);
                 written += n;
                 otaProgress = (uint8_t)((int32_t)written * 100L / total);
+                if ((uint8_t)(otaProgress - lastReport) >= 10) {
+                    lastReport = otaProgress;
+                    otaSendStatus();   // #B3 — ≤10 datagrams per download
+                }
                 lastData = millis();
             }
         } else {
@@ -156,7 +204,7 @@ bool otaStartUpdate(const char* url, const char* expectedSha256,
     if (written != total) {
         Update.abort();
         mbedtls_sha256_free(&sha);
-        otaStatus = OTA_STATUS_FAILED;
+        otaSetStatus(OTA_STATUS_FAILED);
         if (Serial) Serial.printf("OTA: failed — short read %d/%d\n", written, total);
         return false;
     }
@@ -166,10 +214,10 @@ bool otaStartUpdate(const char* url, const char* expectedSha256,
     mbedtls_sha256_free(&sha);
 
     if (otaShaExpected(expectedSha256)) {
-        otaStatus = OTA_STATUS_VERIFYING;
+        otaSetStatus(OTA_STATUS_VERIFYING);
         if (!otaShaMatches(digest, expectedSha256)) {
             Update.abort();
-            otaStatus = OTA_STATUS_FAILED;
+            otaSetStatus(OTA_STATUS_FAILED);
             if (Serial) Serial.println("OTA: failed — SHA-256 mismatch");
             return false;
         }
@@ -178,14 +226,14 @@ bool otaStartUpdate(const char* url, const char* expectedSha256,
         Serial.println("OTA: no SHA-256 supplied — skipping verification");
     }
 
-    otaStatus = OTA_STATUS_APPLYING;
+    otaSetStatus(OTA_STATUS_APPLYING);
     if (!Update.end(true)) {
-        otaStatus = OTA_STATUS_FAILED;
+        otaSetStatus(OTA_STATUS_FAILED);
         if (Serial) Serial.printf("OTA: failed — end: %s\n", Update.errorString());
         return false;
     }
-    otaStatus = OTA_STATUS_SUCCESS;
     otaProgress = 100;
+    otaSetStatus(OTA_STATUS_SUCCESS);
     if (Serial) Serial.println("OTA: success — rebooting");
     return true;
 }
@@ -232,8 +280,8 @@ void otaCheckConfirm() {
 bool otaStartUpdate(const char* url, const char* expectedSha256,
                     uint8_t newMajor, uint8_t newMinor, uint8_t newPatch) {
     if (!otaVersionAllowed(newMajor, newMinor, newPatch)) return false;
-    otaStatus = OTA_STATUS_DOWNLOADING;
     otaProgress = 0;
+    otaSetStatus(OTA_STATUS_DOWNLOADING);
     if (Serial) Serial.printf("OTA: downloading from %s\n", url);
 
     // #890 — manual download loop instead of ESP8266httpUpdate so the image
@@ -246,27 +294,27 @@ bool otaStartUpdate(const char* url, const char* expectedSha256,
     HTTPClient http;
     http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
     if (!http.begin(client, url)) {
-        otaStatus = OTA_STATUS_FAILED;
+        otaSetStatus(OTA_STATUS_FAILED);
         if (Serial) Serial.println("OTA: failed — bad URL");
         return false;
     }
     int code = http.GET();
     if (code != HTTP_CODE_OK) {
         http.end();
-        otaStatus = OTA_STATUS_FAILED;
+        otaSetStatus(OTA_STATUS_FAILED);
         if (Serial) Serial.printf("OTA: failed — HTTP %d\n", code);
         return false;
     }
     int total = http.getSize();
     if (total <= 0) {
         http.end();
-        otaStatus = OTA_STATUS_FAILED;
+        otaSetStatus(OTA_STATUS_FAILED);
         if (Serial) Serial.println("OTA: failed — no Content-Length");
         return false;
     }
     if (!Update.begin((size_t)total)) {
         http.end();
-        otaStatus = OTA_STATUS_FAILED;
+        otaSetStatus(OTA_STATUS_FAILED);
         if (Serial) { Serial.print("OTA: failed — begin: "); Update.printError(Serial); }
         return false;
     }
@@ -282,6 +330,7 @@ bool otaStartUpdate(const char* url, const char* expectedSha256,
     uint8_t* held    = bufB;
     int      heldLen = 0;
     int received = 0;
+    uint8_t lastReport = 0;           // #B3 — last CMD_OTA_STATUS progress %
     unsigned long lastData = millis();
     WiFiClient* stream = http.getStreamPtr();
     while (received < total) {
@@ -299,13 +348,17 @@ bool otaStartUpdate(const char* url, const char* expectedSha256,
                 if (heldLen > 0 && (int)Update.write(held, (size_t)heldLen) != heldLen) {
                     http.end();
                     Update.end(false);   // bytes remain → discard update
-                    otaStatus = OTA_STATUS_FAILED;
+                    otaSetStatus(OTA_STATUS_FAILED);
                     if (Serial) { Serial.print("OTA: failed — write: "); Update.printError(Serial); }
                     return false;
                 }
                 uint8_t* t = held; held = cur; cur = t;
                 heldLen = n;
                 otaProgress = (uint8_t)((int32_t)received * 100L / total);
+                if ((uint8_t)(otaProgress - lastReport) >= 10) {
+                    lastReport = otaProgress;
+                    otaSendStatus();   // #B3 — ≤10 datagrams per download
+                }
                 lastData = millis();
             }
         } else {
@@ -318,7 +371,7 @@ bool otaStartUpdate(const char* url, const char* expectedSha256,
 
     if (received != total) {
         Update.end(false);   // bytes remain → discard update
-        otaStatus = OTA_STATUS_FAILED;
+        otaSetStatus(OTA_STATUS_FAILED);
         if (Serial) Serial.printf("OTA: failed — short read %d/%d\n", received, total);
         return false;
     }
@@ -327,10 +380,10 @@ bool otaStartUpdate(const char* url, const char* expectedSha256,
     br_sha256_out(&sha, digest);
 
     if (otaShaExpected(expectedSha256)) {
-        otaStatus = OTA_STATUS_VERIFYING;
+        otaSetStatus(OTA_STATUS_VERIFYING);
         if (!otaShaMatches(digest, expectedSha256)) {
             Update.end(false);   // held chunk unwritten → discard update
-            otaStatus = OTA_STATUS_FAILED;
+            otaSetStatus(OTA_STATUS_FAILED);
             if (Serial) Serial.println("OTA: failed — SHA-256 mismatch");
             return false;
         }
@@ -340,20 +393,20 @@ bool otaStartUpdate(const char* url, const char* expectedSha256,
     }
 
     // Hash verified (or not supplied) — write the held tail, then commit.
-    otaStatus = OTA_STATUS_APPLYING;
+    otaSetStatus(OTA_STATUS_APPLYING);
     if (heldLen > 0 && (int)Update.write(held, (size_t)heldLen) != heldLen) {
         Update.end(false);
-        otaStatus = OTA_STATUS_FAILED;
+        otaSetStatus(OTA_STATUS_FAILED);
         if (Serial) { Serial.print("OTA: failed — write: "); Update.printError(Serial); }
         return false;
     }
     if (!Update.end()) {
-        otaStatus = OTA_STATUS_FAILED;
+        otaSetStatus(OTA_STATUS_FAILED);
         if (Serial) { Serial.print("OTA: failed — end: "); Update.printError(Serial); }
         return false;
     }
-    otaStatus = OTA_STATUS_SUCCESS;
     otaProgress = 100;
+    otaSetStatus(OTA_STATUS_SUCCESS);
     if (Serial) Serial.println("OTA: success — rebooting");
     return true;
 }
@@ -370,6 +423,7 @@ bool otaStartUpdate(const char*, const char*, uint8_t, uint8_t, uint8_t) { retur
 void otaConfirmBoot() {}
 bool otaIsNewFirmware() { return false; }
 void otaCheckConfirm() {}
+void otaSetReportTarget(IPAddress) {}   // #B3 — Giga has no OTA, nothing to report
 
 #endif // board selection
 

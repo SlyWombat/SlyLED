@@ -30,6 +30,11 @@ constexpr uint8_t OTA_STATUS_REJECTED   = 6;  // anti-rollback
 extern volatile uint8_t otaStatus;
 extern volatile uint8_t otaProgress;  // 0-100
 
+// #B3 — where CMD_OTA_STATUS (0x51) reports go. Set by the trigger path
+// (UDP CMD_OTA_UPDATE sender / HTTP POST /ota client) before calling
+// otaStartUpdate(); 0.0.0.0 disables reporting. No-op stub on Giga.
+void otaSetReportTarget(IPAddress ip);
+
 // Start an OTA update. Returns true if update was applied (caller should reboot).
 // url: HTTP URL to firmware binary
 // expectedSha256: 64-char hex string, case-insensitive. Empty or all-zero

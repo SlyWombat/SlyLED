@@ -439,6 +439,7 @@ void gyroUdpHandleCmd(uint8_t cmd, IPAddress sender,
             if (Serial)
                 Serial.printf("[GyroUDP] OTA v%d.%d.%d url=%s\n",
                               newMaj, newMin, newPat, otaUrl);
+            otaSetReportTarget(sender);   // #B3 — CMD_OTA_STATUS to the trigger source
             bool ok = otaStartUpdate(otaUrl, otaSha, newMaj, newMin, newPat);
             if (ok) {
                 delay(500);
