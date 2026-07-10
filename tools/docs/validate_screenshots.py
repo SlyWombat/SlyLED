@@ -53,47 +53,20 @@ DOC_GLOBS = [
 SPA_DIRS = [ROOT / "desktop" / "shared" / "spa"]
 
 # Capture-session leftovers that predate the recursive orphan check
-# (#898 extended it to subdirectories, 2026-07-09). Nothing references
-# these; they are intermediate frames from the #533 walkthrough capture
-# runs, kept pending a triage pass (delete or reference — see #898
-# follow-up). Do NOT add new entries: a new unreferenced capture is a
-# bug this check exists to catch.
+# (#898 extended it to subdirectories, 2026-07-09). Triaged 2026-07-10
+# (B7): 30 superseded/intermediate frames from the #533 walkthrough
+# capture runs were deleted; 03a-discover.png replaced the mis-captured
+# 03a-discover-hardware.png. The four below are the step-11 tracking
+# sequence — kept because chapter 8 (Track Action) has no screenshots
+# yet and these should be referenced from docs/src/{en,fr}/
+# 08-track-actions.md in the next docs-content pass. Do NOT add new
+# entries: a new unreferenced capture is a bug this check exists to
+# catch.
 GRANDFATHERED_ORPHANS = {
-    "walkthrough/02-file-menu.png",
-    "walkthrough/03-dmx-section.png",
-    "walkthrough/03-settings-tab.png",
-    "walkthrough/03a-discover.png",
-    "walkthrough/04-add-fixture-dialog.png",
-    "walkthrough/04-edit-350w-spot-fixed.png",
-    "walkthrough/04-edit-350w-spot.png",
-    "walkthrough/04-edit-mh1-sly-fixed.png",
-    "walkthrough/04-edit-mh1-sly.png",
-    "walkthrough/04-edit-mh2-sly-fixed.png",
-    "walkthrough/04-edit-mh2-sly.png",
-    "walkthrough/04-fixture-type-select.png",
-    "walkthrough/04-setup-before.png",
-    "walkthrough/04c-layout-positions.png",
-    "walkthrough/06-cameras.png",
-    "walkthrough/06b-cam2-added.png",
-    "walkthrough/07-calibrate.png",
-    "walkthrough/09b-red-set.png",
     "walkthrough/11a-tracking-ui.png",
     "walkthrough/11a-tracking.png",
     "walkthrough/11b-track-action.png",
     "walkthrough/11c-floor-target.png",
-    "walkthrough/4-mh1-sly.png",
-    "walkthrough/4-mh2-sly.png",
-    "walkthrough/5-350w-spot.png",
-    "walkthrough/cam-add-camera-type.png",
-    "walkthrough/cam-add-modal.png",
-    "walkthrough/cam-after-add.png",
-    "walkthrough/cam-ip-filled.png",
-    "walkthrough/cam2-filled.png",
-    "walkthrough/cam3-after-add.png",
-    "walkthrough/positions.png",
-    "walkthrough/profile-search-mh.png",
-    "walkthrough/version-check.png",
-    "walkthrough/version-check2.png",
 }
 
 # Markdown image: ![alt](path)  — capture alt + path.
