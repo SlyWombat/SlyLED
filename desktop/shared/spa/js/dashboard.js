@@ -31,6 +31,8 @@ function loadDash(){
     });
     refreshRunnerStatus();
     dashRunnerTimer=setInterval(refreshRunnerStatus,1000);
+    // B4 — live grid renders off the shared /api/fixtures/live poller.
+    _dashGridJoinShared();
     if(!startupDone)_pollStartup();
     // Remote Controllers dashboard card (#492) — lists every entry in
     // /api/remotes/live (both gyro gyros auto-registered via UDP and
@@ -233,11 +235,28 @@ function dashRefresh(btn){
 var _dashChildren=null,_dashTimeline=null;
 // ── Fixture Monitor Grid (#303) ─────────────────────────────────────────────
 var _liveGridBuilt=false;
-function refreshLiveGrid(){
+// B4 (#859 missed spot) — the grid used to issue its own 1 Hz
+// GET /api/fixtures/live from refreshRunnerStatus while the shared 5 Hz
+// poller (app.js `_sharedFixLive`) already serves both 3D viewports.
+// Now it registers as a listener and subsamples the 200 ms feed back
+// down to the grid's original 1 Hz render cadence — one request stream
+// total, no extra orchestrator load. The listener is dropped by
+// `_clearTabTimers()` when the operator leaves the Dashboard tab.
+var _dashGridLastMs=0;
+function _dashGridJoinShared(){
+  _dashGridLastMs=0;
+  _sharedFixLiveAdd('dashGrid',function(d){
+    var now=Date.now();
+    if(now-_dashGridLastMs<900)return;  // 5 Hz feed → 1 Hz grid render
+    _dashGridLastMs=now;
+    _dashRenderLiveGrid(d);
+  });
+}
+function _dashRenderLiveGrid(d){
   var grid=document.getElementById('dash-live-grid');
   var label=document.getElementById('dash-live-label');
   if(!grid)return;
-  ra('GET','/api/fixtures/live',null,function(d){
+  {
     if(!d||!d.fixtures){
       if(!_liveGridBuilt){grid.innerHTML='<span style="color:#888;font-size:.82em">No fixtures</span>';_liveGridBuilt=true;}
       return;
@@ -329,11 +348,10 @@ function refreshLiveGrid(){
         }
       });
     }
-  });
+  }
 }
 
 function refreshRunnerStatus(){
-  refreshLiveGrid();
   // Refresh objects so patrol/tracking targets update in 3D view
   ra('GET','/api/objects',null,function(objs){
     if(objs){_objects=objs;if(_s3d.inited)_s3dRenderObjects();}

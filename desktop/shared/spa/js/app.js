@@ -315,6 +315,10 @@ function _clearTabTimers(){
   if(typeof _tlPlayTimer!=='undefined'&&_tlPlayTimer){clearInterval(_tlPlayTimer);_tlPlayTimer=null;_tlPlaying=false;}
   // #810 — stop the live aim poll when leaving a live tab; restarts on next _emuStartTimer().
   if(typeof _emuStopLivePoll==='function')_emuStopLivePoll();
+  // B4 — dashboard live grid subscribes to the shared fixtures/live
+  // poller as listener 'dashGrid' (dashboard.js); drop it on tab switch
+  // so a hidden Dashboard doesn't keep the 5 Hz poll alive by itself.
+  _sharedFixLiveRemove('dashGrid');
 }
 // #690-followup — warn before navigating away (tab close, refresh) when
 // any dirty form is open. Currently covers the profile editor and the
