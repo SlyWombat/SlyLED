@@ -18,6 +18,7 @@
  */
 
 #include "MmwConfig.h"
+#include "MmwHttp.h"
 #include "MmwNet.h"
 #include "MmwOta.h"
 #include "MmwProtocol.h"
@@ -41,6 +42,7 @@ void setup() {
 
   mmwNetBegin();     // WiFi (secrets + NVS override), hostname, NTP
   mmwUdpBegin();     // bind 4210, broadcast discovery PONG
+  mmwHttpBegin();    // status/config page (no-op until WiFi is up)
   mmwUartBegin();    // radar UART + multi-target mode
 }
 
@@ -48,6 +50,7 @@ void loop() {
   mmwNetPoll();      // WiFi reconnect supervision
   mmwUartPoll();     // pump radar bytes
   mmwUdpPoll();      // PING / STATUS / OTA
+  mmwHttpPoll();     // status page / WiFi provisioning
 
   uint32_t now = millis();
 

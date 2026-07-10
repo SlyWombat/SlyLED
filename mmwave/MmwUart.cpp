@@ -107,8 +107,9 @@ void mmwUartPoll() {
 
 uint8_t mmwUartTargets(MmwTarget out[MMW_MAX_TARGETS], bool* fresh) {
   for (uint8_t i = 0; i < MMW_MAX_TARGETS; i++) out[i] = latest[i];
-  if (fresh) { *fresh = latestFresh; }
-  latestFresh = false;
+  // fresh==nullptr callers (STATUS_RESP, the HTTP page) are peekers — they
+  // must not consume the freshness edge the UDP send loop keys on.
+  if (fresh) { *fresh = latestFresh; latestFresh = false; }
   return latestCount;
 }
 
