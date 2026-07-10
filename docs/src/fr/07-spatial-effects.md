@@ -1,4 +1,4 @@
-## 6. Effets spatiaux
+## 7. Effets spatiaux
 
 ### Effets spatiaux vs actions classiques
 - **Actions classiques** (Solide, Chenillard, Arc-en-ciel, etc.) : S'executent localement sur chaque Performer. Motif base sur l'index des pixels. Lorsqu'elles sont assignees a des projecteurs DMX, les actions classiques sont automatiquement converties en segments de scene DMX avec les valeurs par defaut appropriees pour le variateur, le pan/tilt.

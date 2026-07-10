@@ -1,5 +1,5 @@
 <!-- review-status: pending -->
-## 2. Guide des plateformes
+## 3. Guide des plateformes
 
 ### Bureau Windows (SPA)
 L'interface principale de conception et de contrôle. SPA complète à 7 onglets avec mise en page 2D/3D, éditeur de Timeline, effets spatiaux, profils DMX et gestion du firmware.

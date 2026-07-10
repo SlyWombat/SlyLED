@@ -148,12 +148,12 @@ fr:
   fragment: docs/build/fr/help/02-walkthrough.html
 - slug: 03-platform-guide
   file: docs/src/fr/03-platform-guide.md
-  title: 2. Guide des plateformes
+  title: 3. Guide des plateformes
   lang: fr
   fragment: docs/build/fr/help/03-platform-guide.html
 - slug: 04-fixture-setup
   file: docs/src/fr/04-fixture-setup.md
-  title: 3. Configuration des projecteurs
+  title: 4. Configuration des projecteurs
   lang: fr
   fragment: docs/build/fr/help/04-fixture-setup.html
 - slug: 05-stage-layout
@@ -168,7 +168,7 @@ fr:
   fragment: docs/build/fr/help/06-stage-objects.html
 - slug: 07-spatial-effects
   file: docs/src/fr/07-spatial-effects.md
-  title: 6. Effets spatiaux
+  title: 7. Effets spatiaux
   lang: fr
   fragment: docs/build/fr/help/07-spatial-effects.html
 - slug: 08-track-actions
@@ -178,22 +178,22 @@ fr:
   fragment: docs/build/fr/help/08-track-actions.html
 - slug: 09-building-timeline
   file: docs/src/fr/09-building-timeline.md
-  title: 8. Construction d'une Timeline
+  title: 9. Construction d'une Timeline
   lang: fr
   fragment: docs/build/fr/help/09-building-timeline.html
 - slug: 10-baking-playback
   file: docs/src/fr/10-baking-playback.md
-  title: 9. Compilation et lecture
+  title: 10. Compilation et lecture
   lang: fr
   fragment: docs/build/fr/help/10-baking-playback.html
 - slug: 11-show-preview
   file: docs/src/fr/11-show-preview.md
-  title: 10. Emulateur de previsualisation
+  title: 11. Emulateur de previsualisation
   lang: fr
   fragment: docs/build/fr/help/11-show-preview.html
 - slug: 12-dmx-profiles
   file: docs/src/fr/12-dmx-profiles.md
-  title: 11. Profils de projecteurs DMX
+  title: 12. Profils de projecteurs DMX
   lang: fr
   fragment: docs/build/fr/help/12-dmx-profiles.html
 - slug: 13-preset-shows
@@ -213,7 +213,7 @@ fr:
   fragment: docs/build/fr/help/15-firmware-ota.html
 - slug: 16-system-limits
   file: docs/src/fr/16-system-limits.md
-  title: 15. Limites du systeme
+  title: 16. Limites du systeme
   lang: fr
   fragment: docs/build/fr/help/16-system-limits.html
 - slug: 17-troubleshooting

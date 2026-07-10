@@ -334,7 +334,7 @@ Pour recharger : Paramètres → Projet → **Import** → sélectionnez le fich
 ---
 
 <!-- review-status: pending -->
-## 2. Guide des plateformes
+## 3. Guide des plateformes
 
 ### Bureau Windows (SPA)
 L'interface principale de conception et de contrôle. SPA complète à 7 onglets avec mise en page 2D/3D, éditeur de Timeline, effets spatiaux, profils DMX et gestion du firmware.
@@ -399,7 +399,7 @@ Chaque Performer propose une page de configuration à 3 onglets à l'adresse `ht
 
 ---
 
-## 3. Configuration des projecteurs
+## 4. Configuration des projecteurs
 
 ### Que sont les projecteurs ?
 Un projecteur est l'entite principale sur la scene. Il encapsule le materiel physique et ajoute des attributs au niveau de la scene :
@@ -620,7 +620,7 @@ profondeur), pas `[0,6, 0,6, 1,8]`.
 
 ---
 
-## 6. Effets spatiaux
+## 7. Effets spatiaux
 
 ### Effets spatiaux vs actions classiques
 - **Actions classiques** (Solide, Chenillard, Arc-en-ciel, etc.) : S'executent localement sur chaque Performer. Motif base sur l'index des pixels. Lorsqu'elles sont assignees a des projecteurs DMX, les actions classiques sont automatiquement converties en segments de scene DMX avec les valeurs par defaut appropriees pour le variateur, le pan/tilt.
@@ -755,7 +755,7 @@ chronologie de spectacle :
 
 ---
 
-## 8. Construction d'une Timeline
+## 9. Construction d'une Timeline
 
 1. Allez dans l'onglet **Execution** puis **+ Nouvelle Timeline**
 2. Definissez le nom et la duree
@@ -765,7 +765,7 @@ chronologie de spectacle :
 
 ---
 
-## 9. Compilation et lecture
+## 10. Compilation et lecture
 
 ### Compiler
 Compile une Timeline en instructions d'action minimales par Performer :
@@ -780,7 +780,7 @@ Compile une Timeline en instructions d'action minimales par Performer :
 
 ---
 
-## 10. Emulateur de previsualisation
+## 11. Emulateur de previsualisation
 
 Le bureau et Android incluent une previsualisation en temps reel du spectacle :
 
@@ -814,7 +814,7 @@ L'emulateur affiche correctement les installations DMX uniquement (sans Performe
 
 ---
 
-## 11. Profils de projecteurs DMX
+## 12. Profils de projecteurs DMX
 
 ### Profils integres
 | Profil | Canaux | Fonctionnalites |
@@ -1456,7 +1456,7 @@ immédiatement les versions correspondant à son tag de release.
 
 ---
 
-## 15. Limites du systeme
+## 16. Limites du systeme
 
 | Ressource | Teste | Maximum recommande |
 |-----------|-------|--------------------|

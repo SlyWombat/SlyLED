@@ -1,4 +1,4 @@
-## 3. Configuration des projecteurs
+## 4. Configuration des projecteurs
 
 ### Que sont les projecteurs ?
 Un projecteur est l'entite principale sur la scene. Il encapsule le materiel physique et ajoute des attributs au niveau de la scene :

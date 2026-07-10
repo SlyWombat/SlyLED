@@ -1,4 +1,4 @@
-## 8. Construction d'une Timeline
+## 9. Construction d'une Timeline
 
 1. Allez dans l'onglet **Execution** puis **+ Nouvelle Timeline**
 2. Definissez le nom et la duree

@@ -1,4 +1,4 @@
-## 11. Profils de projecteurs DMX
+## 12. Profils de projecteurs DMX
 
 ### Profils integres
 | Profil | Canaux | Fonctionnalites |

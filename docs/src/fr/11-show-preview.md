@@ -1,4 +1,4 @@
-## 10. Emulateur de previsualisation
+## 11. Emulateur de previsualisation
 
 Le bureau et Android incluent une previsualisation en temps reel du spectacle :
 
