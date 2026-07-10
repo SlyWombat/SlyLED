@@ -319,6 +319,15 @@ function _clearTabTimers(){
   // poller as listener 'dashGrid' (dashboard.js); drop it on tab switch
   // so a hidden Dashboard doesn't keep the 5 Hz poll alive by itself.
   _sharedFixLiveRemove('dashGrid');
+  // B4 — /api/remotes/live pollers are tab-scoped. Both the Dashboard
+  // Remote Controllers cards timer (dashboard.js loadDash) and the 3D
+  // remotes viz poll (scene-3d.js s3dPollRemotes) used to run at 1 Hz
+  // forever once started, from ANY tab — hidden tabs are display:none,
+  // so their getElementById guards kept passing. loadDash re-arms the
+  // cards timer on Dashboard entry; showTab re-arms the viz poll on the
+  // tabs that actually render the shared 3D scene.
+  if(window._remotesTimer){clearInterval(window._remotesTimer);window._remotesTimer=null;}
+  if(typeof s3dStopPollRemotes==='function')s3dStopPollRemotes();
 }
 // #690-followup — warn before navigating away (tab close, refresh) when
 // any dirty form is open. Currently covers the profile editor and the
@@ -404,6 +413,11 @@ function showTab(t){
   }
   else if(t==='settings'){loadSettings();loadDmxSettings();}
   else if(t==='firmware')loadFirmware();
+  // B4 — re-arm the 3D remotes viz poll on tabs that render the shared
+  // scene (dash / runtime / shows / layout). s3dInit starts it on first
+  // init; _clearTabTimers above stopped it, so revisits need this.
+  // s3dPollRemotes is re-entry-guarded (no-op while already polling).
+  if(_s3d.inited&&(liveTab||t==='layout')&&typeof s3dPollRemotes==='function')s3dPollRemotes();
 }
 
 function _btnSaving(btn){if(!btn)return;btn.dataset.origHtml=btn.innerHTML;btn.dataset.origBg=btn.style.background;btn.textContent='Saving...';btn.disabled=true;btn.style.background='#555';}
