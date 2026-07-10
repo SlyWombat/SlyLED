@@ -6,6 +6,7 @@
 
 ### Revision history
 
+- **v2** (2026-07-10): status annotation after two days of execution. DONE: all of §2 (C1–C10), §3 (E1–E5), §5 (G1–G5), §4 MMwave software (#908's code side, #909–#913), and from §6: B1 phase 1 + B2 (parent_server 20.9k → 18.1k lines, waitress + token gate), B3 (five firmware fixes, two flagged for bench — #921), B4 (17× draw calls, connection pill), B5 radar subset (+ iOS objects gap closed), B7. CI live and green (unit ~4 min incl. all radar suites; weekly regression 7/7 locally after #920 triage — which also fixed the real #810 idle-cone bug). REMAINING: hardware-gated — #908 bench, #920/#898 rig recapture, #921 firmware bench; scheduled — #922 (0x51 orchestrator half), #923 (B1 phase 2 + Giga SPA strip), #924 (s3d poller leak), #925 (iOS drift audit + docs rebuild), #739 (pre-existing P0), B6 (repo weight — held for an operator decision on history rewrite vs LFS).
 - **v1** (2026-07-09): initial. Review findings triaged into: critical fixes (§2), MMwave-blocking enablers (§3), the MMwave build itself (§4), guardrails (§5), and debt batches (§6); sequenced in §7; issue mapping in §8.
 
 ---
