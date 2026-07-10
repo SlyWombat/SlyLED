@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Review tests/build_manual_from_md.py with Gemini.
+"""Review tools/docs/build_manual_from_md.py with Gemini.
 
 Hand-rolled markdown → docx / html / pdf converter added in 4b776d9 as part
 of the #662/#663/#664 documentation work. ~400 lines, no test coverage,
@@ -50,13 +50,13 @@ def _read(path):
     return Path(ROOT / path).read_text(encoding='utf-8')
 
 
-converter = _read('tests/build_manual_from_md.py')
+converter = _read('tools/docs/build_manual_from_md.py')
 manual_en = _read('docs/USER_MANUAL.md')
 manual_fr = _read('docs/USER_MANUAL_fr.md')
 
 prompt = f'''You are a senior Python engineer reviewing a hand-rolled markdown → docx / html / pdf
 converter for a stage-lighting product called SlyLED. The file under review is
-`tests/build_manual_from_md.py`; it is called from a CI-free doc-build workflow to
+`tools/docs/build_manual_from_md.py`; it is called from a CI-free doc-build workflow to
 regenerate `docs/USER_MANUAL.{{docx,pdf}}` and `docs/USER_MANUAL_fr.{{docx,pdf}}` whenever
 the canonical markdown changes. There is **zero test coverage**. Bugs in this parser silently
 corrupt every manual output going forward — this is the high-leverage surface in the repo right
@@ -82,7 +82,7 @@ now. Review it like you'd review a linter or a codegen tool: edge cases win.
 - The Mermaid diagrams currently render as source-code blocks with a caption because there is
   no local Mermaid renderer. That is intentional for now (tracked by #667).
 
-## File under review: tests/build_manual_from_md.py
+## File under review: tools/docs/build_manual_from_md.py
 
 ```python
 {converter}
@@ -256,7 +256,7 @@ Organise your output as:
 '''
 
 client = genai.Client(api_key=api_key)
-print("Sending tests/build_manual_from_md.py + real manuals to Gemini...")
+print("Sending tools/docs/build_manual_from_md.py + real manuals to Gemini...")
 print(f"Prompt size: {len(prompt):,} chars")
 response = client.models.generate_content(
     model='gemini-2.5-pro',
@@ -266,7 +266,7 @@ response = client.models.generate_content(
 review = response.text
 out_path = ROOT / 'tools' / 'build_manual_from_md_review.md'
 out_path.write_text(
-    f"# Gemini Review: tests/build_manual_from_md.py\n\n"
+    f"# Gemini Review: tools/docs/build_manual_from_md.py\n\n"
     f"_Generated {os.popen('date -u +%Y-%m-%dT%H:%M:%SZ').read().strip()} via {Path(__file__).name}._\n\n"
     + review,
     encoding='utf-8',

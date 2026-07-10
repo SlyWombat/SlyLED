@@ -98,8 +98,9 @@ def _have(tool: str) -> bool:
 def build_html(lang: str) -> Path:
     """Render the assembled markdown to themed HTML.
 
-    Pandoc-based when available. Falls back to the existing
-    ``build_manual_from_md.py`` HTML step when pandoc is missing.
+    Pandoc-based when available. Falls back to the
+    ``tools/docs/build_manual_from_md.py`` HTML step when pandoc is
+    missing.
     """
     out_dir = BUILD / lang / 'html'
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -118,10 +119,9 @@ def build_html(lang: str) -> Path:
         log.info('html [%s]: pandoc → %s', lang, out.relative_to(ROOT))
         subprocess.run(cmd, check=True)
     else:
-        # Legacy fallback — use tests/build_manual_from_md.py which has its
-        # own python-markdown → HTML path. The code moves under tools/docs/
-        # in #665; for now import by relative path.
-        legacy = ROOT / 'tests' / 'build_manual_from_md.py'
+        # Legacy fallback — build_manual_from_md.py (moved under tools/docs/
+        # per #665) has its own python-markdown → HTML path.
+        legacy = TOOLS / 'build_manual_from_md.py'
         if not legacy.exists():
             raise SystemExit('pandoc not found and legacy renderer missing')
         log.warning('html [%s]: pandoc unavailable — using legacy fallback', lang)
@@ -217,14 +217,14 @@ def build_pdf(lang: str) -> Path:
 
 
 def build_docx(lang: str) -> Path:
-    """Delegate to the existing markdown→docx renderer (tests/
-    build_manual_from_md.py) until #665 folds it into tools/docs/.
+    """Delegate to the existing markdown→docx renderer
+    (tools/docs/build_manual_from_md.py — moved from tests/ per #665).
 
     The legacy script always emits EN and tacks on FR when --fr is
     passed; it has no --lang flag. We map our per-language loop onto
     its CLI: lang='en' → no flag; lang='fr' → --fr (which rebuilds EN
     too, but that's a cheap no-op on the second pass)."""
-    legacy = ROOT / 'tests' / 'build_manual_from_md.py'
+    legacy = TOOLS / 'build_manual_from_md.py'
     if not legacy.exists():
         raise SystemExit('Legacy docx renderer not found')
     log.info('docx [%s]: delegating to %s', lang, legacy.relative_to(ROOT))

@@ -15,9 +15,9 @@ docs/SlyLED_User_Manual.docx / .pdf (the hand-crafted artefacts):
     docs/USER_MANUAL_fr.pdf      (with --fr)
 
 Usage:
-    /usr/bin/python3 tests/build_manual_from_md.py
-    /usr/bin/python3 tests/build_manual_from_md.py --fr
-    /usr/bin/python3 tests/build_manual_from_md.py --no-pdf
+    /usr/bin/python3 tools/docs/build_manual_from_md.py
+    /usr/bin/python3 tools/docs/build_manual_from_md.py --fr
+    /usr/bin/python3 tools/docs/build_manual_from_md.py --no-pdf
 
 Needs python-docx (for .docx) and Playwright Chromium (for .pdf). The
 /usr/bin/python3 environment on this machine has both.
@@ -44,7 +44,7 @@ except ImportError:
     print("ERROR: python-docx not installed", file=sys.stderr)
     sys.exit(1)
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 DOCS = ROOT / "docs"
 
 

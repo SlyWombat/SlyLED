@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify each Gemini-review finding against tests/build_manual_from_md.py.
+"""Verify each Gemini-review finding against tools/docs/build_manual_from_md.py.
 
 Reports PASS (no bug or not triggered) / FAIL (bug reproduced) per finding.
 Run: /usr/bin/python3 tests/verify_build_manual_findings.py
@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / 'tests'))
+sys.path.insert(0, str(ROOT / 'tools' / 'docs'))
 
 import build_manual_from_md as b
 
@@ -153,7 +153,7 @@ check(
 )
 
 # ── 8. file:// URL portability — check if as_uri() is used
-src = (ROOT / 'tests' / 'build_manual_from_md.py').read_text()
+src = (ROOT / 'tools' / 'docs' / 'build_manual_from_md.py').read_text()
 check(
     "8. Uses html_path.as_uri() for file:// (portable)",
     "as_uri()" not in src and 'file://{' in src,  # FAIL if uses f-string instead of as_uri
