@@ -376,7 +376,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument('--lang', choices=('en', 'fr', 'all'), default='all')
     p.add_argument('--format', choices=FORMATS + ('all',), default='all')
     p.add_argument('--skip-screenshots', action='store_true',
-                   help='Use existing docs/src/screenshots/ without recapture')
+                   help='Use existing docs/screenshots/ without recapture')
     p.add_argument('--skip-diagrams', action='store_true',
                    help='Skip mermaid .mmd → .svg render (#667)')
     p.add_argument('--deploy', action='store_true',

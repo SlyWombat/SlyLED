@@ -30,7 +30,7 @@ python tools/docs/build.py --format website --deploy
 docs/src/en/*.md       ─┐
 docs/src/fr/*.md       ─┼── synced at build time ──► website/src/content/docs/{en,fr}/
 docs/src/marketing/   ──┘                            website/src/content/marketing/
-docs/src/screenshots/ ──► website/public/screenshots/
+docs/screenshots/     ──► website/public/screenshots/
 docs/build/diagrams/  ──► website/public/diagrams/
 ```
 
