@@ -3,7 +3,8 @@
  *
  * Giga R1: mbed UnbufferedSerial on Serial1 pins (PA_0/PI_9).
  *          Break generated via slow-baud 0x00 byte (~143μs low).
- * ESP32:   HardwareSerial(2) on GPIO17 with pin-toggle break.
+ * ESP32:   HardwareSerial(2) on GPIO17; break via the same slow-baud 0x00
+ *          trick (updateBaudRate dip — no per-frame driver reinstall, #B3).
  *
  * DMX-512 frame: BREAK (≥88μs low) + MAB (≥8μs high) + start code + 512 data bytes
  */
@@ -38,6 +39,11 @@ volatile bool dmxSelfTestOk = false;
   #include <HardwareSerial.h>
   static HardwareSerial DmxSerial(2);
   #define DMX_SERIAL DmxSerial
+  // #B3 — same slow-baud break trick as the Giga path above: one 0x00 at
+  // 76923 baud 8N2 holds TX low for start + 8 data bits = 9 × 13 µs =
+  // 117 µs (≥88 µs BREAK), then the two stop bits give 26 µs of mark
+  // (≥8 µs MAB) before the frame data starts at 250 kbaud.
+  static constexpr uint32_t DMX_BREAK_BAUD = 76923;
 #endif
 
 // ── Config persistence ───────────────────────────────────────────────────────
@@ -228,14 +234,22 @@ void dmxSendFrame() {
   delayMicroseconds(800);  // inter-frame gap
 
 #else
-  // ESP32: pin-toggle break
-  DmxSerial.end();
-  pinMode(DMX_TX_PIN, OUTPUT);
-  digitalWrite(DMX_TX_PIN, LOW);
-  delayMicroseconds(120);
-  digitalWrite(DMX_TX_PIN, HIGH);
-  delayMicroseconds(12);
-  DmxSerial.begin(DMX_BAUD, SERIAL_8N2, -1, DMX_TX_PIN);
+  // ESP32 (#B3): BREAK via momentary baud dip, mirroring the Giga path
+  // above. Replaces the old end() + pin-toggle + begin() cycle, which tore
+  // the UART driver down and reinstalled it 40×/s (uart_driver_delete /
+  // uart_driver_install per frame: heap + interrupt-allocator churn, and a
+  // GPIO-matrix re-mux glitch on TX while the driver was down).
+  // updateBaudRate() maps to uart_set_baudrate — divider registers only,
+  // no driver reinstall. flush() blocks until the shifter is idle, so the
+  // break byte fully clears the line before the baud switches back.
+  //
+  // *** NEEDS BENCH VALIDATION on the physical RS-485 bridge before the
+  // *** next dmx-bridge release: compile-verified only, no DMX hardware on
+  // *** this rig. Verify ≥88 µs break / ≥8 µs MAB on a scope + a fixture.
+  DmxSerial.updateBaudRate(DMX_BREAK_BAUD);
+  DmxSerial.write((uint8_t)0x00);
+  DmxSerial.flush();   // wait for the 117 µs break byte to leave the shifter
+  DmxSerial.updateBaudRate(DMX_BAUD);
   DmxSerial.write(dmxBuf, DMX_UNIVERSE_MAX + 1);
   DmxSerial.flush();
 #endif
