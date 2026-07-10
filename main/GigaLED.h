@@ -62,5 +62,12 @@ void gigaLedInit();
 void showSafe();
 void clearAndShow();
 
+// Brightness scaler applied by showSafe() (0-255). Wired to the
+// CMD_SET_BRIGHTNESS-fed childBrightness at every show — the Giga twin of
+// ChildLED.cpp's FastLED.setBrightness(childBrightness).
+namespace GigaLEDInternal {
+  void setBrightness(uint8_t b);
+}
+
 #endif  // BOARD_GIGA_CHILD
 #endif  // GIGALED_H

@@ -46,6 +46,8 @@ uint8_t  qadd8(uint8_t a, uint8_t b) { uint16_t t = a + b; return t > 255 ? 255 
 
 #ifdef BOARD_GIGA_CHILD
 
+#include "Child.h"   // childBrightness — CMD_SET_BRIGHTNESS (0x22) target
+
 CRGB leds[NUM_LEDS];
 
 static uint8_t _brightness = 255;
@@ -64,6 +66,11 @@ void gigaLedInit() {
 // ── Show — write leds[0] to hardware using on/off thresholding ───────────────
 
 void showSafe() {
+  // Mirror the ESP32/D1 showSafe() pattern (ChildLED.cpp): re-apply the
+  // CMD_SET_BRIGHTNESS value on every show. Without this, _brightness sat
+  // at its boot value of 255 forever and 0x22 was a silent no-op on the
+  // Giga child.
+  GigaLEDInternal::setBrightness(childBrightness);
   CRGB c = leds[0];
   // Apply brightness
   uint8_t r = (uint16_t)c.r * _brightness / 255;
@@ -85,7 +92,7 @@ void clearAndShow() {
   showSafe();
 }
 
-// ── Brightness (called from ChildLED.cpp via childBrightness) ────────────────
+// ── Brightness (fed from childBrightness by showSafe() above) ────────────────
 
 namespace GigaLEDInternal {
   void setBrightness(uint8_t b) { _brightness = b; }
