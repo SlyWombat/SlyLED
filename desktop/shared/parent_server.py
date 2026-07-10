@@ -1347,6 +1347,13 @@ def _load_step_pkt(idx, total, step, child, delay_ms=0):
 
 app = Flask(__name__, static_folder=None)
 
+# B1 blueprint split — hand this module object to the shared-state bridge so
+# extracted Blueprint modules (imported further down, at the positions their
+# sections used to occupy) can reach the state that stays defined here. Must
+# run before any `import orch_<section>` below. See orch_state.py.
+import orch_state
+orch_state.bind(sys.modules[__name__])
+
 #  "  "  Status  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
 @app.get("/favicon.ico")
