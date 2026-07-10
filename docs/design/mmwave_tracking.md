@@ -64,7 +64,7 @@ The boards in hand are the "G550" Rd-03D revision: a fitted 4-pin connector labe
 
 Direct stacking on the DevKit headers was evaluated and rejected: no consecutive header run matches the pad sequence (radar wants 5V/GND four positions apart; J1 has them adjacent, J3 has no 5V), the pad pitch isn't 2.54 mm, and a board stacked over the DevKit sits on its WiFi antenna while putting the MCU in the radar's back lobe. Mechanical pattern for a compact node: radar at the enclosure face (antennas outward, metal backplate behind), DevKit behind/beside on standoffs, 4-wire pigtail between.
 
-`Serial1.begin(256000, SERIAL_8N1, /*rx=*/4, /*tx=*/5)`. No level shifter — radar UART logic is 3.3 V. Pin choice rationale: GPIO7/8/9 are strapping (8 = RGB LED), GPIO10/11 are the UART0 console (keep for flashing/logs), GPIO12/13 are native USB, and GPIO14 is PSRAM `SPICS1` on the N8R2 — GPIO0–6 are the free set; any pair works if 4/5 is inconvenient. Hardware UART required; 256000 baud is not reliable bit-banged.
+`Serial1.begin(256000, SERIAL_8N1, /*rx=*/2, /*tx=*/3)` (pins from `MmwConfig.h`). No level shifter — radar UART logic is 3.3 V. Pin choice rationale: GPIO7/8/9 are strapping (8 = RGB LED), GPIO10/11 are the UART0 console (keep for flashing/logs), GPIO12/13 are native USB, and GPIO14 is PSRAM `SPICS1` on the N8R2 — GPIO0–6 are the free set; any pair works if 2/3 is inconvenient. Hardware UART required; 256000 baud is not reliable bit-banged.
 
 ### 2.4 ESP32-C61 — the "newer board" risk, named explicitly
 
