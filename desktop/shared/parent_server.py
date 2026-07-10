@@ -17656,9 +17656,78 @@ def add_cors(response):
     if origin_host and origin_host == server_host:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-SlyLED-Confirm"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-SlyLED-Confirm, X-SlyLED-Token"
         response.headers.add("Vary", "Origin")
     return response
+
+#  ”  ”  Destructive-endpoint token gate (B2)  ”  ”  ”  ”  ”  ”  ”  ”  ”  ”  ”  ”  ”  ”  ”  ”  ”  ”  ”  ”  ”  ”
+
+# Optional shared-token gate on destructive endpoints. Default OFF: with no
+# token configured, behaviour is exactly as before. A token is configured by
+# either the SLYLED_API_TOKEN environment variable (takes precedence) or the
+# operator-editable settings key "apiToken" (POST /api/settings).
+#
+# The exact rule, when a token IS configured, per request to a destructive
+# path (any method except OPTIONS — CORS preflights carry no side effects):
+#   1. header X-SlyLED-Token matches the configured token
+#      (hmac.compare_digest)                                → allowed
+#   2. else, the request carries an Origin header whose HOST matches the
+#      host this request was addressed to (any port — the same rule the
+#      #893 CORS grant uses; browsers attach Origin to every POST, so the
+#      same-origin SPA keeps working with zero SPA changes, and a cross-
+#      site attacker page cannot forge its Origin)           → allowed
+#   3. otherwise                                             → 401
+#
+# Consequence: the token gates only cross-origin browser callers and
+# scripted/native callers (curl, python-requests, the mobile apps — they
+# send no Origin). Operators who set a token must add the X-SlyLED-Token
+# header to any script or mobile client that hits a destructive endpoint.
+# The pre-existing X-SlyLED-Confirm checks on /api/shutdown and /api/reset
+# are unchanged and evaluated after this gate.
+
+import hmac as _hmac
+
+_DESTRUCTIVE_EXACT = {
+    "/api/shutdown",         # kill the orchestrator process
+    "/api/reset",            # factory reset (wipe all project data)
+    "/api/firmware/flash",   # serial-flash a board
+    "/api/cameras/deploy",   # SSH+SCP deploy onto a camera node
+}
+
+def _is_destructive_path(path):
+    if path in _DESTRUCTIVE_EXACT:
+        return True
+    if path.startswith("/api/firmware/ota/"):                       # child OTA
+        return True
+    if path.startswith("/api/children/") and path.endswith("/reboot"):
+        return True
+    return False
+
+def _configured_api_token():
+    return os.environ.get("SLYLED_API_TOKEN") or _settings.get("apiToken") or ""
+
+@app.before_request
+def _destructive_token_gate():
+    if request.method == "OPTIONS" or not _is_destructive_path(request.path):
+        return None
+    token = _configured_api_token()
+    if not token:
+        return None                       # gate disabled — today's behaviour
+    supplied = request.headers.get("X-SlyLED-Token", "")
+    if supplied and _hmac.compare_digest(supplied, token):
+        return None
+    origin = request.headers.get("Origin", "")
+    if origin:
+        try:
+            origin_host = (urlsplit(origin).hostname or "").lower()
+        except ValueError:
+            origin_host = ""
+        server_host = (urlsplit("//" + request.host).hostname or "").lower()
+        if origin_host and origin_host == server_host:
+            return None                   # same-origin browser (the SPA)
+    return jsonify(ok=False,
+                   err="API token required — send header X-SlyLED-Token "
+                       "(configured via SLYLED_API_TOKEN or settings.apiToken)"), 401
 
 #  "  "  Shutdown  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -17705,6 +17774,30 @@ def spa_fallback(path):
     return resp
 
 #  "  "  Entry point  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
+
+def _resolve_server():
+    """B2 — pick the HTTP server. Returns ("waitress", serve_callable) when
+    waitress is importable, else ("flask", None). Split out from _serve so
+    tests can exercise the fallback decision without binding a port."""
+    try:
+        from waitress import serve
+        return "waitress", serve
+    except ImportError:
+        return "flask", None
+
+def _serve(host, port):
+    """B2 — serve `app` via waitress when available (production-grade WSGI:
+    bounded thread pool, no dev-server warning), falling back to the Flask
+    dev server so a source checkout without waitress behaves exactly as
+    before. Used by both launch paths (parent_server.py __main__ and
+    main.py's tray launcher)."""
+    kind, serve = _resolve_server()
+    if kind == "waitress":
+        print(f"  Serving via waitress on {host}:{port}")
+        serve(app, host=host, port=port, threads=16)
+    else:
+        print(f"  waitress not installed - using Flask dev server on {host}:{port}")
+        app.run(host=host, port=port, threaded=True, use_reloader=False)
 
 def _check_single_instance(port):
     """Check if another instance is already running on this port."""
@@ -17770,7 +17863,7 @@ if __name__ == "__main__":
     print(f"SlyLED Orchestrator  v{VERSION}")
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
-    app.run(host=args.host, port=args.port, threaded=True)
+    _serve(args.host, args.port)
 
 
 

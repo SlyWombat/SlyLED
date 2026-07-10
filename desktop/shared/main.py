@@ -239,9 +239,10 @@ def main():
 
     start_background_tasks()
 
-    # ── Flask thread ──────────────────────────────────────────────────────────
+    # ── HTTP server thread (B2: waitress when available, Flask dev fallback) ──
     def _run_flask():
-        app.run(host="0.0.0.0", port=args.port, threaded=True, use_reloader=False)
+        from parent_server import _serve
+        _serve("0.0.0.0", args.port)
 
     flask_thread = threading.Thread(target=_run_flask, daemon=True)
     flask_thread.start()

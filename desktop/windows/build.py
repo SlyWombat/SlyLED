@@ -138,6 +138,11 @@ args = [
     "--add-data", f"{SHARED / 'depth_runner.py'};.",
     "--add-data", f"{SHARED / 'camera_settings.py'};.",   # #623
     "--add-data", f"{SHARED / 'ollama_runtime.py'};.",    # #623
+    # B1 blueprint split - parent_server's extracted Blueprint modules
+    "--add-data", f"{SHARED / 'orch_state.py'};.",
+    "--add-data", f"{SHARED / 'orch_firmware.py'};.",
+    "--add-data", f"{SHARED / 'orch_camera_deploy.py'};.",
+    "--add-data", f"{SHARED / 'orch_project.py'};.",
     "--hidden-import=pystray",
     "--hidden-import=paramiko",
     "--hidden-import=numpy",
@@ -154,6 +159,9 @@ args = [
     "--add-data", f"{SHARED / 'local_audio_brightness.py'};.",
     "--collect-submodules=flask",
     "--collect-submodules=werkzeug",
+    # B2 - production WSGI server; imported lazily in parent_server._serve,
+    # so PyInstaller's static analysis never sees it without this.
+    "--collect-submodules=waitress",
     "--collect-submodules=esptool",
     "--collect-submodules=numpy",
     "--collect-submodules=cv2",
