@@ -7,7 +7,8 @@ Checks:
   1. Shared constants (magic, version, port, name lengths, shared CMD codes)
      have identical values in both headers.
   2. Shared packed structs (UdpHeader, PongString, PongPayload,
-     StatusRespPayload) have identical field sequences (type + name + array).
+     StatusRespPayload, OtaStatusPayload) have identical field sequences
+     (type + name + array).
   3. The MMwave 0x7x command codes don't collide with any command main/ defines.
 
 Pure text parsing — no compiler needed. Run: python3 tests/test_mmwave_wire_parity.py
@@ -28,7 +29,10 @@ SHARED_CONSTANTS = [
     "CMD_OTA_UPDATE", "CMD_OTA_STATUS",
 ]
 
-SHARED_STRUCTS = ["UdpHeader", "PongString", "PongPayload", "StatusRespPayload"]
+# OtaStatusPayload joined in #922 when the mmwave node started transmitting
+# CMD_OTA_STATUS — the struct is now duplicated across the two headers.
+SHARED_STRUCTS = ["UdpHeader", "PongString", "PongPayload", "StatusRespPayload",
+                  "OtaStatusPayload"]
 
 CONST_RE = re.compile(
     r"constexpr\s+\w+(?:_t)?\s+(\w+)\s*=\s*(0x[0-9A-Fa-f]+|\d+)\s*;"

@@ -877,6 +877,12 @@ def api_firmware_check():
             "type": c.get("type", ""),
             "status": c.get("status", 0),
             "downloadUrl": download_url,
+            # #922 — live OTA progress from CMD_OTA_STATUS (0x51), recorded
+            # by parent_server._handle_ota_status keyed by sender IP:
+            # {status, statusName, progress, updatedAt} or None when the
+            # child has never reported. Read through ps at call time so
+            # the store is the live one (orch_state bridge contract).
+            "ota": ps._ota_status_live.get(c.get("ip") or ""),
         })
 
     # #866 — `latest` field removed. Previously the fleet-max version

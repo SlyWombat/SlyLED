@@ -71,12 +71,16 @@ EXPECTED = {
 def run_table_coverage():
     table = ps._UDP_DISPATCH
     expected_cmds = {getattr(ps, name): (name, mlen) for name, mlen in EXPECTED.items()}
-    # #910 landed 0x70 MMW_TARGETS as the promised one-line registration;
-    # it is checked separately below (its wire truth is mmwave/
-    # MmwProtocol.h, not main/Protocol.h like the pre-#901 set).
-    ok("dispatch table covers exactly the pre-#901 command set + MMW_TARGETS",
-       set(table.keys()) == set(expected_cmds.keys()) | {ps.CMD_MMW_TARGETS},
-       f"extra={sorted(set(table) - set(expected_cmds) - {ps.CMD_MMW_TARGETS})} "
+    # #910 landed 0x70 MMW_TARGETS and #922 landed 0x51 OTA_STATUS as the
+    # promised one-line registrations; MMW_TARGETS is checked separately
+    # below (its wire truth is mmwave/MmwProtocol.h, not main/Protocol.h
+    # like the pre-#901 set) and OTA_STATUS has its own contract suite
+    # (tests/test_922_ota_status.py).
+    post_901 = {ps.CMD_MMW_TARGETS, ps.CMD_OTA_STATUS}
+    ok("dispatch table covers exactly the pre-#901 command set "
+       "+ MMW_TARGETS + OTA_STATUS",
+       set(table.keys()) == set(expected_cmds.keys()) | post_901,
+       f"extra={sorted(set(table) - set(expected_cmds) - post_901)} "
        f"missing={sorted(set(expected_cmds) - set(table))}")
     for cmd, (name, mlen) in sorted(expected_cmds.items()):
         entry = table.get(cmd)

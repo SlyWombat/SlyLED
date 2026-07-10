@@ -76,6 +76,17 @@ struct __attribute__((packed)) StatusRespPayload {
   uint32_t uptimeS;
 };  // 8 bytes
 
+// OtaStatusPayload — node→parent (2 bytes), CMD_OTA_STATUS (#922).
+// Fire-and-forget progress report to the CMD_OTA_UPDATE sender: once per
+// phase change + every ≥10% of download progress. Status codes are the
+// fleet's OTA_STATUS_* constants (main/OtaUpdate.h; local copies in
+// MmwOta.h). Parity with main/Protocol.h is gated by
+// tests/test_mmwave_wire_parity.py.
+struct __attribute__((packed)) OtaStatusPayload {
+  uint8_t status;          // OTA_STATUS_* code (MmwOta.h)
+  uint8_t progress;        // 0-100 (%)
+};  // 2 bytes; total packet = 8 + 2 = 10
+
 // ── MMwave payloads (new in 0x7x range — this file is their source of truth;
 //    the orchestrator handler (#910) must match) ──────────────────────────────
 

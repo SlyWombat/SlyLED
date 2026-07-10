@@ -186,9 +186,11 @@ struct __attribute__((packed)) ActionEventPayload {
 // (the CMD_OTA_UPDATE sender, or the POST /ota client): once per phase
 // change (downloading / verifying / applying / success / failed / rejected)
 // and at every ≥10% step of download progress. Transmitted by the boards
-// that support OTA — ESP32, D1 Mini, gyro, ESP32 DMX bridge; the Giga
-// variants have no OTA. Orchestrator-side consumption is a follow-up
-// (the mmwave node tracks otaState but does not transmit 0x51 yet either).
+// that support OTA — ESP32, D1 Mini, gyro, ESP32 DMX bridge, mmwave node
+// (mmwave/MmwProtocol.h duplicates this struct; parity-gated by
+// tests/test_mmwave_wire_parity.py); the Giga variants have no OTA.
+// The orchestrator consumes it via _handle_ota_status → the `ota` field
+// on /api/firmware/check rows (#922).
 struct __attribute__((packed)) OtaStatusPayload {
   uint8_t status;          // OTA_STATUS_* code (main/OtaUpdate.h)
   uint8_t progress;        // 0-100 (%)

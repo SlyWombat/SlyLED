@@ -1099,6 +1099,7 @@ def api_project_import():
             ps._send(c["ip"], pkt_stop)
             ps._send(c["ip"], pkt_off)
     ps._live_events.clear()
+    ps._ota_status_live.clear()
     ps._bake_result.clear()
     with ps._lock:
         ps._children = data.get("children", [])

@@ -90,6 +90,18 @@ void mmwUdpSendTargets(const MmwTarget targets[MMW_MAX_TARGETS],
   udp.endPacket();
 }
 
+void mmwUdpSendOtaStatus(IPAddress dest, uint8_t status, uint8_t progress) {
+  static uint8_t pkt[sizeof(UdpHeader) + sizeof(OtaStatusPayload)];
+  writeHeader(pkt, CMD_OTA_STATUS);
+  OtaStatusPayload p;
+  p.status   = status;
+  p.progress = progress;
+  memcpy(pkt + sizeof(UdpHeader), &p, sizeof(p));
+  udp.beginPacket(dest, UDP_PORT);
+  udp.write(pkt, sizeof(pkt));
+  udp.endPacket();
+}
+
 void mmwUdpPoll() {
   int plen = udp.parsePacket();
   if (plen <= 0) return;
@@ -133,6 +145,7 @@ void mmwUdpPoll() {
       uint16_t shaOff = (uint16_t)(5 + urlLen);
       if (shaOff + 64 <= payLen) { memcpy(sha, &payload[shaOff], 64); sha[64] = '\0'; }
       if (Serial) { Serial.print(F("MMW OTA: update requested: ")); Serial.println(url); }
+      mmwOtaSetReportTarget(udp.remoteIP());   // #922 — CMD_OTA_STATUS to the trigger source
       if (mmwOtaStart(url, sha)) {
         delay(500);
         ESP.restart();

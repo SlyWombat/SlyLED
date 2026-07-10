@@ -118,6 +118,7 @@ CMD_RUNNER_STOP = 0x31
 CMD_ACTION_EVENT = 0x12
 CMD_STATUS_REQ  = 0x40
 CMD_STATUS_RESP = 0x41
+CMD_OTA_STATUS  = 0x51   # child→parent: OtaStatusPayload — status(u8, OTA_STATUS_* per main/OtaUpdate.h) + progress(u8, 0-100). Fire-and-forget from the updating board on each OTA phase change + every ≥10% of download (#922). 0x50 CMD_OTA_UPDATE is parent→child and triggered over HTTP here — nothing to dispatch.
 
 CMD_GYRO_ORIENT = 0x60   # gyro→parent: GyroOrientPayload (8 bytes)
 CMD_GYRO_CTRL   = 0x61   # parent→gyro: enabled(1) + targetFps(1)
@@ -603,6 +604,15 @@ def _apply_auto_stage_bounds(*, save=True):
 
 # Live action events pushed by children (ip  -' {actionType, stepIndex, totalSteps, event, ts})
 _live_events = {}
+
+# #922 — live per-child OTA progress from CMD_OTA_STATUS (0x51), keyed by
+# sender IP → {status, statusName, progress, updatedAt}. Surfaced per child
+# as the `ota` field on /api/firmware/check rows (orch_firmware) so the
+# Firmware tab can show download/verify/apply progress. Status codes are
+# the firmware's OTA_STATUS_* constants (main/OtaUpdate.h).
+_OTA_STATUS_NAMES = {0: "idle", 1: "downloading", 2: "verifying",
+                     3: "applying", 4: "success", 5: "failed", 6: "rejected"}
+_ota_status_live = {}
 
 # Live gyro orientation data keyed by child IP
 # {ip: {roll, pitch, yaw, fps, flags, ts}}
@@ -2235,6 +2245,35 @@ def _handle_mmw_targets(ip, port, hdr, data):
               ip, seq, count, flags, fixture.get("id"))
 
 
+def _handle_ota_status(ip, port, hdr, data):
+    """CMD_OTA_STATUS — child OTA progress/result report → _ota_status_live
+    (#922). Landed as exactly the one-line registration the #901
+    dispatch-table note promised:
+
+        CMD_OTA_STATUS: (10, _handle_ota_status),
+
+    Payload (OtaStatusPayload, main/Protocol.h; 8-byte header + 2 =
+    10-byte gate): status(u8, OTA_STATUS_* codes per main/OtaUpdate.h) +
+    progress(u8, 0-100%). Fire-and-forget from the updating board (ESP32 /
+    D1 Mini / gyro / DMX bridge / mmwave node) on every phase change plus
+    every ≥10% of download. Keyed by sender IP; /api/firmware/check
+    (orch_firmware) joins it onto its per-child rows by `ip`. Also bumps
+    child.seen (#822) — a mid-OTA board stops answering PING while it
+    downloads, and flagging a child offline while it is actively
+    reporting OTA progress would be wrong.
+    """
+    status, progress = struct.unpack_from("<BB", data, 8)
+    _ota_status_live[ip] = {
+        "status": status,
+        "statusName": _OTA_STATUS_NAMES.get(status, f"unknown({status})"),
+        "progress": progress,
+        "updatedAt": time.time(),
+    }
+    _touch_child_seen(ip)
+    log.debug("OTA_STATUS from %s: %s (%d%%)", ip,
+              _OTA_STATUS_NAMES.get(status, status), progress)
+
+
 # #901 — UDP 4210 dispatch: {cmd: (min_total_datagram_len, handler)}.
 # The minimum length mirrors the pre-#901 `elif cmd == X and len(data) >= N`
 # gates exactly; a known cmd arriving shorter than its gate falls through to
@@ -2258,6 +2297,7 @@ _UDP_DISPATCH = {
     CMD_GYRO_HEARTBEAT_REP: (13, _handle_gyro_hb_rep),
     CMD_AUTOBRI_PUSH: (11, _handle_autobri_push_udp),
     CMD_PONG: (8, _handle_pong),
+    CMD_OTA_STATUS: (10, _handle_ota_status),
     CMD_MMW_TARGETS: (36, _handle_mmw_targets),
 }
 
@@ -17540,6 +17580,7 @@ def api_reset():
                 _send(c["ip"], pkt_stop)
                 _send(c["ip"], pkt_off)
     _live_events.clear()
+    _ota_status_live.clear()
     _bake_result.clear()
     with _lock:
         _children = []

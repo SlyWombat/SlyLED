@@ -10,8 +10,36 @@
 #include <Update.h>
 #include <mbedtls/sha256.h>
 #include "MmwOta.h"
+#include "MmwUdp.h"
 
-static uint8_t otaState = 0;   // 0 idle 1 downloading 2 verifying 3 applying 4 error
+static uint8_t otaState    = OTA_STATUS_IDLE;
+static uint8_t otaProgress = 0;   // 0-100 (%)
+
+// ── CMD_OTA_STATUS (0x51) reporting (#922) ───────────────────────────────────
+// Fire-and-forget: one 10-byte datagram per phase change plus every ≥10%
+// of download progress, sent to the node that triggered the OTA — the same
+// contract as main/OtaUpdate.cpp's otaSetStatus/otaSendStatus. The socket
+// lives in MmwUdp (mmwUdpSendOtaStatus); this module only owns the target.
+
+static IPAddress otaReportIp;          // default 0.0.0.0 → reporting disabled
+static bool      otaReportKnown = false;
+
+void mmwOtaSetReportTarget(IPAddress ip) {
+  otaReportIp    = ip;
+  otaReportKnown = true;
+}
+
+static void otaSendStatus() {
+  if (!otaReportKnown) return;
+  mmwUdpSendOtaStatus(otaReportIp, otaState, otaProgress);
+}
+
+// Assign + report in one step — every phase transition below goes through
+// this so the parent sees downloading/verifying/applying/terminal states.
+static void otaSetState(uint8_t st) {
+  otaState = st;
+  otaSendStatus();
+}
 
 static bool shaWanted(const char* sha) {
   if (!sha || sha[0] == '\0') return false;
@@ -29,26 +57,27 @@ static void hexLower(const uint8_t* digest, char* out65) {
 }
 
 bool mmwOtaStart(const char* url, const char* expectedSha256) {
-  if (WiFi.status() != WL_CONNECTED) { otaState = 4; return false; }
+  otaProgress = 0;
+  if (WiFi.status() != WL_CONNECTED) { otaSetState(OTA_STATUS_FAILED); return false; }
 
   WiFiClient client;
   HTTPClient http;
-  if (!http.begin(client, url)) { otaState = 4; return false; }
+  if (!http.begin(client, url)) { otaSetState(OTA_STATUS_FAILED); return false; }
   http.setTimeout(15000);
 
-  otaState = 1;
+  otaSetState(OTA_STATUS_DOWNLOADING);
   int code = http.GET();
   if (code != HTTP_CODE_OK) {
     if (Serial) { Serial.print(F("MMW OTA: HTTP ")); Serial.println(code); }
-    http.end(); otaState = 4; return false;
+    http.end(); otaSetState(OTA_STATUS_FAILED); return false;
   }
 
   int len = http.getSize();
-  if (len <= 0) { http.end(); otaState = 4; return false; }
+  if (len <= 0) { http.end(); otaSetState(OTA_STATUS_FAILED); return false; }
 
   if (!Update.begin(len)) {
     if (Serial) Serial.println(F("MMW OTA: Update.begin failed (partition?)"));
-    http.end(); otaState = 4; return false;
+    http.end(); otaSetState(OTA_STATUS_FAILED); return false;
   }
 
   mbedtls_sha256_context sha;
@@ -58,6 +87,7 @@ bool mmwOtaStart(const char* url, const char* expectedSha256) {
   WiFiClient* stream = http.getStreamPtr();
   static uint8_t buf[1024];
   int remaining = len;
+  uint8_t lastReport = 0;           // #922 — last CMD_OTA_STATUS progress %
   uint32_t lastData = millis();
   while (remaining > 0) {
     size_t avail = stream->available();
@@ -72,6 +102,11 @@ bool mmwOtaStart(const char* url, const char* expectedSha256) {
     mbedtls_sha256_update(&sha, buf, n);
     if (Update.write(buf, n) != n) { remaining = -1; break; }
     remaining -= (int)n;
+    otaProgress = (uint8_t)((int32_t)(len - remaining) * 100L / len);
+    if ((uint8_t)(otaProgress - lastReport) >= 10) {
+      lastReport = otaProgress;
+      otaSendStatus();              // #922 — ≤10 datagrams per download
+    }
   }
 
   uint8_t digest[32];
@@ -81,11 +116,11 @@ bool mmwOtaStart(const char* url, const char* expectedSha256) {
 
   if (remaining != 0) {
     if (Serial) Serial.println(F("MMW OTA: download incomplete — aborting"));
-    Update.abort(); otaState = 4; return false;
+    Update.abort(); otaSetState(OTA_STATUS_FAILED); return false;
   }
 
   if (shaWanted(expectedSha256)) {
-    otaState = 2;
+    otaSetState(OTA_STATUS_VERIFYING);
     char actual[65];
     hexLower(digest, actual);
     bool match = true;
@@ -96,19 +131,20 @@ bool mmwOtaStart(const char* url, const char* expectedSha256) {
     }
     if (!match) {
       if (Serial) Serial.println(F("MMW OTA: sha256 MISMATCH — aborting, not applying"));
-      Update.abort(); otaState = 4; return false;
+      Update.abort(); otaSetState(OTA_STATUS_FAILED); return false;
     }
   } else if (Serial) {
     Serial.println(F("MMW OTA: no sha256 provided — applying unverified"));
   }
 
-  otaState = 3;
+  otaSetState(OTA_STATUS_APPLYING);
   if (!Update.end(true)) {
     if (Serial) { Serial.print(F("MMW OTA: finalize error ")); Serial.println(Update.errorString()); }
-    otaState = 4; return false;
+    otaSetState(OTA_STATUS_FAILED); return false;
   }
   if (Serial) Serial.println(F("MMW OTA: staged OK — rebooting into new image"));
-  otaState = 0;
+  otaProgress = 100;
+  otaSetState(OTA_STATUS_SUCCESS);
   return true;
 }
 
