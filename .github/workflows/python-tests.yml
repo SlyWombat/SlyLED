@@ -93,11 +93,26 @@ jobs:
           git restore-mtime
 
       - name: Core unit suites
+        # Each suite gets a FRESH data dir (overriding the job-level
+        # SLYLED_DATA): suites that seed fixtures (radar, calibration)
+        # pollute later suites' worlds if the dir is shared — observed
+        # locally as test_910 failing after test_913 in one shell.
         run: |
-          python3 -X utf8 tests/test_persistence_atomic.py
-          python3 -X utf8 tests/test_893_cors.py
-          python3 -X utf8 tests/test_896_fused_id_rebind.py
-          python3 -X utf8 tests/test_mmwave_wire_parity.py
+          for t in tests/test_persistence_atomic.py \
+                   tests/test_893_cors.py \
+                   tests/test_896_fused_id_rebind.py \
+                   tests/test_mmwave_wire_parity.py \
+                   tests/test_899_fixture_registry.py \
+                   tests/test_900_fusion_sources.py \
+                   tests/test_901_udp_dispatch.py \
+                   tests/test_910_mmw_handler.py \
+                   tests/test_911_radar_fixture.py \
+                   tests/test_912_radar_fusion.py \
+                   tests/test_913_radar_calibration.py \
+                   tests/test_b2_serving.py; do
+            echo "== $t"
+            SLYLED_DATA=$(mktemp -d) python3 -X utf8 "$t"
+          done
 
       - name: Aim gates (tests/aim/)
         run: |
