@@ -34,6 +34,8 @@ void mmwSaveWiFiCredentials(const char* ssid, const char* pass) {
 }
 
 void mmwNetBegin() {
+  WiFi.mode(WIFI_STA);                   // BEFORE macAddress() — reads zeros
+                                         // on the C61 core otherwise (#908 bench)
   uint8_t mac[6];
   WiFi.macAddress(mac);
   snprintf(hostnameBuf, sizeof(hostnameBuf), MMW_HOSTNAME_PREFIX "%02X%02X", mac[4], mac[5]);
@@ -42,7 +44,6 @@ void mmwNetBegin() {
   char pass[65] = {0};
   mmwLoadWiFiCredentials(ssid, sizeof(ssid), pass, sizeof(pass));
 
-  WiFi.mode(WIFI_STA);
   WiFi.setHostname(hostnameBuf);         // must precede begin() — DHCP option 12
   WiFi.begin(ssid, pass);
   if (Serial) { Serial.print(F("MMW: WiFi connecting as ")); Serial.println(hostnameBuf); }
@@ -53,7 +54,20 @@ void mmwNetBegin() {
     if (WiFi.status() == WL_CONNECTED) {
       Serial.print(F("MMW: WiFi up, IP ")); Serial.println(WiFi.localIP());
     } else {
-      Serial.println(F("MMW: WiFi connect timeout — supervision will retry"));
+      // Bench diagnostics (#908): status code + what the radio can see.
+      // WiFi.SSID(i) returns String — diagnostic-path-only exemption.
+      Serial.print(F("MMW: WiFi connect timeout, status="));
+      Serial.println((int)WiFi.status());
+      WiFi.disconnect();          // a pending connect makes scans return -2
+      delay(200);
+      int n = WiFi.scanNetworks();
+      Serial.print(F("MMW: scan found ")); Serial.println(n);
+      for (int i = 0; i < n && i < 8; i++) {
+        Serial.print(F("  ")); Serial.print(WiFi.SSID(i));
+        Serial.print(F(" rssi=")); Serial.print(WiFi.RSSI(i));
+        Serial.print(F(" ch=")); Serial.println(WiFi.channel(i));
+      }
+      WiFi.begin(ssid, pass);   // scan aborts a pending connect — restart it
     }
   }
 

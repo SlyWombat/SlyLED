@@ -57,8 +57,10 @@ The boards in hand are the "G550" Rd-03D revision: a fitted 4-pin connector labe
 |---|---|---|
 | 5V | 5V (J1 pin 14) | USB 5 V rail |
 | GND | GND (J1 pin 15) | adjacent to 5V |
-| TX (radar out; a.k.a. OT1) | GPIO4 → UART1 RX | |
-| RX (radar in) | GPIO5 → UART1 TX | |
+| TX (radar out; a.k.a. OT1) | GPIO2 → UART1 RX | bench-validated 2026-07-10 |
+| RX (radar in) | GPIO3 → UART1 TX | |
+
+**Bench-validated (#908, 2026-07-10):** 256000 8N1 confirmed on real G550 hardware — 10 Hz frames, zero parse errors over sustained runs, mode-command ACK observed, live single-target tracking. Field notes: wrong-RX-pin symptom is noise whose byte count scales with the read baud (not a decodable stream); the C61 DevKit's *native* USB port needs `CDCOnBoot=cdc` for sketch serial output (add it to the compile fqbn when monitoring via that port); `WiFi.mode(WIFI_STA)` must precede `WiFi.macAddress()` on this core or the MAC reads all-zeros.
 
 Direct stacking on the DevKit headers was evaluated and rejected: no consecutive header run matches the pad sequence (radar wants 5V/GND four positions apart; J1 has them adjacent, J3 has no 5V), the pad pitch isn't 2.54 mm, and a board stacked over the DevKit sits on its WiFi antenna while putting the MCU in the radar's back lobe. Mechanical pattern for a compact node: radar at the enclosure face (antennas outward, metal backplate behind), DevKit behind/beside on standoffs, 4-wire pigtail between.
 

@@ -25,6 +25,7 @@ static bool      latestFresh  = false;
 static uint32_t  lastFrameMs  = 0;
 static uint32_t  frameCount   = 0;
 static uint32_t  errorCount   = 0;
+static uint32_t  byteCount    = 0;
 
 // Decode the Rd-03D signed-magnitude word: MSB set → +(raw & 0x7FFF), else −raw.
 static int16_t mmwSigned(uint16_t raw) {
@@ -74,6 +75,7 @@ void mmwUartBegin() {
 void mmwUartPoll() {
   while (Serial1.available() > 0) {
     uint8_t b = (uint8_t)Serial1.read();
+    byteCount++;
 
     if (!inFrame) {
       // Hunt the 4-byte header AA FF 03 00.
@@ -116,3 +118,4 @@ bool mmwUartHealthy() {
 
 uint32_t mmwUartFrameCount() { return frameCount; }
 uint32_t mmwUartErrorCount() { return errorCount; }
+uint32_t mmwUartByteCount()  { return byteCount; }

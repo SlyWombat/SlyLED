@@ -13,8 +13,11 @@
 #include <stdint.h>
 
 // ── Radar UART ────────────────────────────────────────────────────────────────
-constexpr int8_t   MMW_UART_RX_PIN = 4;       // ← radar TX (OT1)
-constexpr int8_t   MMW_UART_TX_PIN = 5;       // → radar RX
+// BENCH-VALIDATED 2026-07-10 (#908): radar TX→GPIO2, radar RX→GPIO3,
+// 256000 8N1 as spec'd — 10 Hz frames, zero parse errors, mode-command
+// ACK confirmed. Wrong-pin symptom is bytes-scale-with-baud noise.
+constexpr int8_t   MMW_UART_RX_PIN = 2;       // ← radar TX
+constexpr int8_t   MMW_UART_TX_PIN = 3;       // → radar RX
 constexpr uint32_t MMW_UART_BAUD   = 256000;  // Rd-03D fixed rate, 8N1
 
 // ── Reporting cadence ─────────────────────────────────────────────────────────

@@ -28,5 +28,6 @@ uint8_t mmwUartTargets(MmwTarget out[MMW_MAX_TARGETS], bool* fresh);
 bool     mmwUartHealthy();           // a valid frame arrived within MMW_FRAME_STALE_MS
 uint32_t mmwUartFrameCount();        // total valid frames since boot
 uint32_t mmwUartErrorCount();        // bad-tail / desync count since boot
+uint32_t mmwUartByteCount();         // raw UART bytes received since boot (#908)
 
 #endif  // MMW_UART_H

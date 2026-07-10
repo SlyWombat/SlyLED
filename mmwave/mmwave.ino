@@ -75,6 +75,7 @@ void loop() {
   if (Serial && now - lastStatsMs >= 10000) {
     lastStatsMs = now;
     Serial.print(F("MMW: frames=")); Serial.print(mmwUartFrameCount());
+    Serial.print(F(" bytes="));      Serial.print(mmwUartByteCount());
     Serial.print(F(" errs="));       Serial.print(mmwUartErrorCount());
     Serial.print(F(" targets="));    Serial.print(count);
     Serial.print(F(" healthy="));    Serial.println(flags & 0x01 ? 1 : 0);
