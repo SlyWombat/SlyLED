@@ -5,10 +5,18 @@
 #ifndef NETUTILS_H
 #define NETUTILS_H
 
+#include "BoardConfig.h"   // BOARD_* gates below
+
 void syncNTP();
 unsigned long currentEpoch();
 void connectWiFi();
 void printStatus();
+
+#if defined(BOARD_GIGA) || defined(BOARD_GIGA_CHILD) || defined(BOARD_GIGA_DMX)
+// #B3 — Mbed does not auto-reconnect after AP loss (ESP cores do). Call
+// from loop() on the Giga variants; re-runs WiFi.begin() with backoff.
+void maintainWiFi();
+#endif
 
 // WiFi credential storage (NVS/EEPROM — survives OTA and power cycles)
 void loadWiFiCredentials(char* ssid, size_t ssidLen, char* pass, size_t passLen);

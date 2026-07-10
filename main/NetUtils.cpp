@@ -143,6 +143,30 @@ bool hasStoredWiFiCredentials() { return true; }
 
 // ── WiFi connect ──────────────────────────────────────────────────────────────
 
+// One-time post-connect service bring-up (HTTP server, NTP, UDP command
+// channel, board-specific init). Split out of connectWiFi() under #B3 so
+// maintainWiFi() can also start services when the first successful join
+// happens AFTER boot (AP slower to power up than the board).
+static bool netServicesUp = false;
+
+static void startNetServices() {
+  if (netServicesUp) return;
+  netServicesUp = true;
+
+  server.begin();
+  syncNTP();
+  cmdUDP.begin(UDP_PORT);
+  if (Serial) Serial.println(F("UDP command channel open on port 4210."));
+
+#ifdef BOARD_DMX_BRIDGE
+  artnetInit();
+#endif
+
+#ifdef BOARD_CHILD
+  initChildConfig();
+#endif
+}
+
 void connectWiFi() {
   // Load credentials from persistent storage (NVS/EEPROM)
   // First boot: uses compiled defaults from arduino_secrets.h and saves them
@@ -202,19 +226,77 @@ void connectWiFi() {
   if (Serial) Serial.println(F("WiFi power save disabled (low latency mode)"));
 #endif
 
-  server.begin();
-  syncNTP();
-  cmdUDP.begin(UDP_PORT);
-  if (Serial) Serial.println(F("UDP command channel open on port 4210."));
-
-#ifdef BOARD_DMX_BRIDGE
-  artnetInit();
-#endif
-
-#ifdef BOARD_CHILD
-  initChildConfig();
-#endif
+  startNetServices();
 }
+
+// ── Mbed WiFi reconnect supervision (#B3) ────────────────────────────────────
+// ESP cores rejoin a lost AP on their own; the Mbed core does NOT — its
+// statusCallback merely flips status() to WL_CONNECTION_LOST and the board
+// stays offline until power-cycle. maintainWiFi() runs from loop() on the
+// Giga variants: a state machine that re-runs WiFi.begin() with exponential
+// backoff once the link has been down past a grace period.
+//
+// NOTE: Mbed's WiFi.begin() is synchronous (scan + join, ~7 s core join
+// timeout; worst case ~10-15 s including the scan) — there is no async
+// connect on this core. The blocking window only occurs while the AP is
+// already unreachable, and backoff caps it at one attempt per RETRY_MAX_MS;
+// between attempts the render/DMX paths run at full rate. NEEDS BENCH
+// VALIDATION on Giga hardware before release — in particular that bound
+// UDP/TCP sockets keep working across a reconnect + DHCP re-lease.
+#if defined(BOARD_GIGA) || defined(BOARD_GIGA_CHILD) || defined(BOARD_GIGA_DMX)
+
+void maintainWiFi() {
+  constexpr unsigned long CHECK_MS     = 2000;    // status poll cadence
+  constexpr unsigned long RETRY_MIN_MS = 10000;   // grace + first retry delay
+  constexpr unsigned long RETRY_MAX_MS = 60000;   // backoff ceiling
+  static unsigned long lastCheck   = 0;
+  static unsigned long lastAttempt = 0;
+  static unsigned long retryMs     = RETRY_MIN_MS;
+  static bool          down        = false;
+
+  unsigned long now = millis();
+  if (now - lastCheck < CHECK_MS) return;
+  lastCheck = now;
+
+  if (WiFi.status() == WL_CONNECTED) {
+    if (down) {
+      if (Serial) { Serial.print(F("WiFi: reconnected. IP: ")); Serial.println(WiFi.localIP()); }
+      startNetServices();   // no-op unless boot-time connect never succeeded
+    }
+    down    = false;
+    retryMs = RETRY_MIN_MS;
+    return;
+  }
+
+  if (!down) {
+    // Just noticed the loss — arm the retry timer (grace period first, in
+    // case the driver recovers the roam on its own).
+    down        = true;
+    lastAttempt = now;
+    if (Serial) Serial.println(F("WiFi: link down — reconnect supervision armed"));
+    return;
+  }
+  if (now - lastAttempt < retryMs) return;
+  lastAttempt = now;
+  if (retryMs < RETRY_MAX_MS) retryMs *= 2;
+
+  char ssid[33] = {};
+  char pass[65] = {};
+  loadWiFiCredentials(ssid, sizeof(ssid), pass, sizeof(pass));
+  if (Serial) { Serial.print(F("WiFi: reconnecting to ")); Serial.println(ssid); }
+  WiFi.disconnect();   // clear half-up driver state before re-begin
+#ifdef BOARD_GIGA
+  // Quirk: WiFi.setHostname() must precede WiFi.begin() for DHCP option 12.
+  WiFi.setHostname(HOSTNAME);
+#else
+  // Giga child/DMX derive their hostname from the MAC, which reads valid
+  // once the radio has been up at least once (see connectWiFi()).
+  if (childCfg.hostname[0]) WiFi.setHostname(childCfg.hostname);
+#endif
+  WiFi.begin(ssid, pass);   // synchronous on Mbed — see NOTE above
+}
+
+#endif  // BOARD_GIGA || BOARD_GIGA_CHILD || BOARD_GIGA_DMX
 
 // ── Periodic serial status print ─────────────────────────────────────────────
 

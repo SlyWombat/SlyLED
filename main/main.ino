@@ -235,6 +235,13 @@ void loop() {
   printStatus();
   pollUDP();
 
+#if defined(BOARD_GIGA) || defined(BOARD_GIGA_CHILD) || defined(BOARD_GIGA_DMX)
+  // #B3 — Mbed does not auto-reconnect after AP loss (ESP cores do).
+  // Cheap status poll every 2 s; blocking re-begin only while already
+  // offline, with 10→60 s backoff (see NetUtils.cpp).
+  maintainWiFi();
+#endif
+
 #ifdef BOARD_GIGA
   static unsigned long lastPing = 0;
   if (millis() - lastPing >= 30000UL) {
