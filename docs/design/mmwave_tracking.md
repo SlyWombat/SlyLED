@@ -60,7 +60,11 @@ The boards in hand are the "G550" Rd-03D revision: a fitted 4-pin connector labe
 | TX (radar out; a.k.a. OT1) | GPIO2 → UART1 RX | bench-validated 2026-07-10 |
 | RX (radar in) | GPIO3 → UART1 TX | |
 
+**END-TO-END CONFIRMED (2026-07-10 bench):** a real person walking in front of the radar was tracked through the full chain — Rd-03D → C61 (MMW-FAFC) → WiFi → 0x70 → dispatch → fusion → `Person (radar)` object at sane stage coordinates in the live orchestrator. Field gotcha: the installed SlyLED.exe tray app holds UDP 4210; a dev orchestrator binds via SO_REUSEADDR but receives nothing — stop the tray app for bench work.
+
 **Bench-validated (#908, 2026-07-10):** 256000 8N1 confirmed on real G550 hardware — 10 Hz frames, zero parse errors over sustained runs, mode-command ACK observed, live single-target tracking. Field notes: wrong-RX-pin symptom is noise whose byte count scales with the read baud (not a decodable stream); the C61 DevKit's *native* USB port needs `CDCOnBoot=cdc` for sketch serial output (add it to the compile fqbn when monitoring via that port); `WiFi.mode(WIFI_STA)` must precede `WiFi.macAddress()` on this core or the MAC reads all-zeros.
+
+**Power distribution (multi-node):** the DevKit's two USB-C ports are device-only and diode-isolated — they cannot pass power out, so USB daisy-chaining is impossible. Chain power through the **5V/GND header pins instead** (J1 14/15, rail-direct, bidirectional): supply → node 1 pins → node 2 pins → …, ~0.7 A per node (board 0.5 + radar 0.2), first segment carries the whole chain. Feed the first node via pins (skips the input diode's ~0.3 V) and never pins+USB simultaneously on one node. Comfortable to ~2-4 nodes at room scale; beyond that use a 12-24 V bus with per-node bucks, or PoE splitters (one 802.3af→5 V per node — clean for venue rigging; data stays WiFi regardless).
 
 Direct stacking on the DevKit headers was evaluated and rejected: no consecutive header run matches the pad sequence (radar wants 5V/GND four positions apart; J1 has them adjacent, J3 has no 5V), the pad pitch isn't 2.54 mm, and a board stacked over the DevKit sits on its WiFi antenna while putting the MCU in the radar's back lobe. Mechanical pattern for a compact node: radar at the enclosure face (antennas outward, metal backplate behind), DevKit behind/beside on standoffs, 4-wire pigtail between.
 
