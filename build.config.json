@@ -6,5 +6,5 @@
     "androidSdkRoot": "C:\\Android\\Sdk",
     "androidBuildDir": "C:\\Android\\build\\slyled-app",
     "innoSetupDir": "%LOCALAPPDATA%\\Programs\\Inno Setup 6",
-    "onedriveDistDir": "D:\\OneDrive\\My Documents\\ElectricRV\\Development\\Projects\\Lighting Arduino\\dist"
+    "onedriveDistDir": "%OneDrive%\\My Documents\\ElectricRV\\Development\\Releases\\SlyLED"
 }

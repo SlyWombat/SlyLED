@@ -5,13 +5,16 @@ inventories, struct layouts, per-tab UI structure) lives in the source — not h
 
 ## Work tree
 
-The canonical work tree is `D:\SlyLED` (WSL: `/mnt/d/SlyLED`). All editing, git
-commits, builds, and tests happen here. `D:\OneDrive\My Documents\ElectricRV\
-Development\Projects\Lighting Arduino` is **read-only** going forward — the only
-files that land there are the operator-facing build artifacts in `dist/` (mirrored
-automatically by `build_release.ps1`'s OneDrive-mirror step). OneDrive sync
-interferes with mid-build outputs and racy git operations; D:\SlyLED is plain
-NTFS and avoids both. (Established 2026-05-06.)
+Clone from GitHub; source never lives in OneDrive. Since 2026-09-15
+(SlyWombat/house-network-ops#195) the work trees are `C:\Projects\Lighting Arduino`
+on DAVEBOOK-5 and `D:\Projects\Lighting Arduino` on gpd-dave (WSL: `/mnt/c/Projects/...`,
+`/mnt/d/Projects/...`). All editing, git commits, builds, and tests happen there.
+The older `D:\SlyLED` tree (canonical 2026-05-06 to 2026-09-15) is being retired;
+#937 lists the hard-coded `D:\SlyLED` paths that must go first. The OneDrive
+`Projects\Lighting Arduino` folder is retired too. Operator-facing build artifacts are
+mirrored by `build_release.ps1` to the builds-only OneDrive pickup folder
+`%OneDrive%\My Documents\ElectricRV\Development\Releases\SlyLED` (no source there).
+OneDrive sync interferes with mid-build outputs and racy git operations.
 
 ## Target hardware
 
@@ -240,3 +243,14 @@ Phase tracking in issues #15–#19.
 - Commits: `feat: <short description>`; reference issues (`feat: mDNS discovery (closes #1)`).
 - All features tracked in [GitHub Issues](https://github.com/SlyWombat/SlyLED/issues).
 - Releases: `gh release create` with binaries. App reset to v1.0 (April 2026); firmware tracks per-board in `firmware/registry.json`.
+
+## `website/` Node environment (machine setup, 2026-09-14)
+
+- **Node 24 LTS** satisfies `engines.node >=18.17.0`. WSL Debian: nvm, `nvm use 24`
+  (default 24.21). Windows: `winget install OpenJS.NodeJS.LTS`.
+- `sharp` is a native module — install and run from the **same OS** (WSL or Windows);
+  never reuse a `node_modules` across them. Restore with `npm ci`.
+- **Never `npm install` from WSL inside a OneDrive folder**: WSL's Linux symlinks in
+  `node_modules/.bin` can't be synced by OneDrive (Reason 334), trigger an endless
+  upload-retry/CPU loop (seen 2026-09-14), and survive a OneDrive folder delete as local
+  stubs. Do Node work in the work tree above.

@@ -673,10 +673,10 @@ if ($DryRun) {
 }
 
 # Mirror dist/ to the OneDrive pickup folder so the operator finds the
-# finals where they always look for them. The work tree is now
-# /mnt/d/SlyLED (D:\SlyLED) per 2026-05-06 directive; OneDrive holds
-# only the operator-facing /dist mirror, no source.
-$onedriveDist = Get-BuildConfig 'onedriveDistDir' 'D:\OneDrive\My Documents\ElectricRV\Development\Projects\Lighting Arduino\dist'
+# finals where they always look for them. Source lives in the GitHub work
+# trees (C:\Projects or D:\Projects\Lighting Arduino, since 2026-09-15,
+# house-network-ops#195); OneDrive holds only this builds-only mirror.
+$onedriveDist = Get-BuildConfig 'onedriveDistDir' '%OneDrive%\My Documents\ElectricRV\Development\Releases\SlyLED'
 if (Test-Path (Split-Path $onedriveDist -Parent)) {
     if ($DryRun) {
         Write-Host "DRY RUN: would mirror dist/ to $onedriveDist (operator pickup)" -ForegroundColor Yellow
