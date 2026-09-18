@@ -318,13 +318,24 @@ def _compile_capability_for_dmx(clip, effect, fixture_pos, profile_info, duratio
 def bake_timeline(timeline, fixtures, spatial_fx, layout,
                   progress=None, actions=None,
                   resolve_fn=None, evaluate_fn=None, blend_fn=None,
-                  profile_lib=None, mover_calibrations=None):
+                  profile_lib=None, mover_calibrations=None,
+                  is_performer_fn=None):
     """Compile a timeline into per-fixture action sequences.
 
     Instead of rendering 40Hz frames, this directly analyzes each clip's spatial
     relationship with each fixture's pixel positions and computes the optimal
     action type + parameters + timing.
+
+    `is_performer_fn(child_id) -> bool` (#939) decides whether a fixture's child
+    holds baked steps in a fixed hardware buffer, which is what the 64-segment
+    cap below exists for. Streamed devices (HinksPix) have no such buffer and
+    must not be capped, or a long show silently truncates. Default treats every
+    child as a performer, so callers that don't pass it keep today's behaviour
+    byte-for-byte.
     """
+    if is_performer_fn is None:
+        def is_performer_fn(_child_id):
+            return True
     duration = timeline.get("durationS", 60)
 
     if progress:
@@ -407,6 +418,7 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
             "rotation": f.get("rotation", [0, 0, 0]) if ft == "dmx" else None,
             "position": child_pos,
             "mountedInverted": f.get("mountedInverted", False),
+            "childId": f.get("childId"),
         }
 
     # Expand allPerformers and group fixtures into per-fixture tracks
@@ -635,7 +647,11 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
         # limit, so capping them silently truncated the show: a 5-minute
         # Pan/Tilt sweep time-slices into hundreds of segments, and the
         # cap left the moving heads dark after ~50s. Cap LED only.
-        if fdata.get("fixtureType") != "dmx":
+        # #939 — cap only fixtures backed by a PERFORMER. DMX fixtures are
+        # streamed live by the playback loop, and so are HinksPix-backed LED
+        # fixtures, so neither has a hardware step buffer to overflow.
+        if (fdata.get("fixtureType") != "dmx"
+                and is_performer_fn(fdata.get("childId"))):
             all_segments = all_segments[:64]
 
         result["fixtures"][fid] = {

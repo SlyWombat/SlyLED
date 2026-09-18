@@ -311,11 +311,12 @@ function _renderSetup(){
           if(ch){
             var board=ch.boardType||'SlyLED';
             if(ch.type==='wled')board='WLED';
+            else if(ch.type==='hinkspix')board='HinksPix';   // #939
             else if(!ch.boardType){
               if(ch.sc<=1&&ch.strings&&ch.strings.length&&ch.strings[0].leds<=1)board='Giga';
               else board='ESP32';
             }
-            var boardColors={'ESP32':'#2563eb','D1 Mini':'#7c3aed','Giga':'#059669','WLED':'#f59e0b'};
+            var boardColors={'ESP32':'#2563eb','D1 Mini':'#7c3aed','Giga':'#059669','WLED':'#f59e0b','HinksPix':'#dc2626'};
             conn=escapeHtml(ch.ip)+' <span class="badge" style="background:'+(boardColors[board]||'#446')+';color:#fff;font-size:.75em">'+board+'</span>';
             var rssi=ch.rssi||0;
             var rssiHtml='';
@@ -326,13 +327,25 @@ function _renderSetup(){
             status=ch.status===1?'<span class="badge bon">Online</span>'+rssiHtml:'<span class="badge boff">Offline</span>';
             var totalLeds=0;if(ch.strings)ch.strings.forEach(function(s,i){if(i<ch.sc)totalLeds+=(s.leds||0);});
             chLeds=ch.sc+'&times;'+totalLeds;
+            // #939 — a HinksPix keeps its port inventory on the device, not in
+            // child.strings (sc=0 keeps it out of every performer packet path),
+            // so count pixels from the fixture's port-bound strings instead.
+            if(ch.type==='hinkspix'){
+              var hpLeds=0,hpPorts=[];
+              (f.strings||[]).forEach(function(s){
+                if(s.port!=null){hpPorts.push('P'+s.port);hpLeds+=(s.leds||0);}
+              });
+              chLeds=(hpPorts.length?hpPorts.join(' '):'unbound')+' &middot; '+hpLeds+'px';
+            }
           }else{
             conn='<span style="color:#666">No device linked</span>';
             status='<span class="badge boff">Unlinked</span>';
             chLeds='—';
           }
           actions='<button class="btn" onclick="editFixture('+f.id+')" style="background:#446;color:#fff">Edit</button>';
-          if(ch)actions+=' <button class="btn" onclick="showDetails('+f.childId+')" style="background:#335;color:#fff">Test</button>'
+          if(ch&&ch.type==='hinkspix')actions+=' <button class="btn" onclick="hinksConfigure('+f.childId+')" style="background:#dc2626;color:#fff" title="Port table, universes, config push">Configure</button>'
+            +' <button class="btn" onclick="window.open(\'http://'+escapeHtml(ch.ip)+'/\',\'_blank\')" style="background:#335;color:#fff" title="Controller web UI">Web UI</button>';
+          if(ch&&ch.type!=='hinkspix')actions+=' <button class="btn" onclick="showDetails('+f.childId+')" style="background:#335;color:#fff">Test</button>'
             +' <button class="btn btn-on" onclick="refreshChild('+f.childId+')">Refresh</button>'
             +' <button class="btn" onclick="rebootChild('+f.childId+')" style="background:#654;color:#fff">Reboot</button>';
           actions+=' <button class="btn btn-off" onclick="removeFixture('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Remove</button>';

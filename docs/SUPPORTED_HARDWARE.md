@@ -70,6 +70,38 @@ V4L2. Capture path priority:
 `MAX_STR_PER_CHILD = 8` is a **protocol constant** — all PONG/ACTION
 structs are sized for 8 strings regardless of the board's storage limit.
 
+## Third-party pixel controllers
+
+| Controller | Ports | Integration | Notes |
+|------------|-------|-------------|-------|
+| HolidayCoro **HinksPix PRO** (PN #925) | 48 | Streamed E1.31/sACN or Art-Net (#939/#940) | Also bridges one universe to its 3-pin DMX-512 output (J3). |
+| **WLED** devices | 1 | HTTP effect-level (`wled_bridge.py`) | SlyLED action types map to native WLED effect IDs. |
+
+### HinksPix PRO
+
+Registered as a child with `type: "hinkspix"` and **`sc: 0` / `strings: []`**.
+That is deliberate and load-bearing: the performer wire structs are hard-sized
+for 8 strings, so a 48-port controller must never enter the UDP performer path
+(`_is_performer()` gates PING / LOAD_STEP / RUNNER_GO / ACTION). Its port
+inventory lives on the child at `hinks.ports`; pixel geometry lives on
+port-bound fixture strings in **stage-mm**, as for any other LED fixture.
+
+Universe layout is owned solely by `pixel_output.PixelOutputMap`: each enabled
+port starts on a fresh universe at `hinks.baseUniverse`, spanning
+`ceil(pixels / 170)` universes. Both the live stream (#940) and the offline
+`.hseq` writer (#941) read that one map, so frame layout cannot diverge.
+
+**Firmware gate.** Network config/firmware upload needs main CPU **MS ≥ 151**
+(PRO 80 / hardware V3: GM ≥ 129). Below that the controller must be updated by
+SD card first — and note `MS 151` is itself *"Removed Auto Firmware Update"*,
+the fix for a boot hang where older firmware stalls at `CHECK UPDATES` before
+starting its web server. A unit on MS 149 or lower may be unreachable over HTTP
+entirely until it is updated.
+
+Protocol facts (endpoints, command verbs, encoder tables) come from the
+open-source xLights driver, not vendor documentation — see
+`docs/design/hinkspix_integration.md` §2.
+
 ## Gyro / phone controller
 
 | Hardware                                | Notes |

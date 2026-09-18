@@ -1111,6 +1111,44 @@ def _broadcast_ping_all():
         except Exception:
             pass
 
+# ── Child class: performer vs. streamed/HTTP device (#939) ───────────────────
+# SlyLED "performers" (ESP32 / D1 Mini / Giga Child) speak the UDP binary
+# protocol on 4210 and hold baked steps in a fixed hardware buffer. Everything
+# else on the children list — WLED, cameras, and now HinksPix — is reached over
+# HTTP/streamed DMX and must never receive PING / LOAD_STEP / RUNNER_GO /
+# ACTION. Before #939 that distinction was a scatter of `type == "wled"` checks;
+# a fourth non-performer type would have multiplied them again.
+_PERFORMER_TYPES = (None, "", "slyled")
+
+
+def _is_performer(child):
+    """True when *child* speaks the SlyLED UDP performer protocol."""
+    return (child or {}).get("type") in _PERFORMER_TYPES
+
+
+def _probe_child_http(child, timeout=2.0):
+    """Probe a non-performer child over HTTP. Returns a dict on success, else
+    None. Dispatches on child type so the discovery/sweep paths stay generic.
+
+    The returned dict is merged by the caller — only `status`/`seen` are
+    universal; type-specific fields are namespaced by the caller.
+    """
+    ctype = (child or {}).get("type")
+    ip = (child or {}).get("ip")
+    if not ip:
+        return None
+    if ctype == "wled":
+        return wled_probe(ip, timeout=timeout)
+    if ctype == "hinkspix":
+        try:
+            import hinkspix_bridge
+            return hinkspix_bridge.probe(ip, timeout=timeout)
+        except Exception as exc:          # unreachable / not a HinksPix
+            log.debug("hinkspix probe %s failed: %s", ip, exc)
+            return None
+    return None
+
+
 def _discover_all():
     """Broadcast PING, wait for listener to collect PONGs, return all by hostname."""
     _recent_pongs.clear()
@@ -1214,9 +1252,11 @@ def _refresh_bg():
         responded_ips = set(_recent_pongs.keys())
         responded_hostnames = {info.get("hostname") for info in _recent_pongs.values()}
         for c in _children:
-            if c.get("type") == "wled":
-                wled_info = wled_probe(c["ip"], timeout=2.0)
-                if wled_info:
+            if not _is_performer(c):
+                # #939 — HTTP-reachable devices (WLED, HinksPix) never answer
+                # a UDP PONG, so probe them over HTTP instead of marking them
+                # stale below.
+                if _probe_child_http(c):
                     c["status"] = 1
                     c["seen"] = int(time.time())
                 else:
@@ -1434,23 +1474,31 @@ def _periodic_ping():
         _broadcast_ping_all()
         # Also probe WLED devices via HTTP
         for c in list(_children):
-            if c.get("type") == "wled":
+            if not _is_performer(c):
                 # Blocking HTTP probe stays outside _lock; only the
                 # status/seen mutation is locked (#894 — keep this
-                # consistent with the locked non-WLED sweep below).
-                info = wled_probe(c["ip"], timeout=2.0)
+                # consistent with the locked performer sweep below).
+                info = _probe_child_http(c, timeout=2.0)
                 with _lock:
                     if info:
                         c["status"] = 1
                         c["seen"] = int(time.time())
-                        c["fwVersion"] = info.get("ver")
+                        if c.get("type") == "hinkspix":
+                            c["fwVersion"] = info.get("mcpuRaw")
+                            c.setdefault("hinks", {}).update({
+                                k: info[k] for k in
+                                ("mcpu", "web", "pcpu", "ecpu", "maxU",
+                                 "hardwareV3", "uploadSupported", "boards")
+                                if k in info})
+                        else:
+                            c["fwVersion"] = info.get("ver")
                     else:
                         c["status"] = 0
         time.sleep(2)   # allow PONGs to arrive
         with _lock:
             now = int(time.time())
             for c in _children:
-                if c.get("type") != "wled" and c.get("seen", 0) > 0 and now - c["seen"] > CHILD_STALE_S:
+                if _is_performer(c) and c.get("seen", 0) > 0 and now - c["seen"] > CHILD_STALE_S:
                     c["status"] = 0
             _save("children", _children)
 
@@ -2875,6 +2923,43 @@ def api_children_add():
             child["wled"] = wled_info
             log.info("WLED device found at %s: %s (%d LEDs, v%s)",
                      ip, wled_info["name"], wled_info["ledCount"], wled_info["ver"])
+    # #939 — last in the PING -> WLED -> HinksPix fall-through. HinksPix has
+    # no mDNS/discovery guarantee, so manual IP add is the supported path
+    # (same as WLED). sc=0/strings=[] is deliberate: it keeps the device out
+    # of every performer packet path, whose wire structs are hard-sized for
+    # 8 strings. Port geometry lives in child["hinks"]["ports"], not here.
+    if child.get("status") != 1:
+        try:
+            import hinkspix_bridge
+            hinfo = hinkspix_bridge.probe(ip)
+        except Exception as exc:
+            hinfo = None
+            log.debug("hinkspix probe %s failed: %s", ip, exc)
+        if hinfo:
+            child["type"] = "hinkspix"
+            child["boardType"] = hinfo["model"]
+            child["name"] = child.get("name") or ip
+            child["sc"] = 0
+            child["strings"] = []
+            child["status"] = 1
+            child["seen"] = int(time.time())
+            child["fwVersion"] = hinfo.get("mcpuRaw")
+            child["hinks"] = {
+                "model": hinfo["model"],
+                "hardwareV3": hinfo["hardwareV3"],
+                "mcpu": hinfo["mcpu"], "pcpu": hinfo.get("pcpu"),
+                "ecpu": hinfo.get("ecpu"), "web": hinfo.get("web"),
+                "maxU": hinfo["maxU"], "boards": hinfo.get("boards", {}),
+                "uploadSupported": hinfo["uploadSupported"],
+                "protocol": _dmx_settings.get("protocol", "artnet"),
+                "baseUniverse": 1,
+                "dmxOut": {"enabled": False, "universe": None},
+                "ports": [],
+                "configPushedAt": 0, "configHash": "",
+            }
+            log.info("HinksPix found at %s: %s MCPU=%s maxU=%s uploadSupported=%s",
+                     ip, hinfo["model"], hinfo.get("mcpuRaw"), hinfo["maxU"],
+                     hinfo["uploadSupported"])
     with _lock:
         _save("children", _children)
     ct = child.get("type", "slyled")
@@ -3332,6 +3417,65 @@ def _validate_fixture_strings(strings):
                                and not isinstance(v, bool) for v in rot)):
                 return (f"strings[{i}].rotation must be a 3-element numeric "
                         f"array [rx, ry, rz] in degrees")
+        # #939 — `port` binds a string to a physical HinksPix output. Shape is
+        # validated for every fixture; whether the port exists and its pixel
+        # count agrees with the device is checked against `child` when the
+        # caller supplies one.
+        if "port" in s and s["port"] is not None:
+            port = s["port"]
+            if isinstance(port, bool) or not isinstance(port, int):
+                return f"strings[{i}].port must be an integer"
+            if not 1 <= port <= 48:
+                return f"strings[{i}].port {port} out of range 1..48"
+    ports = [s["port"] for s in strings
+             if isinstance(s, dict) and isinstance(s.get("port"), int)
+             and not isinstance(s.get("port"), bool)]
+    dupes = {p for p in ports if ports.count(p) > 1}
+    if dupes:
+        return f"duplicate port(s) {sorted(dupes)} within this fixture"
+    return None
+
+
+def _validate_fixture_ports(strings, child, fixtures, fixture_id=None):
+    """#939 — validate port bindings against the device and other fixtures.
+
+    Separate from `_validate_fixture_strings` because it needs the child record
+    and the whole fixture list, which the per-fixture shape validator does not
+    take. Returns an error string, or None when the bindings are sound.
+    """
+    if not child or child.get("type") != "hinkspix":
+        return None
+    device_ports = {int(p.get("port")): p
+                    for p in ((child.get("hinks") or {}).get("ports") or [])
+                    if p.get("port") is not None}
+    for i, s in enumerate(strings or []):
+        port = s.get("port")
+        if not isinstance(port, int) or isinstance(port, bool):
+            return (f"strings[{i}] on a HinksPix fixture must declare a `port` "
+                    f"— pixels are addressed per physical output")
+        dev = device_ports.get(port)
+        if dev is None:
+            return f"strings[{i}].port {port} is not configured on this controller"
+        if not dev.get("enabled", True):
+            return f"strings[{i}].port {port} is disabled on this controller"
+        leds = s.get("leds")
+        if leds is not None and int(leds) != int(dev.get("leds") or 0):
+            return (f"strings[{i}].leds {leds} disagrees with controller port "
+                    f"{port} ({dev.get('leds')}) — the device owns pixel count")
+    # Ports are exclusive across every fixture on the same controller.
+    taken = {}
+    for f in fixtures or []:
+        if fixture_id is not None and f.get("id") == fixture_id:
+            continue
+        if f.get("childId") != child.get("id"):
+            continue
+        for s in f.get("strings") or []:
+            if isinstance(s.get("port"), int):
+                taken[s["port"]] = f.get("name") or f.get("id")
+    for s in strings or []:
+        p = s.get("port")
+        if p in taken:
+            return f"port {p} is already bound to fixture '{taken[p]}'"
     return None
 
 
@@ -3350,6 +3494,13 @@ def api_fixtures_create():
         return jsonify(err=fixture_types.invalid_type_error()), 400
     if "strings" in body:
         err = _validate_fixture_strings(body["strings"])
+        if err:
+            return jsonify(err=err), 400
+        # #939 — port bindings are validated against the controller and every
+        # other fixture on it, so two fixtures can't drive one physical output.
+        _hp_child = next((c for c in _children
+                          if c.get("id") == body.get("childId")), None)
+        err = _validate_fixture_ports(body["strings"], _hp_child, _fixtures)
         if err:
             return jsonify(err=err), 400
     err = fixture_types.validate_create(fixture_type, body)
@@ -3397,6 +3548,13 @@ def api_fixture_update(fid):
     # #864 — validate per-string position fields if strings is being written
     if "strings" in body:
         err = _validate_fixture_strings(body["strings"])
+        if err:
+            return jsonify(err=err), 400
+        # #939 — as POST, but excluding this fixture from the conflict scan.
+        _hp_child = next((c for c in _children
+                          if c.get("id") == body.get("childId", f.get("childId"))), None)
+        err = _validate_fixture_ports(body["strings"], _hp_child, _fixtures,
+                                      fixture_id=f.get("id"))
         if err:
             return jsonify(err=err), 400
     # #899 — per-type update validation from the registry (the dmx and
@@ -14763,6 +14921,12 @@ def api_timeline_bake(tid):
                 actions=_actions,
                 profile_lib=_profile_lib,
                 mover_calibrations=_mover_cal,
+                # #939 — streamed devices (HinksPix) have no hardware step
+                # buffer, so the 64-segment cap must not apply to them.
+                # Unknown childId resolves to None -> treated as a performer,
+                # i.e. capped, which is the safe default.
+                is_performer_fn=lambda cid: _is_performer(
+                    next((c for c in _children if c.get("id") == cid), None)),
             )
             n_fix = len(result.get("fixtures", {}))
             n_frames_out = result.get("totalFrames", 0)
@@ -14839,7 +15003,10 @@ def api_bake_sync(tid):
     if not result:
         return jsonify(err="No baked data - bake first"), 404
 
-    targets = [c for c in _children if c.get("ip")]
+    # #939 — only performers hold baked steps in a hardware buffer. Streamed
+    # devices (HinksPix) are driven live from the playback loop instead, so
+    # they are not sync targets and must not receive LOAD_STEP.
+    targets = [c for c in _children if c.get("ip") and _is_performer(c)]
     if not targets:
         return jsonify(ok=True, synced=0, warn="no performers registered")
 
@@ -15971,7 +16138,9 @@ def api_timeline_start(tid):
 
     started = 0
     for child in _children:
-        if not child.get("ip"):
+        # #939 — RUNNER_GO is a performer packet; HTTP/streamed devices
+        # (WLED, HinksPix) must not receive it.
+        if not child.get("ip") or not _is_performer(child):
             continue
         _send(child["ip"], go_pkt)
         started += 1
@@ -16457,7 +16626,7 @@ def api_show_start():
     go_pkt = _hdr(CMD_RUNNER_GO, go_epoch) + struct.pack("<IB", go_epoch, loop_flag)
     started = 0
     for child in _children:
-        if child.get("ip"):
+        if child.get("ip") and _is_performer(child):   # #939 performers only
             _send(child["ip"], go_pkt)
             started += 1
 
@@ -16590,7 +16759,7 @@ def api_show_next():
     loop_flag = 1 if loop_all else 0
     go_pkt = _hdr(CMD_RUNNER_GO, go_epoch) + struct.pack("<IB", go_epoch, loop_flag)
     for child in _children:
-        if child.get("ip"):
+        if child.get("ip") and _is_performer(child):   # #939 performers only
             _send(child["ip"], go_pkt)
     _show_playback["running"] = True
     _show_playback["currentIndex"] = nxt
@@ -17258,6 +17427,11 @@ _FW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 import orch_firmware
 app.register_blueprint(orch_firmware.bp)
 
+# #939 — HinksPix PRO device management (probe, port table, universe map,
+# config push, fixtures-from-ports).
+import orch_hinkspix
+app.register_blueprint(orch_hinkspix.bp)
+
 # Re-exports — externally referenced names whose definitions moved:
 #  - _resolve_registry: monkeypatched via parent_server._resolve_registry
 #    (test_870); orch_firmware always calls it through ps so the patch wins.
@@ -17579,9 +17753,11 @@ def api_reset():
         if c.get("ip"):
             if c.get("type") == "wled":
                 wled_stop(c["ip"])
-            else:
+            elif _is_performer(c):
                 _send(c["ip"], pkt_stop)
                 _send(c["ip"], pkt_off)
+            # #939 — HinksPix is blacked out by zeroing its universes in the
+            # playback-loop teardown (#940), not by a performer stop packet.
     _live_events.clear()
     _ota_status_live.clear()
     _bake_result.clear()
