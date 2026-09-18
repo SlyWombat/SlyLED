@@ -131,6 +131,7 @@ function _hpRender() {
     + '<button class="btn" style="background:#335;color:#fff" onclick="hinksReadback()">Read back</button>'
     + '<button class="btn" style="background:#446;color:#fff" onclick="hinksFixturesFromPorts()">Create fixtures from ports</button>'
     + '<button class="btn" style="background:#446;color:#fff" onclick="hinksProbe()">Probe</button>'
+    + '<button class="btn" style="background:#059669;color:#fff" onclick="hinksStandalone(' + _hpState.cid + ')">Standalone playback →</button>'
     + '</div>'
     + '<div id="hp-result" style="margin-top:.8em;font-size:.85em"></div>';
 
@@ -244,4 +245,222 @@ function hinksFixturesFromPorts() {
              true);
       if (typeof loadFixtures === 'function') loadFixtures();
     }).catch(function (e) { _hpSay(String(e), false); });
+}
+
+
+// ── Standalone scheduled playback (#941) ─────────────────────────────────────
+// The controller plays .hseq sequences from its SD card against an on-board
+// day/time schedule, with SlyLED switched off entirely. There is no "play now"
+// verb — the schedule IS the mechanism, so this panel edits days and times.
+//
+// Note the controller cannot express a window crossing midnight; the server
+// rejects one and tells you how to split it.
+
+var _hpDeploy = {config: null, progress: null, poll: null};
+var _HP_DAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+
+function hinksStandalone(cid) {
+  fetch('/api/hinkspix/' + cid + '/deploy')
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d || !d.ok) { alert('Could not load: ' + ((d && d.err) || '?')); return; }
+      _hpState.cid = cid;
+      _hpDeploy.config = d.config || {};
+      _hpDeploy.progress = d.progress || {};
+      _hpRenderStandalone();
+    });
+}
+
+function _hpRenderStandalone() {
+  var cfg = _hpDeploy.config || {};
+  var rows = cfg.schedule || [];
+  var last = cfg.lastDeploy;
+  var body = '';
+
+  body += '<p style="font-size:.85em;color:#9ab">Sequences are rendered here, uploaded to '
+        + 'the controller\'s SD card, and played against its own clock — SlyLED does not '
+        + 'need to be running.</p>';
+
+  body += '<div style="margin-bottom:1em"><label style="font-size:.8em;color:#9ab">Playlist name</label><br>'
+        + '<input id="hp-plname" value="' + escapeHtml(cfg.playlistName || 'SHOW')
+        + '" maxlength="20" style="width:14em"> '
+        + '<span style="font-size:.75em;color:#789">uppercase A-Z 0-9, max 20</span></div>';
+
+  body += '<div style="margin-bottom:1em"><label style="font-size:.8em;color:#9ab">Sequences</label>'
+        + '<div id="hp-items" style="font-size:.85em">';
+  (cfg.items || []).forEach(function (it, i) {
+    body += '<div>' + (i + 1) + '. timeline #' + it.timelineId
+          + ' <button class="btn" style="font-size:.7em;padding:.1em .4em;background:#633;color:#fff" '
+          + 'onclick="_hpRemoveItem(' + i + ')">remove</button></div>';
+  });
+  if (!(cfg.items || []).length) body += '<div style="color:#f88">No sequences selected — add one below.</div>';
+  body += '</div><div style="margin-top:.4em"><input id="hp-addtid" type="number" min="1" '
+        + 'placeholder="timeline id" style="width:9em"> '
+        + '<button class="btn" style="background:#446;color:#fff" onclick="_hpAddItem()">Add</button></div></div>';
+
+  body += '<div style="margin-bottom:1em"><label style="font-size:.8em;color:#9ab">Schedule</label>'
+        + '<table class="tbl" style="width:100%;font-size:.85em"><thead><tr>'
+        + '<th>Days</th><th>Start</th><th>End</th><th>Repeat</th><th>On</th><th></th>'
+        + '</tr></thead><tbody id="hp-sched">';
+  rows.forEach(function (r, i) {
+    body += '<tr><td>' + _HP_DAYS.map(function (d) {
+        var on = (r.days || []).some(function (x) { return d.indexOf(String(x).toUpperCase().slice(0, 3)) === 0; });
+        return '<label style="margin-right:.3em;font-size:.75em"><input type="checkbox" class="hp-day" '
+             + 'data-row="' + i + '" data-day="' + d + '"' + (on ? ' checked' : '') + '>' + d.slice(0, 3) + '</label>';
+      }).join('') + '</td>'
+      + '<td><input type="time" class="hp-start" data-row="' + i + '" value="' + escapeHtml(r.start || '20:00') + '"></td>'
+      + '<td><input type="time" class="hp-end" data-row="' + i + '" value="' + escapeHtml(r.end || '23:00') + '"></td>'
+      + '<td><input type="number" class="hp-rep" data-row="' + i + '" min="0" value="' + (r.repeat || 0) + '" style="width:4em" title="0 = repeat until the end time"></td>'
+      + '<td><input type="checkbox" class="hp-on" data-row="' + i + '"' + (r.enabled !== false ? ' checked' : '') + '></td>'
+      + '<td><button class="btn" style="font-size:.7em;padding:.1em .4em;background:#633;color:#fff" onclick="_hpRemoveRow(' + i + ')">remove</button></td></tr>';
+  });
+  body += '</tbody></table>'
+        + '<button class="btn" style="margin-top:.4em;background:#446;color:#fff" onclick="_hpAddRow()">Add schedule row</button>'
+        + '<div style="font-size:.75em;color:#789;margin-top:.3em">A window cannot cross midnight — '
+        + 'split 8pm–1am into 20:00–23:59 and 00:00–01:00 on the next day.</div></div>';
+
+  if (last) {
+    body += '<div style="margin-bottom:1em;padding:.6em .8em;border-radius:6px;background:'
+          + (last.ok ? '#123' : '#511') + ';font-size:.8em"><b>On the controller</b> — '
+          + (last.ok ? 'deployed' : 'FAILED') + ' '
+          + new Date((last.at || 0) * 1000).toLocaleString()
+          + (last.err ? (': ' + escapeHtml(last.err)) : '')
+          + '<div style="margin-top:.3em;max-height:140px;overflow:auto">'
+          + (last.files || []).map(function (f) {
+              return '<div>' + (f.ack ? '✓' : '✗') + ' ' + escapeHtml(f.name)
+                   + ' <span style="color:#789">' + (f.bytes || 0) + ' B'
+                   + (f.sha256 ? (' · ' + f.sha256) : '') + '</span></div>'; }).join('')
+          + '</div></div>';
+  }
+
+  var prog = _hpDeploy.progress || {};
+  body += '<div id="hp-deploy-progress" style="margin-bottom:.8em;font-size:.85em">'
+        + (prog.running ? ('Deploying — ' + escapeHtml(prog.message || prog.phase || '')) : '')
+        + '</div>';
+
+  body += '<div style="display:flex;gap:.5em;flex-wrap:wrap">'
+    + '<button class="btn btn-on" onclick="hinksSaveSchedule()">Save schedule</button>'
+    + '<button class="btn" style="background:#dc2626;color:#fff" onclick="hinksDeploy()">Deploy to controller</button>'
+    + '<button class="btn" style="background:#446;color:#fff" onclick="hinksSetClock()">Set clock</button>'
+    + '<button class="btn" style="background:#335;color:#fff" onclick="hinksMode(\'standalone\')">Standalone</button>'
+    + '<button class="btn" style="background:#335;color:#fff" onclick="hinksMode(\'live\')">Live</button>'
+    + '<button class="btn" style="background:#446;color:#fff" onclick="hinksConfigure(' + _hpState.cid + ')">← Ports</button>'
+    + '</div><div id="hp-result" style="margin-top:.8em;font-size:.85em"></div>';
+
+  _modalStack = [];
+  document.getElementById('modal-title').textContent = 'HinksPix PRO — standalone playback';
+  document.getElementById('modal-body').innerHTML = body;
+  document.getElementById('modal').style.display = 'block';
+}
+
+function _hpCollectSchedule() {
+  var cfg = _hpDeploy.config || {};
+  var rows = (cfg.schedule || []).map(function (_, i) {
+    var days = [];
+    document.querySelectorAll('.hp-day[data-row="' + i + '"]').forEach(function (el) {
+      if (el.checked) days.push(el.getAttribute('data-day'));
+    });
+    var q = function (cls) { return document.querySelector('.' + cls + '[data-row="' + i + '"]'); };
+    return {days: days, start: q('hp-start').value, end: q('hp-end').value,
+            repeat: parseInt(q('hp-rep').value, 10) || 0, enabled: q('hp-on').checked};
+  });
+  return {playlistName: document.getElementById('hp-plname').value,
+          items: cfg.items || [], schedule: rows};
+}
+
+function _hpAddRow() {
+  var cfg = _hpDeploy.config || (_hpDeploy.config = {});
+  cfg.schedule = _hpCollectSchedule().schedule;
+  cfg.schedule.push({days: _HP_DAYS.slice(), start: '20:00', end: '23:00',
+                     repeat: 0, enabled: true});
+  _hpRenderStandalone();
+}
+function _hpRemoveRow(i) {
+  var cfg = _hpDeploy.config;
+  cfg.schedule = _hpCollectSchedule().schedule;
+  cfg.schedule.splice(i, 1);
+  _hpRenderStandalone();
+}
+function _hpAddItem() {
+  var tid = parseInt(document.getElementById('hp-addtid').value, 10);
+  if (!tid) return;
+  var cfg = _hpDeploy.config || (_hpDeploy.config = {});
+  cfg.schedule = _hpCollectSchedule().schedule;
+  (cfg.items = cfg.items || []).push({timelineId: tid});
+  _hpRenderStandalone();
+}
+function _hpRemoveItem(i) {
+  var cfg = _hpDeploy.config;
+  cfg.schedule = _hpCollectSchedule().schedule;
+  cfg.items.splice(i, 1);
+  _hpRenderStandalone();
+}
+
+function hinksSaveSchedule(silent) {
+  var payload = _hpCollectSchedule();
+  return fetch('/api/hinkspix/' + _hpState.cid + '/deploy', {
+    method: 'PUT', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  }).then(function (r) { return r.json().then(function (d) { return {s: r.status, d: d}; }); })
+    .then(function (x) {
+      if (x.s !== 200) { _hpSay(x.d.err || 'save failed', false); return false; }
+      _hpDeploy.config = Object.assign(_hpDeploy.config || {}, x.d.config);
+      if (!silent) _hpSay('Schedule saved.', true);
+      return true;
+    });
+}
+
+function hinksDeploy() {
+  hinksSaveSchedule(true).then(function (okSaved) {
+    if (!okSaved) return;
+    if (!confirm('Render and upload to the controller, then switch it to standalone?\n\n'
+               + 'Large sequences upload in 580-byte chunks and can take several minutes.')) return;
+    fetch('/api/hinkspix/' + _hpState.cid + '/deploy', {method: 'POST'})
+      .then(function (r) { return r.json().then(function (d) { return {s: r.status, d: d}; }); })
+      .then(function (x) {
+        if (x.s !== 200) { _hpSay(x.d.err || 'deploy refused', false); return; }
+        _hpPollDeploy();
+      });
+  });
+}
+
+function _hpPollDeploy() {
+  if (_hpDeploy.poll) clearInterval(_hpDeploy.poll);
+  _hpDeploy.poll = setInterval(function () {
+    fetch('/api/hinkspix/' + _hpState.cid + '/deploy')
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var p = (d && d.progress) || {};
+        var el = document.getElementById('hp-deploy-progress');
+        if (el) el.textContent = p.running
+          ? ('Deploying — ' + (p.message || p.phase || ''))
+          : (p.ok === false ? ('Deploy failed: ' + (p.err || '')) : (p.message || ''));
+        if (!p.running) {
+          clearInterval(_hpDeploy.poll); _hpDeploy.poll = null;
+          _hpDeploy.config = d.config || _hpDeploy.config;
+          _hpDeploy.progress = p;
+          _hpRenderStandalone();
+        }
+      });
+  }, 1000);
+}
+
+function hinksSetClock() {
+  fetch('/api/hinkspix/' + _hpState.cid + '/set-clock', {method: 'POST'})
+    .then(function (r) { return r.json().then(function (d) { return {s: r.status, d: d}; }); })
+    .then(function (x) {
+      _hpSay(x.s === 200 ? 'Controller clock set.' : ('Failed: ' + (x.d.err || '')), x.s === 200);
+    });
+}
+
+function hinksMode(mode) {
+  if (!confirm('Switch the controller to ' + mode + ' mode?')) return;
+  fetch('/api/hinkspix/' + _hpState.cid + '/mode', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({mode: mode})
+  }).then(function (r) { return r.json().then(function (d) { return {s: r.status, d: d}; }); })
+    .then(function (x) {
+      _hpSay(x.s === 200 ? ('Controller switched to ' + mode + '.')
+                         : ('Failed: ' + (x.d.err || '')), x.s === 200);
+    });
 }

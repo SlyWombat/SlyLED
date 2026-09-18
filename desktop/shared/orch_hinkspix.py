@@ -375,3 +375,324 @@ def api_hinkspix_fixtures_from_ports(cid):
         if created:
             ps._save("fixtures", ps._fixtures)
     return jsonify(ok=True, created=created, skipped=skipped)
+
+
+# ── Offline standalone playback (#941) ───────────────────────────────────────
+# The controller plays .hseq sequences from its SD card against an on-board
+# day/time schedule, with the orchestrator switched off. There is NO "play
+# sequence N now" verb — playback is schedule-driven, so the native day/time
+# model IS the feature rather than a workaround.
+
+import hashlib as _hashlib
+import os
+import threading
+
+import hinkspix_files as hf
+import hinkspix_tcp as htcp
+import pixel_renderer
+
+DEPLOY_STORE = "hinkspix_deploy"
+STEP_MS = 25                       # matches the live loop's 40 Hz tick
+
+_deploy_state = {}                 # cid -> progress dict
+_deploy_lock = threading.Lock()
+
+
+def _deploy_cfg():
+    return ps._load(DEPLOY_STORE, {}) if hasattr(ps, "_load") else {}
+
+
+def _save_deploy_cfg(cfg):
+    ps._save(DEPLOY_STORE, cfg)
+
+
+def _device_dir(cid):
+    d = os.path.join(str(ps.DATA), "hinkspix", str(cid))
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _set_progress(cid, **kw):
+    with _deploy_lock:
+        st = _deploy_state.setdefault(cid, {})
+        st.update(kw)
+
+
+def render_hseq_frames(child, output_map, timeline_id, duration_s, step_ms=STEP_MS):
+    """Render a whole timeline into controller frames.
+
+    Each frame is `output_map.total_channels` bytes laid out by absStart, which
+    is the SAME layout the live path writes into universes — both read the one
+    map, so what was previewed is what plays unattended.
+
+    Master brightness IS applied here, unlike the live path: offline there is no
+    send-time gate to apply it later, and the operator expects the deployed show
+    to look like the one they previewed.
+    """
+    bake = (ps._bake_result.get(timeline_id) or {}).get("fixtures") or {}
+    fixtures = [f for f in ps._fixtures
+                if f.get("childId") == child.get("id")
+                and f.get("fixtureType") == "led"]
+    total = output_map.total_channels
+    n_frames = hf.frames_for_duration(duration_s, step_ms)
+    g_bri = int(ps._settings.get("globalBrightness", 255) or 255)
+
+    # Precompute each fixture's (span, offset) plan once rather than per frame.
+    plans = []
+    for f in fixtures:
+        entry = bake.get(f["id"]) or bake.get(str(f["id"])) or {}
+        if not entry.get("segments"):
+            continue
+        plans.append((f, entry, output_map.fixture_spans(f)))
+
+    frames = []
+    for i in range(n_frames):
+        t_s = (i * step_ms) / 1000.0
+        buf = bytearray(total)
+        for f, entry, spans_per_string in plans:
+            rgb = pixel_renderer.render_fixture(entry, f.get("strings") or [], t_s)
+            pos = 0
+            for string, spans in zip(f.get("strings") or [], spans_per_string):
+                n = int(string.get("leds") or 0)
+                if n <= 0:
+                    continue
+                chunk = rgb[pos:pos + n * 3]
+                pos += n * 3
+                cpos = 0
+                for span in spans:
+                    take = span["channels"]
+                    part = chunk[cpos:cpos + take]
+                    if not part:
+                        break
+                    start = span["absStart"] - 1
+                    buf[start:start + len(part)] = part
+                    cpos += take
+        if g_bri < 255:
+            buf = bytearray((b * g_bri) // 255 for b in buf)
+        frames.append(bytes(buf))
+    return frames, total, n_frames
+
+
+def _deploy_worker(cid, child, cfg):
+    """Render + upload + schedule + switch to standalone."""
+    entry = cfg.get(str(cid)) or {}
+    try:
+        output_map = PixelOutputMap.build(child)
+    except (ValueError, TypeError) as exc:
+        _set_progress(cid, running=False, ok=False, err=f"invalid port layout: {exc}")
+        return
+
+    tcp = htcp.HinksPixTcp(child["ip"])
+    playlist_name = hf.short_name(entry.get("playlistName") or "SHOW")
+    items = entry.get("items") or []
+    manifest = []
+    taken = set()
+
+    try:
+        # ── render ──────────────────────────────────────────────────
+        rendered = []
+        for idx, item in enumerate(items):
+            tid = item.get("timelineId")
+            tl = next((t for t in ps._timelines if t.get("id") == tid), None)
+            if tl is None:
+                raise htcp.HinksPixError(f"timeline {tid} not found")
+            if not ps._bake_result.get(tid):
+                raise htcp.HinksPixError(
+                    f"timeline '{tl.get('name', tid)}' is not baked — bake it first")
+            name = hf.short_name(tl.get("name") or f"SEQ{tid}", taken)
+            taken.add(name)
+            _set_progress(cid, running=True, phase="render",
+                          message=f"Rendering {name} ({idx + 1}/{len(items)})")
+            frames, channels, n_frames = render_hseq_frames(
+                child, output_map, tid, tl.get("durationS", 60))
+            path = os.path.join(_device_dir(cid), f"{name}.hseq")
+            with open(path, "wb") as fp:
+                written = hf.write_hseq(fp, frames, channels, STEP_MS, child["ip"])
+            sha = _hashlib.sha256(open(path, "rb").read()).hexdigest()[:16]
+            rendered.append({"name": name, "path": path, "bytes": written,
+                             "sha256": sha, "frames": n_frames})
+            manifest.append({"name": f"{name}.hseq", "bytes": written,
+                             "sha256": sha, "ack": False})
+
+        # ── upload sequences ────────────────────────────────────────
+        for i, r in enumerate(rendered):
+            def prog(sent, total, msg, _i=i, _r=r):
+                _set_progress(cid, phase="upload",
+                              message=f"{_r['name']}.hseq {sent * 100 // max(total, 1)}%",
+                              fileIndex=_i, fileCount=len(rendered))
+                return not _deploy_state.get(cid, {}).get("cancel")
+            with open(r["path"], "rb") as fp:
+                tcp.upload(f"{r['name']}.hseq", fp.read(), progress_cb=prog)
+            manifest[i]["ack"] = True
+
+        # ── playlist + seven schedules ──────────────────────────────
+        _set_progress(cid, phase="playlist", message="Uploading playlist")
+        ply = hf.playlist_text([{"hseq": f"{r['name']}.hseq"} for r in rendered])
+        tcp.upload(f"{playlist_name}.ply", ply.encode("ascii"))
+        manifest.append({"name": f"{playlist_name}.ply", "bytes": len(ply),
+                         "ack": True})
+
+        rows_by_day = {d: [] for d in hf.DAYS}
+        for row in entry.get("schedule") or []:
+            for day in (row.get("days") or []):
+                key = str(day).upper()
+                # accept MON/MONDAY
+                match = next((d for d in hf.DAYS if d.startswith(key[:3])), None)
+                if match:
+                    rows_by_day[match].append(row)
+        for day in hf.DAYS:
+            # Days with no rows get an explicit empty list so a stale schedule
+            # left on the card from a previous deploy is cleared.
+            text = hf.schedule_text(rows_by_day[day], playlist_name)
+            _set_progress(cid, phase="schedule", message=f"Uploading {day}.sched")
+            tcp.upload(hf.schedule_filename(day), text.encode("ascii"))
+            manifest.append({"name": hf.schedule_filename(day),
+                             "bytes": len(text), "ack": True})
+
+        # ── clock, then standalone ──────────────────────────────────
+        _set_progress(cid, phase="clock", message="Setting controller clock")
+        tcp.set_time()
+        _set_progress(cid, phase="mode", message="Switching to standalone")
+        tcp.set_mode(htcp.MODE_MASTER)
+
+        with ps._lock:
+            cfg.setdefault(str(cid), {})["lastDeploy"] = {
+                "at": int(time.time()), "ok": True, "files": manifest,
+                "mode": "G", "clockSetAt": int(time.time()),
+                "playlist": playlist_name,
+            }
+            _save_deploy_cfg(cfg)
+        _set_progress(cid, running=False, ok=True, phase="done",
+                      message=f"Deployed {len(rendered)} sequence(s)")
+        ps.log.info("HinksPix %s: deployed %d sequences, standalone mode",
+                    child["ip"], len(rendered))
+    except (htcp.HinksPixError, hf.HinksPixFileError, OSError) as exc:
+        _set_progress(cid, running=False, ok=False, err=str(exc))
+        with ps._lock:
+            cfg.setdefault(str(cid), {})["lastDeploy"] = {
+                "at": int(time.time()), "ok": False, "err": str(exc),
+                "files": manifest,
+            }
+            _save_deploy_cfg(cfg)
+        ps.log.warning("HinksPix %s deploy failed: %s", child.get("ip"), exc)
+
+
+@bp.get("/api/hinkspix/<int:cid>/deploy")
+def api_hinkspix_deploy_get(cid):
+    """Deploy config + last-deploy manifest + live progress."""
+    child, err = _child(cid)
+    if err:
+        return err
+    cfg = _deploy_cfg().get(str(cid)) or {}
+    return jsonify(ok=True, config=cfg, progress=_deploy_state.get(cid, {}))
+
+
+@bp.put("/api/hinkspix/<int:cid>/deploy")
+def api_hinkspix_deploy_put(cid):
+    """Set the playlist + schedule for standalone playback."""
+    child, err = _child(cid)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    cfg = _deploy_cfg()
+    entry = cfg.setdefault(str(cid), {})
+
+    if "playlistName" in body:
+        entry["playlistName"] = hf.short_name(body["playlistName"])
+    if "items" in body:
+        entry["items"] = [{"timelineId": int(i.get("timelineId"))}
+                          for i in (body["items"] or [])
+                          if i.get("timelineId") is not None]
+    if "schedule" in body:
+        rows = []
+        for i, row in enumerate(body["schedule"] or []):
+            bad = hf.validate_schedule_row(row)
+            if bad:
+                hint = ""
+                if "before start" in (bad or "") or "not after" in (bad or ""):
+                    split = hf.split_overnight(row.get("start"), row.get("end"))
+                    hint = (f" — the controller cannot span midnight; split into "
+                            f"{split[0][0]}-{split[0][1]} and {split[1][0]}-{split[1][1]} "
+                            f"on the following day")
+                return jsonify(err=f"schedule[{i}]: {bad}{hint}"), 400
+            rows.append({"days": [str(d).upper() for d in (row.get("days") or [])],
+                         "start": row.get("start"), "end": row.get("end"),
+                         "repeat": int(row.get("repeat") or 0),
+                         "enabled": bool(row.get("enabled", True))})
+        entry["schedule"] = rows
+    _save_deploy_cfg(cfg)
+    return jsonify(ok=True, config=entry)
+
+
+@bp.post("/api/hinkspix/<int:cid>/deploy")
+def api_hinkspix_deploy(cid):
+    """Render, upload and switch the controller to standalone playback."""
+    child, err = _child(cid)
+    if err:
+        return err
+    if _deploy_state.get(cid, {}).get("running"):
+        return jsonify(err="a deploy is already running"), 409
+
+    hinks = child.get("hinks") or {}
+    reasons = []
+    if child.get("status") != 1:
+        reasons.append("controller is offline")
+    if not hinks.get("uploadSupported"):
+        reasons.append(f"firmware MCPU {hinks.get('mcpu')} is below the "
+                       f"{hb.MIN_MCPU_UPLOAD} required for network upload — "
+                       f"update via SD card first")
+    if hinks.get("configHash") != _config_hash(hinks):
+        reasons.append("port config has not been pushed to the controller")
+    cfg = _deploy_cfg()
+    entry = cfg.get(str(cid)) or {}
+    if not entry.get("items"):
+        reasons.append("no sequences selected")
+    for item in entry.get("items") or []:
+        tid = item.get("timelineId")
+        if not ps._bake_result.get(tid):
+            reasons.append(f"timeline {tid} is not baked")
+    if reasons:
+        return jsonify(err="; ".join(reasons), reasons=reasons), 409
+
+    _deploy_state[cid] = {"running": True, "phase": "start", "message": "Starting",
+                          "ok": None, "cancel": False}
+    threading.Thread(target=_deploy_worker, args=(cid, child, cfg),
+                     daemon=True, name=f"hinkspix-deploy-{cid}").start()
+    return jsonify(ok=True, started=True)
+
+
+@bp.post("/api/hinkspix/<int:cid>/mode")
+def api_hinkspix_mode(cid):
+    """Switch between live (Ethernet) and standalone (SD) playback."""
+    child, err = _child(cid)
+    if err:
+        return err
+    mode = str((request.get_json(silent=True) or {}).get("mode", "")).lower()
+    try:
+        if mode == "live":
+            hb.op_mode_ethernet(child["ip"])
+        elif mode == "standalone":
+            htcp.HinksPixTcp(child["ip"]).set_mode(htcp.MODE_MASTER)
+        else:
+            return jsonify(err="mode must be 'live' or 'standalone'"), 400
+    except (hb.HinksPixError, htcp.HinksPixError) as exc:
+        return jsonify(ok=False, err=str(exc)), 502
+    return jsonify(ok=True, mode=mode)
+
+
+@bp.post("/api/hinkspix/<int:cid>/set-clock")
+def api_hinkspix_set_clock(cid):
+    """Set the controller RTC.
+
+    Worth doing periodically: the time packet carries time-of-day and weekday
+    only — no date — so an unattended controller drifts by an hour at each DST
+    transition until it is re-synced.
+    """
+    child, err = _child(cid)
+    if err:
+        return err
+    try:
+        htcp.HinksPixTcp(child["ip"]).set_time()
+    except htcp.HinksPixError as exc:
+        return jsonify(ok=False, err=str(exc)), 502
+    return jsonify(ok=True, at=int(time.time()))

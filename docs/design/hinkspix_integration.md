@@ -413,6 +413,13 @@ playback; confirm items 1-5 and 7 of §8 and record results in `docs/live-test-s
 
 ## 10. Implementation issues (dependency-ordered, complete PRs)
 
+**Status as of 2026-09-18: #938, #939, #940 and #941 are implemented.**
+Deviations from this plan, and why, are recorded in each commit message. The
+notable ones: the 64-segment bake cap moved from #938 to #939 (bake_timeline had
+no `children` parameter), and the standalone scheduling UI lives in the HinksPix
+device modal rather than a Shows-tab panel, keeping all controller UI in one
+place.
+
 | Issue | Title | Depends on |
 |---|---|---|
 | #938 | `feat: server-side per-pixel effect renderer with SPA parity corpus` | — |
