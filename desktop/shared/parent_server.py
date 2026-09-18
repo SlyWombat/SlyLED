@@ -37,6 +37,8 @@ flask.cli.show_server_banner = lambda *a, **kw: None   # suppress dev-server war
 import logging
 from datetime import datetime
 
+import pixel_renderer          # #938 server-side per-pixel effect renderer
+import pixel_output            # #939 pixel-string -> DMX universe mapping
 from wled_bridge import (wled_probe, wled_stop,
                          wled_get_effects, wled_get_palettes, wled_get_segments)
 from spatial_engine import (catmull_rom_sample, resolve_fixture,
@@ -3101,6 +3103,113 @@ def _action_led_ranges_for(child, string_indices):
     return struct.pack("<8H", *ls), struct.pack("<8H", *le)
 
 
+# ── Live ad-hoc actions on streamed pixel devices (#940) ─────────────────────
+# A performer receives CMD_ACTION and renders locally. A HinksPix has no such
+# firmware, so the orchestrator renders the same effect at 40 Hz and streams it.
+# The ticker only runs while something is registered, so an idle rig costs
+# nothing.
+_live_pixel_actions = {}          # fixture_id -> {fixture, map, type, params, startedAt}
+_live_pixel_lock = threading.Lock()
+_live_pixel_thread = None
+_live_pixel_stop = threading.Event()
+
+
+def _live_pixel_loop():
+    """40 Hz render loop for ad-hoc pixel actions. Exits when nothing is live."""
+    interval = 0.025
+    while not _live_pixel_stop.is_set():
+        engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
+        with _live_pixel_lock:
+            live = list(_live_pixel_actions.values())
+        if not live:
+            break
+        if engine is not None:
+            now = time.time()
+            for entry in live:
+                try:
+                    elapsed_ms = int((now - entry["startedAt"]) * 1000)
+                    rgb = pixel_renderer.render_string(
+                        entry["type"], entry["params"], entry["pixels"], elapsed_ms)
+                    if rgb is None:      # non-procedural: flat colour
+                        p = entry["params"]
+                        rgb = bytes((p.get("r") or 0, p.get("g") or 0,
+                                     p.get("b") or 0)) * entry["pixels"]
+                    pixel_output.write_fixture_frame(engine, entry["map"],
+                                                     entry["fixture"], rgb)
+                except Exception:
+                    log.exception("live pixel render failed for fixture %s",
+                                  entry.get("fid"))
+        _live_pixel_stop.wait(timeout=interval)
+    with _live_pixel_lock:
+        globals()["_live_pixel_thread"] = None
+
+
+def _live_pixel_start():
+    """Start the ticker if it isn't already running."""
+    global _live_pixel_thread
+    if _live_pixel_thread is not None and _live_pixel_thread.is_alive():
+        return
+    _live_pixel_stop.clear()
+    _live_pixel_thread = threading.Thread(target=_live_pixel_loop, daemon=True,
+                                          name="live-pixel")
+    _live_pixel_thread.start()
+
+
+def _streamed_child_action(child, act, strings_sel):
+    """Register an ad-hoc action on every streamed fixture of *child*.
+
+    Returns the number of fixtures affected.
+    """
+    try:
+        omap = pixel_output.PixelOutputMap.build(child)
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"unusable port map: {exc}")
+    affected = 0
+    with _live_pixel_lock:
+        for f in _fixtures:
+            if f.get("childId") != child.get("id") or f.get("fixtureType") != "led":
+                continue
+            fstrings = f.get("strings") or []
+            if strings_sel is not None:
+                fstrings = [s for i, s in enumerate(fstrings) if i in strings_sel]
+                if not fstrings:
+                    continue
+            pixels = sum(int(s.get("leds") or 0) for s in (f.get("strings") or []))
+            if pixels <= 0:
+                continue
+            _live_pixel_actions[f["id"]] = {
+                "fid": f["id"], "fixture": f, "map": omap,
+                "type": act.get("type", 1), "params": act,
+                "pixels": pixels, "startedAt": time.time(),
+            }
+            affected += 1
+    if affected:
+        _live_pixel_start()
+    return affected
+
+
+def _streamed_child_action_stop(child):
+    """Clear ad-hoc actions for *child* and black out its spans."""
+    engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
+    cleared = []
+    with _live_pixel_lock:
+        for fid, entry in list(_live_pixel_actions.items()):
+            if entry["fixture"].get("childId") == child.get("id"):
+                cleared.append(_live_pixel_actions.pop(fid))
+    if engine is not None:
+        for entry in cleared:
+            try:
+                for spans in entry["map"].fixture_spans(entry["fixture"]):
+                    for span in spans:
+                        buf = engine.get_universe(span["universe"])
+                        buf.all_intensity = True
+                        buf.set_channels(span["uniChannelStart"],
+                                         b"\x00" * span["channels"])
+            except Exception:
+                log.exception("live pixel stop blackout failed")
+    return len(cleared)
+
+
 @app.post("/api/children/<int:cid>/action")
 def api_child_action(cid):
     """Fire an ad-hoc action at an LED child, targeting selected strings.
@@ -3129,6 +3238,23 @@ def api_child_action(cid):
             return jsonify(err="no such action"), 404
     else:
         action = body
+    # #940 — a streamed device has no firmware renderer and carries sc=0, so it
+    # must branch before the string-count check below. The orchestrator renders
+    # the same effect at 40 Hz and streams it into the device's universes.
+    if child.get("type") == "hinkspix":
+        sel = None
+        if not body.get("allStrings") and "strings" in body:
+            sel = {int(x) for x in body.get("strings", [])}
+        try:
+            affected = _streamed_child_action(child, action, sel)
+        except ValueError as exc:
+            return jsonify(err=str(exc)), 409
+        if not affected:
+            return jsonify(err="no streamed fixtures bound to this controller"), 409
+        log.info("Child %d streamed ad-hoc action: type=%s fixtures=%d",
+                 cid, action.get("type"), affected)
+        return jsonify(ok=True, type=action.get("type"), streamed=True,
+                       fixtures=affected)
     sc = int(child.get("sc", 0) or 0)
     if sc <= 0:
         return jsonify(err="child has no configured strings"), 409
@@ -3157,6 +3283,10 @@ def api_child_action_stop(cid):
     ip = child.get("ip")
     if not ip:
         return jsonify(err="child has no IP"), 409
+    if child.get("type") == "hinkspix":      # #940 — clear + blackout its spans
+        cleared = _streamed_child_action_stop(child)
+        log.info("Child %d streamed ad-hoc action stop (%d fixtures)", cid, cleared)
+        return jsonify(ok=True, streamed=True, fixtures=cleared)
     _send(ip, _hdr(CMD_ACTION_STOP))
     log.info("Child %d ad-hoc action stop", cid)
     return jsonify(ok=True)
@@ -14457,6 +14587,44 @@ def api_fixtures_live():
             entry["claimedBy"] = _claim_arbiter.claim_info(fid, claim_snap)
         elif running:
             entry["source"] = "show"
+        # #940 — streamed LED fixtures have no performer to report status, so
+        # pre-fix their Monitor tile was permanently Idle even mid-show. Read
+        # the truth back out of the universe buffer we just wrote.
+        _hp_child = next((c for c in _children
+                          if c.get("id") == f.get("childId")), None)
+        if ft == "led" and _hp_child is not None and _hp_child.get("type") == "hinkspix":
+            engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
+            live = _live_pixel_actions.get(fid)
+            if live is not None:
+                entry["active"] = True
+                entry["source"] = "live"
+                entry["effect"] = live.get("type")
+            elif running:
+                entry["effect"] = _streamed_effect_at(f)
+                entry["active"] = entry["effect"] is not None
+            if engine is not None:
+                try:
+                    omap = pixel_output.PixelOutputMap.build(_hp_child)
+                    tot = [0, 0, 0]
+                    cnt = 0
+                    for spans in omap.fixture_spans(f):
+                        for span in spans:
+                            buf = engine.peek_universe(span["universe"])
+                            if buf is None:
+                                continue
+                            raw = buf.get_data()[:span["channels"]]
+                            for i in range(0, len(raw) - 2, 3):
+                                tot[0] += raw[i]; tot[1] += raw[i + 1]; tot[2] += raw[i + 2]
+                                cnt += 1
+                    if cnt:
+                        entry["r"], entry["g"], entry["b"] = (t // cnt for t in tot)
+                        entry["dimmer"] = max(entry["r"], entry["g"], entry["b"])
+                        if entry["dimmer"] > 0:
+                            entry["active"] = True
+                except (ValueError, TypeError):
+                    pass
+            result.append(entry)
+            continue
         if ft == "dmx":
             uni_num = f.get("dmxUniverse", 1)
             addr = f.get("dmxStartAddr", 1)
@@ -15732,6 +15900,103 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures,
                     uni_buf = engine.get_universe(f.get("dmxUniverse", 1))
                     uni_buf.set_fixture_dimmer(f.get("dmxStartAddr", 1), 0, profile)
 
+# ── Streamed pixel fixtures (#940) ───────────────────────────────────────────
+# A HinksPix-backed LED fixture has no hardware step buffer: the orchestrator
+# renders its pixels every frame and writes them into DMX universes, exactly
+# like a DMX fixture but with packed RGB instead of profile channels. The
+# universe layout comes from PixelOutputMap (#939) — the single owner of that
+# decision, shared with the offline .hseq writer (#941) so frame layout cannot
+# diverge between live and offline playback.
+
+def _collect_streamed_fixtures(baked_fixtures):
+    """Build the per-frame render plan for streamed LED fixtures.
+
+    Returns [{fid, name, fixture, bake, map}], empty when no HinksPix-backed
+    fixture in this bake has segments.
+    """
+    plans = []
+    maps = {}
+    for f in _fixtures:
+        if f.get("fixtureType") != "led":
+            continue
+        cid = f.get("childId")
+        child = next((c for c in _children if c.get("id") == cid), None)
+        if child is None or _is_performer(child) or child.get("type") != "hinkspix":
+            continue
+        fid = f["id"]
+        bake = baked_fixtures.get(fid) or baked_fixtures.get(str(fid)) or {}
+        if not bake.get("segments"):
+            continue
+        if cid not in maps:
+            try:
+                maps[cid] = pixel_output.PixelOutputMap.build(child)
+            except (ValueError, TypeError) as exc:
+                log.warning("streamed fixture %d: unusable port map on child %s: %s",
+                            fid, cid, exc)
+                maps[cid] = None
+        omap = maps.get(cid)
+        if omap is None:
+            continue
+        plans.append({"fid": fid, "name": f.get("name", "?"),
+                      "fixture": f, "bake": bake, "map": omap})
+    return plans
+
+
+def _streamed_effect_at(fixture):
+    """Current effect type driving *fixture*, or None.
+
+    Derives show time from the running playback's start epoch and reuses the
+    renderer's own segment-selection rule, so the Monitor agrees with what is
+    actually being streamed rather than guessing from the bake's first segment.
+    """
+    tid = _show_playback.get("currentTid")
+    start = _show_playback.get("startEpoch")
+    if tid is None or not start:
+        return None
+    bake = (_bake_result.get(tid) or {}).get("fixtures") or {}
+    entry = bake.get(fixture["id"]) or bake.get(str(fixture["id"])) or {}
+    segs = entry.get("segments") or []
+    if not segs:
+        return None
+    elapsed = time.time() - start
+    if elapsed < 0:
+        return None
+    seg = pixel_renderer.active_segment(segs, 0, elapsed)
+    return seg.get("type") if seg else None
+
+
+def _render_streamed_fixtures(plans, engine, elapsed):
+    """Render + write one frame for every streamed fixture."""
+    if not plans or engine is None:
+        return
+    for plan in plans:
+        try:
+            rgb = pixel_renderer.render_fixture(
+                plan["bake"], plan["fixture"].get("strings") or [], elapsed)
+            pixel_output.write_fixture_frame(engine, plan["map"],
+                                             plan["fixture"], rgb)
+        except Exception:
+            # Never let one bad fixture kill the 40 Hz thread; the caller's
+            # rate-limited handler logs it.
+            raise
+
+
+def _blackout_streamed_fixtures(plans, engine):
+    """Zero every pixel span these fixtures own."""
+    if not plans or engine is None:
+        return
+    for plan in plans:
+        try:
+            for spans in plan["map"].fixture_spans(plan["fixture"]):
+                for span in spans:
+                    buf = engine.get_universe(span["universe"])
+                    buf.all_intensity = True
+                    buf.set_channels(span["uniChannelStart"],
+                                     b"\x00" * span["channels"])
+        except Exception:
+            log.exception("streamed blackout failed for fixture %s", plan.get("fid"))
+
+
 def _dmx_playback_loop(tid, go_epoch, duration, loop):
     """Background thread: stream DMX channel data during show playback."""
     result = _bake_result.get(tid)
@@ -15787,8 +16052,17 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
         dmx_fixtures.append({"fid": fid, "name": f.get("name", "?"),
                              "uni": uni, "addr": addr, "ch_map": ch_map,
                              "channels": channels, "segs": segs})
+    # #940 — streamed LED fixtures: LED fixtures whose child is a non-performer
+    # (HinksPix). Their pixels are rendered here every frame and written into
+    # DMX universes, unlike performer-backed LED fixtures which run autonomously
+    # from preloaded LOAD_STEPs.
+    streamed_fixtures = _collect_streamed_fixtures(baked_fixtures)
+    if streamed_fixtures:
+        log.info("DMX playback: %d streamed LED fixture(s) will render server-side",
+                 len(streamed_fixtures))
+
     has_track_actions = any(a.get("type") == 18 for a in _actions)
-    if not dmx_fixtures and not has_track_actions:
+    if not dmx_fixtures and not has_track_actions and not streamed_fixtures:
         # LED-only show: the LED children run autonomously from
         # preloaded LOAD_STEPs, so the 40Hz playback loop has no DMX
         # work to do. But the loop is ALSO the timekeeper for
@@ -16022,6 +16296,12 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
             _evaluate_track_actions(elapsed, engine, dmx_fixtures,
                                      timeline_track_fids=timeline_track_fids,
                                      tl_action_ids=tl_action_ids)
+            # #940 — streamed pixels follow the DMX clock (same `elapsed`), so
+            # movers and pixels in one show stay coherent. Master brightness is
+            # NOT applied here: pixel universes are flagged all_intensity and
+            # scaled once at send time (#853/#938), which keeps a single point
+            # of truth for global brightness.
+            _render_streamed_fixtures(streamed_fixtures, engine, elapsed)
             frame_count += 1
             if frame_count == 1:
                 log.info("DMX playback: first frame sent at elapsed=%.1fs", elapsed)
@@ -16037,6 +16317,10 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
                               frame_count, elapsed)
             frame_count += 1
     log.info("DMX playback: stopped after %d frames", frame_count)
+    # #940 — zero the pixel universes. Pixel spans are never "claimed" by
+    # mover-control, so they don't reach the claim-aware park below and would
+    # otherwise latch on the final frame's colours indefinitely.
+    _blackout_streamed_fixtures(streamed_fixtures, engine)
     # Timeline end (#800 idle definition): each mover the timeline was
     # driving snaps to home + lamp off, so the head doesn't sit at the
     # last cue's pose indefinitely. Non-mover DMX fixtures still get
@@ -16437,8 +16721,11 @@ def _dmx_playback_single(tid, go_epoch, duration, is_final=True):
         dmx_fixtures.append({"fid": fid, "name": f.get("name", "?"),
                              "uni": uni, "addr": addr, "ch_map": ch_map,
                              "channels": channels, "segs": segs})
-    if not dmx_fixtures:
-        # No DMX fixtures — just wait for duration to pass
+    # #940 — streamed LED fixtures render server-side here too, so a show with
+    # only HinksPix pixels and no DMX fixtures must NOT take the idle path.
+    streamed_fixtures = _collect_streamed_fixtures(baked_fixtures)
+    if not dmx_fixtures and not streamed_fixtures:
+        # Nothing to stream — just wait for duration to pass
         _dmx_playback_stop.wait(timeout=duration)
         return
 
@@ -16557,6 +16844,7 @@ def _dmx_playback_single(tid, go_epoch, duration, is_final=True):
         _evaluate_track_actions(elapsed, engine, dmx_fixtures,
                                  timeline_track_fids=timeline_track_fids,
                                  tl_action_ids=tl_action_ids)
+        _render_streamed_fixtures(streamed_fixtures, engine, elapsed)   # #940
         frame_count += 1
     # Blackout on segment end (#364) — zero RGB, dimmer, pan/tilt, and all extras.
     # #763 — leave claimed fixtures alone; the operator owns their output.
@@ -16567,6 +16855,10 @@ def _dmx_playback_single(tid, go_epoch, duration, is_final=True):
     # values, eliminating the visible one-frame blackout.
     ended_by_stop = _dmx_playback_stop.is_set()
     if is_final or ended_by_stop:
+        # #940 — pixels obey the same #840 rule as DMX: blacking out at every
+        # mid-playlist boundary would reintroduce the visible one-frame gap
+        # between segments. Only the final segment (or an operator Stop) dims.
+        _blackout_streamed_fixtures(streamed_fixtures, engine)
         seg_snap = _claim_arbiter.snapshot()
         for fx in dmx_fixtures:
             if _claim_arbiter.is_muted(fx["fid"], seg_snap):

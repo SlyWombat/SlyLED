@@ -112,8 +112,17 @@ def api_hinkspix_get(cid):
     if err:
         return err
     hinks = child.get("hinks") or {}
+    # #940 — the engine actually streaming (from dmx_settings) and the input
+    # protocol the controller was configured for must agree, or frames go out
+    # on a wire the device isn't listening to. Surfaced rather than silently
+    # coerced: changing either side is an operator decision.
+    engine_proto = (ps._dmx_settings.get("protocol") or "artnet").lower()
+    device_proto = (hinks.get("protocol") or "").lower()
+    proto_match = (device_proto in ("e131", "sacn") and engine_proto == "sacn") or \
+                  (device_proto == engine_proto)
     body = {"ok": True, "id": cid, "ip": child.get("ip"),
             "name": child.get("name"), "status": child.get("status", 0),
+            "engineProtocol": engine_proto, "protocolMatch": bool(proto_match),
             "hinks": hinks, "configHash": _config_hash(hinks),
             "pushedHash": hinks.get("configHash", ""),
             "inSync": bool(hinks.get("configHash")

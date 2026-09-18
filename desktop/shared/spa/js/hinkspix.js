@@ -20,7 +20,8 @@ function hinksConfigure(cid) {
     .then(function (d) {
       if (!d || !d.ok) { alert('Could not load device: ' + ((d && d.err) || 'unknown')); return; }
       _hpState = {cid: cid, hinks: d.hinks || {}, map: d.map, inSync: !!d.inSync,
-                  mapError: d.mapError};
+                  mapError: d.mapError, engineProtocol: d.engineProtocol,
+                  protocolMatch: d.protocolMatch !== false};
       _hpRender();
     })
     .catch(function (e) { alert('Could not load device: ' + e); });
@@ -65,6 +66,16 @@ function _hpRender() {
           + '</div>';
   }
 
+  // #940 — the controller listens on one protocol; the orchestrator streams on
+  // whichever engine is configured. A mismatch means frames go nowhere.
+  if (!_hpState.protocolMatch) {
+    body += '<div style="margin-bottom:1em;padding:.6em .8em;border-radius:6px;'
+          + 'background:#511;font-size:.85em">Protocol mismatch: the controller '
+          + 'is configured for <b>' + escapeHtml(String(h.protocol || '?')).toUpperCase()
+          + '</b> but SlyLED is streaming <b>' + escapeHtml(String(_hpState.engineProtocol || '?')).toUpperCase()
+          + '</b>. Frames will not reach the device until these agree — change the '
+          + 'input protocol here and push, or switch the engine in DMX settings.</div>';
+  }
   if (_hpState.mapError) {
     body += '<div style="margin-bottom:1em;padding:.6em .8em;border-radius:6px;'
           + 'background:#511;font-size:.85em">Port layout invalid: '
