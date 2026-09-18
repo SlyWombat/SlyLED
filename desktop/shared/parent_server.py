@@ -768,7 +768,10 @@ _artnet = ArtNetEngine(
     get_global_brightness=lambda: _settings.get("globalBrightness", 255),
     get_intensity_offsets=lambda uni: _get_intensity_offsets(uni),
 )
-_sacn = sACNEngine()
+_sacn = sACNEngine(
+    get_global_brightness=lambda: _settings.get("globalBrightness", 255),
+    get_intensity_offsets=lambda uni: _get_intensity_offsets(uni),
+)
 
 _shutdown_blackout_done = False
 

@@ -145,13 +145,27 @@ class sACNEngine:
     """sACN E1.31 output engine with 40Hz multicast output."""
 
     def __init__(self, source_name="SlyLED", priority=DEFAULT_PRIORITY, bind_ip="0.0.0.0",
-                 frame_rate=40):
+                 frame_rate=40,
+                 get_global_brightness=None, get_intensity_offsets=None,
+                 gamma_lut=None):
         """
         Args:
             source_name: human-readable source name (max 63 chars)
             priority: sACN priority level (0-200, higher wins)
             bind_ip: IP to bind the send socket to
             frame_rate: output frame rate in Hz (default 40)
+            get_global_brightness: callable() → int 0..255. Snapshotted per
+                send so the #853 master grand-master scales sACN output the
+                same way it already scaled Art-Net. Default returns 255.
+            get_intensity_offsets: callable(universe_num) → iterable of
+                0-based buffer indices to scale (intensity channels only;
+                pan/tilt/strobe/gobo/wheel-slot bytes are positions, not
+                intensities, and must not be dimmed). Ignored for universes
+                flagged ``all_intensity`` (#938 pixel universes), where every
+                byte scales. Default returns empty.
+            gamma_lut: optional 256-byte LUT applied after the linear master
+                multiply, matching FastLED's curve so DMX and LED perceive
+                identically at the same master.
         """
         self._source_name = source_name
         self._priority = priority
@@ -165,6 +179,15 @@ class sACNEngine:
         self._thread = None
         self._sock = None
         self._lock = threading.Lock()
+        # #938 — master grand-master callbacks, mirroring ArtNetEngine.
+        # Before this, sACN sent raw buffer bytes and silently ignored the
+        # #853 global brightness, so the same show dimmed on Art-Net but
+        # not on sACN. Defaults are no-op for standalone/test usage.
+        self._get_global_brightness = (
+            get_global_brightness or (lambda: 255))
+        self._get_intensity_offsets = (
+            get_intensity_offsets or (lambda _u: ()))
+        self._gamma_lut = gamma_lut
 
     def configure(self, source_name=None, priority=None, bind_ip=None, frame_rate=None):
         """Update configuration. Takes effect on next start()."""
@@ -286,7 +309,20 @@ class sACNEngine:
         uni = self._universes.get(uni_num)
         if not uni:
             return
-        data = b"\x00" * 512 if blackout else uni.get_data()
+        if blackout:
+            data = b"\x00" * 512
+        else:
+            # #853/#938 — apply the master grand-master at send time, the
+            # single point where global brightness reaches DMX output.
+            g_bri = int(self._get_global_brightness() or 255)
+            if g_bri < 255:
+                data = uni.get_data_scaled(
+                    master_brightness=g_bri,
+                    intensity_offsets=self._get_intensity_offsets(uni_num),
+                    gamma_lut=self._gamma_lut,
+                )
+            else:
+                data = uni.get_data()
         seq = self._sequences.get(uni_num, 0)
         seq = (seq + 1) & 0xFF
         self._sequences[uni_num] = seq

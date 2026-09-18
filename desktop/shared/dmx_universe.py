@@ -13,7 +13,8 @@ log = logging.getLogger("slyled.dmx_universe")
 class DMXUniverse:
     """Thread-safe 512-channel DMX universe buffer."""
 
-    __slots__ = ("_data", "_lock", "universe", "dirty", "_last_send")
+    __slots__ = ("_data", "_lock", "universe", "dirty", "_last_send",
+                 "all_intensity")
 
     def __init__(self, universe=1):
         self.universe = universe
@@ -21,6 +22,12 @@ class DMXUniverse:
         self._lock = threading.Lock()
         self.dirty = False  # set True on write, cleared by engine after send
         self._last_send = 0  # monotonic timestamp of last ArtDMX send
+        # #938 — pixel universes carry nothing but intensity bytes (packed
+        # RGB), so the master gate applies to all 512 channels. The pixel
+        # output map sets this when it claims a universe; DMX-fixture
+        # universes leave it False and scale only profile-declared
+        # intensity offsets.
+        self.all_intensity = False
 
     # ── Single channel ────────────────────────────────────────────
 
@@ -83,7 +90,19 @@ class DMXUniverse:
         get-time so the contract is uniform across paths and
         observable from monitor reads + ArtNet sends alike.
         """
-        if master_brightness >= 255 or not intensity_offsets:
+        if master_brightness >= 255:
+            with self._lock:
+                return bytes(self._data)
+        # #938 — an all-intensity (pixel) universe scales every byte; no
+        # per-offset iteration and no profile lookup needed.
+        if self.all_intensity:
+            with self._lock:
+                raw = bytes(self._data)
+            if gamma_lut is None:
+                return bytes((b * master_brightness) // 255 for b in raw)
+            return bytes(gamma_lut[((b * master_brightness) // 255) & 0xFF]
+                         for b in raw)
+        if not intensity_offsets:
             with self._lock:
                 return bytes(self._data)
         with self._lock:
