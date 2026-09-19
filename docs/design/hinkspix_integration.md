@@ -388,6 +388,56 @@ deploy issues.
 
 ---
 
+## 8a. Field findings, 2026-09-17..19 (operator's unit, PN #925, bought Jan 2021)
+
+Answers to several §8 questions, measured on real hardware. The unit is **MCPU MS_149**
+and could not be updated, so the #938-#941 code has still never run against a HinksPix.
+
+**§8.1 upload gate — CONFIRMED, and worse than documented.** `MS_149` is below the
+`MS 151` network-upload gate, so xLights refuses. Raw TCP upload also fails: the controller
+resets the connection immediately, consistent with `MS 152 — "Enabled remote transfer of
+firmware and standalone files"`. Firmware older than 152 has no remote file transfer at all,
+so `hinkspix_tcp.py` cannot work below that version. Worth surfacing in the UI as a
+capability check, not just the `uploadSupported` flag.
+
+**MS_149 deadlocks at boot on a SUCCESSFUL DNS lookup** (the auto-update check removed in
+`MS 151`). Measured with DNS + firewall logging: a valid answer produces **one query then a
+deadlock with zero outbound packets** — it never opens a socket; a failed lookup produces
+**33 retries over ~11 s**, then the error branch runs and boot completes normally. Any
+mechanism that makes the lookup fail avoids it (NXDOMAIN, or simply no Ethernet link).
+**Operator workaround: boot with Ethernet unplugged, then replug.** Never "fix" its DNS —
+working DNS is what breaks it. Consequence: such a unit cannot self-recover from a power cut.
+
+**§8.7 readback keys — partially captured.** The controller's own menu can write its E1.31
+config to SD as `E131_Config\Current_E131.SYS`, in a readable text form that matches the
+shape `hinkspix_bridge.build_universe_rows()` produces:
+
+    ~U,32
+    ~E,<idx>,<universe>,<chans>,1,<absStart>,<absEnd>,...
+
+That is useful independent validation of the universe-table encoding in #939.
+
+**Debug page is the SD diagnostic** (`GET /debug.html` on normal firmware) — reports
+`SDC Active Mounted`, `SD Error Recoveries`, `Perform EE Op Error`, heap and E1.31 counters.
+Note `EE OP ERR n` in an error message is that **counter**, not an error code.
+
+**SD firmware update did not trigger on MS_149** under any layout tried: the full vendor zip
+at the card root, a minimal `SD_HFW.sys`+`.joe`, `Fix.zip` as shipped, and `.joe` files in an
+`FW\` subdirectory (HSA V3's own code references `\FW\*.joe`). Card confirmed mounted and
+writable throughout. There is no firmware-from-SD item in the button menus on this firmware.
+Unresolved; reported to HolidayCoro 2026-09-19.
+
+**Emergency web flash rejects every filename** — `BAD FILE NAME`, stalling ~18 KB into a
+279 KB file regardless of file, name, or card state. The expected filename/format is unknown
+and is the open question with the vendor.
+
+**Vendor web-server bug worth coding around:** the emergency image sends
+`Content-Encoding: gzip` with an **uncompressed** body and `Content-Type: (null)`, so it is
+blank in any browser. Normal firmware serves correctly (and genuinely gzips). Any client we
+write should not trust `Content-Encoding` from this device.
+
+---
+
 ## 9. Test strategy (repo gates)
 
 Offline first, all under the `unit` job in `.github/workflows/python-tests.yml`
