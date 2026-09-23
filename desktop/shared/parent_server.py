@@ -3529,6 +3529,7 @@ def _validate_fixture_strings(strings):
     """
     if not isinstance(strings, list):
         return "strings must be a list"
+    import hinkspix_bridge
     for i, s in enumerate(strings):
         if not isinstance(s, dict):
             return f"strings[{i}] must be an object"
@@ -3555,8 +3556,13 @@ def _validate_fixture_strings(strings):
             port = s["port"]
             if isinstance(port, bool) or not isinstance(port, int):
                 return f"strings[{i}].port must be an integer"
-            if not 1 <= port <= 48:
-                return f"strings[{i}].port {port} out of range 1..48"
+            # The protocol's own ceiling (#946): the highest output any model
+            # addresses. Whether the port exists on *this* controller is the
+            # child-aware check in `_validate_fixture_ports`, which has the
+            # board layout to answer it.
+            if not 1 <= port <= hinkspix_bridge.MAX_PORTS:
+                return (f"strings[{i}].port {port} out of range 1.."
+                        f"{hinkspix_bridge.MAX_PORTS}")
     ports = [s["port"] for s in strings
              if isinstance(s, dict) and isinstance(s.get("port"), int)
              and not isinstance(s.get("port"), bool)]
@@ -3575,14 +3581,37 @@ def _validate_fixture_ports(strings, child, fixtures, fixture_id=None):
     """
     if not child or child.get("type") != "hinkspix":
         return None
+    import hinkspix_bridge
+    import hinkspix_config as hc
+    hinks = child.get("hinks") or {}
+    caps = hc.caps_for(hinks)
+    boards = hc.present_boards(child)
     device_ports = {int(p.get("port")): p
-                    for p in ((child.get("hinks") or {}).get("ports") or [])
+                    for p in (hinks.get("ports") or [])
                     if p.get("port") is not None}
     for i, s in enumerate(strings or []):
         port = s.get("port")
         if not isinstance(port, int) or isinstance(port, bool):
             return (f"strings[{i}] on a HinksPix fixture must declare a `port` "
                     f"— pixels are addressed per physical output")
+        # Binding a string is a statement that the port is in use, so unlike the
+        # port table's own check this one is unconditional: a fixture hung on an
+        # output that does not exist would be discovered at the first show,
+        # with nothing on stage to explain it (#946).
+        if port > caps.max_pixel_port:
+            return (f"strings[{i}].port {port} is not an output on a "
+                    f"{caps.name}, which addresses 1..{caps.max_pixel_port}")
+        if boards:
+            board = hc.board_of(port)
+            kind = boards.get(board)
+            if kind is None:
+                return (f"strings[{i}].port {port} is on BD{board}, which this "
+                        f"controller does not report as fitted")
+            if kind not in hinkspix_bridge.PIXEL_BOARD_TYPES:
+                what = ("reports Not_Present" if kind == "Not_Present"
+                        else f"is a {kind.replace('_', ' ')} board")
+                return (f"strings[{i}].port {port} is on BD{board}, which "
+                        f"{what} — it has no pixel outputs")
         dev = device_ports.get(port)
         if dev is None:
             return f"strings[{i}].port {port} is not configured on this controller"

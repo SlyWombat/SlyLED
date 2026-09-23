@@ -210,15 +210,18 @@ banker's rounding — use `math.floor(x + 0.5)`), and the corpus test proves it.
            "protocol": "sacn",
            "baseUniverse": 100,
            "dmxOut": {"enabled": false, "universe": null},
+           "defaults": {"brightness": 100, "gamma": 1},
            "ports": [{"port": 1, "leds": 300, "mm": 5000, "protocol": "ws2811",
-                      "colorOrder": "RGB", "direction": 0, "nullPixels": 0,
-                      "brightness": 100, "gamma": 1, "enabled": true}],
+                      "colorOrder": "RGB", "direction": 0, "startNulls": 0,
+                      "brightness": 100, "gamma": 1, "enabled": true,
+                      "smartRemote": null, "smartRemoteType": null}],
            "configPushedAt": 0, "configHash": ""}}
 ```
 
 **Explicit divergence from the performer model:** `sc=0, strings=[]` guarantees no performer
 code path (`_child_led_ranges`, `_load_step_pkt`, sync, `RUNNER_GO`) can address it; the
-8-string wire constant never applies. Port inventory is device-level (48 entries); geometry is
+8-string wire constant never applies. Port inventory is device-level (48 rows on a PRO V1/V2,
+80 on a PRO V3 — §4.7); geometry is
 fixture-level. A new helper `_is_performer(child)` (`type in (None, "slyled")`) replaces the
 ad-hoc `type == "wled"` guards in `_periodic_ping`, `_refresh_bg`, `api_show_start`
 (RUNNER_GO fan-out), `/baked/sync`, `api_children_reboot`, `api_show_stop` (`:17577`).
@@ -235,8 +238,11 @@ HinksPix-backed fixtures are ordinary `fixtureType:"led", type:"linear"` fixture
               "rotation": [0,0,90]}]}
 ```
 
-- `_validate_fixture_strings` (`:3292`) gains: `port` (1..48 int, unique across all fixtures on
-  that child, must be `enabled` on the device, `leds` must equal the device port's `leds`).
+- `_validate_fixture_strings` (`:3292`) gains: `port` (1..`MAX_PORTS` = 80 int, unique across
+  all fixtures on that child). `_validate_fixture_ports` (`:3575`) then checks it against the
+  controller: within the *model's* port count, on a board that is fitted (since #946 — see §4.7),
+  carrying the port table's `leds` and enabled. Device wins for `leds`; `mm` is operator-owned
+  geometry.
   `leds`/`mm` are copied from the port table on creation and re-synced when it changes
   (device wins for `leds`; `mm` is operator-owned geometry).
 - Default is **one fixture per enabled port** ("Create fixtures from ports" in the device modal);
@@ -292,11 +298,16 @@ device and can put the device back afterwards:
 
 - **Setup → Hardware**: row with badge "HinksPix" (new `boardColors` entry), status, firmware,
   buttons Refresh / Configure / Web UI (`http://<ip>/`) / Remove.
-- **Device modal** (`hinkspix.js`): port table (48 rows: enabled, leds, mm, protocol, colour
-  order, null pixels, brightness, gamma), base universe, protocol readout, DMX-out toggle +
-  universe, "Create fixtures from ports", "Probe", mode indicator (Live / Standalone /
-  unknown), "Set clock", and two buttons into the wizard below. Since #945 this modal **never
-  writes the controller** — everything that touches the device moved to `hinkspix_config.js`.
+- **Device modal** (`hinkspix.js`): the port table the model addresses — one section per board
+  (`BD1` … `BDn`), each headed with what that board is, with rows on a `Not_Present` board
+  disabled and the reason shown. Columns: enabled, leds, mm, protocol, colour order, skip
+  (start nulls), brightness, gamma, and — on Long Range boards only — the receiver's ID
+  (`A`-`P`) and type (#946, §4.7). Also: base universe, new-port defaults (brightness, gamma),
+  protocol readout, DMX-out toggle + universe, "Create fixtures from ports", "Defaults from
+  fixtures", "Probe", mode indicator (Live / Standalone / unknown), "Set clock", and two buttons
+  into the wizard below. Since #945 this modal **never writes the controller** — everything that
+  touches the device moved to `hinkspix_config.js`; since #946 a save comes back with its
+  findings and marks the offending rows.
 - **Add device**: `POST /api/children` already tries PING then WLED; add a HinksPix probe
   (`XLights_BoardInfo.cgi`) in the same fall-through. No mDNS/ArtPoll guarantee → manual IP add
   (like WLED) is the supported path; an ArtPoll reply, if the unit answers, folds through the
@@ -361,6 +372,128 @@ guidance table itself — per-port channel caps, board-type rules, fixture bindi
 (`_hwOpen()` tests visibility *and* presence, because `closeModal()` only sets
 `display:none` and leaves `#modal-body` intact). A poll that outlives its panel is a request
 loop nobody can see or switch off.
+
+---
+
+### 4.7 Knowing the controller — model caps, boards, smart receivers (#946)
+
+#945 made a push reversible. #946 makes the editor *correct*: it stops SlyLED offering
+configurations the reference client would refuse, and it explains the ones the hardware makes
+non-obvious. Three audit items land here — B12 (no `SCONFIG`), B16 (a pixel-protocol list and
+per-port channel cap that came from nowhere), B21 (48 ports hard-coded, so a PRO 80 could not
+be configured at all).
+
+**The capability table.** `hinkspix_config.CAPABILITIES` holds one row per model, transcribed
+verbatim from `hinkspix.xcontroller`:
+
+| key | model | boards / ports | ch per port | universes | pixel protocols | input protocols | receivers |
+|---|---|---|---|---|---|---|---|
+| `pro_v12` | PRO V1/V2 | 3 / 48 | 2040 | 402 | ws2811 | e131, artnet | 4, 16, 16AC |
+| `pro_v3` | PRO V3 (PRO 80) | 5 / 80 | 3072 | 684 | ws2811 | e131, artnet, ddp | 4, 16, 16AC |
+| `easylights` | EasyLights Pix16 | 1 / 16 | 2040 | 65 | ws2811, ws2801, tls3001, apa102 | e131, artnet, ddp | — |
+
+`boards` and `max_pixels(order)` are *derived* from the port count and the channel cap rather
+than stored a second time, so the table has two numbers per model that can be wrong and the
+rest is arithmetic on them. Three field names have to be read rather than one: `Controller`
+(`"E"` = EasyLights), `Type` (`"8"` = PRO 80, `HinksPix.cpp:378-382`) and `MaxU` (65/402/684
+are distinct) — `caps_key()` takes the most specific witness available, so a child probed before
+#946 is still read correctly instead of being assumed to be a PRO V1/V2. `MAX_PORTS = 80` is
+the *protocol* ceiling and lives in `hinkspix_bridge`; each module reads it rather than
+repeating a 48, which is how the three drifted apart in the first place.
+
+**DDP is offered only where the model lists it.** xLights still accepts `DATA_MODE DDP` on a
+PRO V1/V2 (`:378-382`), but the controller does not serve it, and a mode that is written,
+accepted and inert is worse than one that is refused (#943 B14). `input_protocols_for()` is the
+single source for the picker, the PUT validation and the `input_protocol_unsupported` finding;
+`sacn` is appended beside `e131` because it *is* E131 on the wire — one controller mode with
+two names, and it is not a row of the caps table.
+
+**Boards are the frame the port table is read in.** `board_of(port)` gives BD1..BDn, and
+`board_bank(port)` splits a port the way `CalculateSmartReceivers` does (`HinksPix.cpp:860-867`):
+which board, which bank of four outputs, which of those four. The editor groups the port table
+by board and labels each group with what that board *is* — a `Local_SPI` board drives pixels
+directly, a `Long_Range` board does not, and a `Not_Present` board's rows are rendered disabled
+with the reason, which is the operator's first question on opening the editor. A port beyond the
+model's boards is refused at write time (`caps.max_pixel_port`); a port within the model but on
+a board that is not fitted is *stored* and reported as `port_on_absent_board`, so a board that is
+about to be fitted can be laid out first. The device fact stays a finding; only the model limit
+blocks.
+
+**Smart receivers.** A Long Range board's 16 outputs are four differential cables of four, and
+what sits at the far end is a *receiver* that may pass the signal on — the operator's BD1 is one
+of these, so ports 1-16 can only drive pixels through receivers, and before #946 there was no way
+to say so. `calculate_smart_receivers(ports)` is a port of `CalculateSmartReceivers`
+(`:860-918`); `build_commands` emits one `SCONFIG` per bank on each Long_Range board, addressed
+by **0-based** expansion and bank (`"BOARD": "0"`, `"Port4": "0"`), between `BD_INFO` and the
+`PCONFIG` writes (`:1437-1439`). The three rules that are easy to get wrong and are therefore
+pinned in `tests/test_hinkspix_smart.py`:
+
+- **A 16-port receiver is a group of four ids** starting on a multiple of four; only the id in
+  use is placed, the other three are announced so the controller knows the group is there
+  (`:885-899`).
+- **A 16AC counts start pixels in its own three-channel terms** — `(channels so far / 3) + 1`,
+  not the port's node width (`:901-905`). On an RGBW port the two differ from the first
+  receiver onward.
+- **A bank with no receiver gets no request at all**, not an empty `LIST`:
+  `UploadSmartReceiverData` returns before sending when the list is empty (`:835-838`). An empty
+  list would be a statement we have no evidence the controller accepts.
+
+The receiver id is stored as the letter the operator reads off the dial (`"A"`-`"P"`), accepted
+as either letter or number on input, and the type as xLights' own string (`hinkspix_4`,
+`hinkspix_16`, `hinkspix_16ac`) because `CalculateSmartReceivers` switches on the *text*, not on
+a code. A receiver with no type is refused rather than defaulted, and `smart_on_non_long_range`
+is an **error**, not a warning: xLights' own `CheckSmartReceivers` (`:1948-1963`) refuses the
+export, so shipping it would be a config we know cannot work.
+
+**Nothing reads SCONFIG back.** There is no `GetSmartReceiverData` in xLights, so a snapshot
+cannot restore receivers and a wrong list is only ever found on the hardware, as dark pixels.
+That asymmetry is why the editor explains the rules in the column headers instead of assuming
+the operator knows them, and why the receiver columns appear only on Long_Range board groups.
+
+**Findings, and which ones block.** Every code `validate()` can raise, with the level it carries
+and why:
+
+| code | level | why that level |
+|---|---|---|
+| `not_probed`, `no_boards` | error | nothing can be checked; the upload would be written blind |
+| `upload_unsupported` | error | the controller would refuse it (MS_151, MS_129 on V3) |
+| `port_on_absent_board` | error | the port does not exist or the board is not fitted |
+| `port_channels_exceed` | error | more channels than the port carries (`caps`) |
+| `protocol_unsupported`, `input_protocol_unsupported` | error | the model does not serve it |
+| `smart_on_non_long_range` | error | xLights itself refuses (`:1948-1963`) |
+| `fixture_leds_mismatch` | error | the controller would drive pixels the fixture does not have |
+| `universes_exceed_maxu`, `universe_overlap`, `channel_overlap` | error | two rows would write each other's pixels (restored/imported tables) |
+| `empty_config` | warn | a legitimate choice, but it blanks the output |
+| `board_long_range` | warn | guidance, not a fault — and only while *no* receiver is set on the board, because a warning that returns on every push is one nobody reads |
+| `port_unbound` | warn | the port is written and never receives data |
+| `engine_protocol_mismatch` | warn | frames will not reach the device until the two agree |
+| `reboot_required` | warn | every apply reboots; the pixels go dark for up to 90 s |
+
+`firmware_below_101` is **not** implemented, though #946 listed it. It cannot be reached: the
+upload gate already blocks every firmware old enough to trip it (MS_151, or MS_129 on a PRO V3),
+so the check would be dead code, and a floor above the upload gate would be a number with no
+source. xLights has no such gate either — `UploadSmartReceivers` sends to whatever answered the
+probe. The reasoning is recorded where the branch would have gone (`hinkspix_config.validate`)
+and in the bridge's constants.
+
+**Fixture-derived defaults.** `POST /api/hinkspix/<cid>/defaults-from-fixtures` proposes a port
+table from the fixtures already bound to the controller: pixels and length are the **sum** of the
+strings on the port (which is what makes a multi-fixture output come out right), the colour order
+comes from the declared strip type (`LED_TYPE_COLOR_ORDER`: WS2812B-class → GRB, WS2811 → RGB,
+APA102-class → BGR), and everything else — including the receiver, which is a fact about the
+wiring rather than the fixture — is left as the port has it. It returns `ports`, `changes`
+(what differs, in the operator's units), `unbound` (enabled ports driving nothing) and `caps`,
+and **stores nothing**: the rows go into the editor for review. A "fill it in for me" button that
+silently rewrote a port the operator never looked at would be the same class of mistake as a push
+that silently half-succeeds.
+
+**Provenance gaps to settle on the bench.** The upload gates here are `MIN_MCPU_UPLOAD = 151`
+and `MIN_MCPU_UPLOAD_V3 = 129`, cited from `IsUnPackSupported_Hinks` (`HinksPix.cpp:1966-1985`);
+#946's text says "MS_152", and no source in `xLights` names 152. The gates are the same
+comparison in xLights as the UnPack gate, so 151/129 is the reading with a citation and the
+issue text is the one that should give way — but a field note against MS_151 and MS_129 would
+settle it. The `Type "8"` = PRO 80 mapping is likewise read from `:378-382` rather than from a
+probe of that hardware; the operator's unit is Type `"P"`.
 
 ---
 
@@ -634,6 +767,7 @@ Offline first, all under the `unit` job in `.github/workflows/python-tests.yml`
 | `tests/test_hinkspix_wire.py` | HTTP wire protocol (#943): GET + headers, quoted `"OK"`, `BLK` board select, gzip replies, the 1-based universe table, per-port start channels, full-board `PCONFIG`, `UnPack` gating, reboot-last, DDP. **Light self-check only** — it asserts the request shape and the command sequence. Standing up a gated in-process `http.server` fake, replaying golden MS_160 captures, and wiring the hinkspix suites into this job are deferred to the QA lane |
 | `tests/test_hinkspix_apply.py` | (#945) the push lifecycle against a **stateful in-process fake** that stores what it is told: the snapshot before the first write and the two invariants that matter — nothing is written to a controller that cannot be read, and a failed request stops the sequence, leaves the reboot unsent and names the snapshot to restore. Plus restore round-trip (rows and table back, `inSync` cleared), restore refusals, the findings gate + `ack`, one-job-at-a-time, and `BACKUP_KEEP` retention per device |
 | `tests/test_hinkspix_config_spa.py` | (#945) Playwright against **stubbed `fetch`** — the panel only: the five-step flow, the editor opening *on top of* the wizard and `closeModal()` returning to it, the acknowledgement gate, the apply poll stopping when the job ends and when the modal closes. Every recorded request must be an orchestrator path: a wizard that reached the controller from the browser would be a second, unverified configuration path |
+| `tests/test_hinkspix_smart.py` | (#946) the caps table and `caps_key` for every witness (Controller E / Type 8 / MaxU 65-402-684 / V3 / un-probed); port → board/bank/sub-port; five `calculate_smart_receivers` cases pinned to `HinksPix.cpp:860-918` (per-sub-port slots, a chain on one output, the 16-port group of four, the 16AC's `/3` start pixel, a non-Long_Range board skipped); the `SCONFIG` payload and its place between `BD_INFO` and `PCONFIG`, with no request at all for an empty bank; a five-board PRO V3 at port 80; every `validate` code and its level; the PUT/GET contract (`caps`, caps-filtered protocols, `startNulls` + its `nullPixels` alias, receiver id/type accept-reject, the model's port ceiling) and `defaults-from-fixtures` storing nothing. The bridge's device entry points are replaced with ones that raise for the whole file, so the suite cannot reach a controller |
 | `tests/test_hinkspix_device.py` | Flask: add device with mocked probe; port-table CRUD + collision 400s; fixtures-from-ports; strings `port` validation; universeRoutes upsert; `_is_performer` guards (no RUNNER_GO/LOAD_STEP/PING to hinkspix); sweep marks offline via HTTP probe; the #944 firmware gate on `set-clock`/`mode` (asserted by capturing that no connection is attempted) |
 | `tests/test_hinkspix_output.py` | show start with a baked timeline → after one loop tick `peek_universe(u).get_data()` holds renderer output at the right offsets; LED-only show no longer idles; blackout on stop; master-brightness scaling on sACN pixel universes |
 | *not yet covered — QA lane* | deploy render (`render_hseq_frames`): size = 336 + frames x channels; frames equal `render_fixture`; DMX-out trailing span; hseq channel map identical to the live map. No suite asserts this today |
@@ -648,8 +782,8 @@ playback; confirm items 1-5 and 7 of §8 and record results in `docs/live-test-s
 
 ## 10. Implementation issues (dependency-ordered, complete PRs)
 
-**Status as of 2026-09-23: #938, #939, #940, #941, #943, #944 and #945 are implemented; #946
-and #947 are open.** The 2026-09-23 bench session (§8b) found the wire protocol broken in
+**Status as of 2026-09-23: #938, #939, #940, #941, #943, #944, #945 and #946 are implemented;
+#947 is open.** The 2026-09-23 bench session (§8b) found the wire protocol broken in
 several places, so #943-#947 were filed and are being worked in order — the write path first
 (#943, #944, #945), then guidance (#946) and import (#947).
 Deviations from this plan, and why, are recorded in each commit message. The
@@ -667,7 +801,7 @@ place.
 | #943 | `fix: HinksPix protocol parity against the xLights reference` (bench audit; the wire-protocol QA harness landed as `tests/test_hinkspix_wire.py`) | #939 |
 | #944 | `fix: firmware gate on the upload path` (`FirmwareSupportsUpload()`; issue's `MS_152` floor vs source `151`/`129` still needs a bench capture, §6.3) | #943 |
 | #945 | `feat: HinksPix configuration management — snapshots, push job, verify wizard` (§4.6) | #943, #944 |
-| #946 | `feat: HinksPix configuration guidance — capability table, smart receivers, the finding table` | #945 |
+| #946 | `feat: HinksPix configuration guidance — capability table, smart receivers, the finding table` (§4.7) | #945 |
 | #947 | `feat: import an existing xLights layout — networks/models → fixtures` | #946 |
 
 Order: **#938 ∥ #939 → #940 → #941**, then the bench-driven run **#943 → #944 → #945 → #946 → #947**.

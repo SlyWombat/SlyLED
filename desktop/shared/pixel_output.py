@@ -40,7 +40,10 @@ import hinkspix_bridge as hb
 PIXELS_PER_UNIVERSE = 170      # RGB nodes in one universe: 510 of 512 channels
 CHANNELS_PER_UNIVERSE = 512
 DMX_OUT_CHANNELS = 512
-MAX_PORTS = 48
+# The highest output any model addresses, from the protocol module rather than
+# from the model this map was first written for: a PRO V3 addresses 80, and a
+# table-sized 48 here would have rejected its top two boards (#946).
+MAX_PORTS = hb.MAX_PORTS
 
 
 def channels_per_pixel(color_order):

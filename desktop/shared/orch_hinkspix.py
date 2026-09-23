@@ -87,13 +87,15 @@ def _gate_payload(child):
             "minMcpu": body.get("minMcpu")}
 
 
-# Everything about a port that PCONFIG carries a byte for, plus the two SlyLED
-# fields (`mm`, and `enabled` — which decides whether the row is written at all)
-# that change what goes on the wire. A port field *not* listed here would be
+# Everything about a port that PCONFIG carries a byte for, plus the SlyLED
+# fields that change what goes on the wire: `mm` (stage geometry), `enabled`
+# (whether the row is written at all) and the two smart-receiver fields, which
+# decide the SCONFIG lists (#946). A port field *not* listed here would be
 # edited in the UI, change what an upload sends, and leave the "device in sync"
-# badge lying. #946 adds the smart-receiver fields to this list.
+# badge lying.
 _PORT_HASH_FIELDS = ("port", "leds", "mm", "protocol", "colorOrder", "direction",
-                     "nullPixels", "brightness", "gamma", "enabled")
+                     "startNulls", "brightness", "gamma", "enabled",
+                     "smartRemote", "smartRemoteType")
 
 
 def _config_hash(hinks):
@@ -114,8 +116,17 @@ def _config_hash(hinks):
         "baseUniverse": hinks.get("baseUniverse"),
         "protocol": hinks.get("protocol"),
         "dmxOut": hinks.get("dmxOut"),
+        # The per-port defaults feed the SCONFIG-free fields of every new row
+        # (#946), so a change to them changes what an upload sends.
+        "defaults": hinks.get("defaults"),
         "mcpu": hinks.get("mcpu"),
         "hardwareV3": bool(hinks.get("hardwareV3")),
+        # Which model the caps came out of: the same port table means different
+        # things on a PRO V1/V2 and a PRO V3, and a re-probe that changes the
+        # answer changes the port count and the channel caps.
+        "model": hinks.get("model"),
+        "controller": hinks.get("controller"),
+        "type": hinks.get("type"),
         "boards": {str(k): v for k, v in sorted(
             (hinks.get("boards") or {}).items())},
         "ports": sorted(
@@ -200,6 +211,7 @@ def api_hinkspix_get(cid):
     device_proto = (hinks.get("protocol") or "").lower()
     proto_match = (device_proto in ("e131", "sacn") and engine_proto == "sacn") or \
                   (device_proto == engine_proto)
+    caps = hc.caps_for(hinks)
     body = {"ok": True, "id": cid, "ip": child.get("ip"),
             "name": child.get("name"), "status": child.get("status", 0),
             "engineProtocol": engine_proto, "protocolMatch": bool(proto_match),
@@ -208,8 +220,12 @@ def api_hinkspix_get(cid):
             # The SPA builds its protocol picker from this rather than a
             # hard-coded list, so an option the controller cannot serve is
             # never offered (#943 B14).
-            "protocols": list(hc.input_protocols_supported(
-                bool(hinks.get("hardwareV3")))),
+            "protocols": list(hc.input_protocols_for(hinks)),
+            # What this model can do at all — how many boards it addresses, its
+            # per-port channel cap, which receivers it takes. The editor is
+            # built from it so a new controller generation is a table row here
+            # rather than a branch in the browser (#946).
+            "caps": caps.to_json(),
             "inSync": bool(hinks.get("configHash")
                            and hinks["configHash"] == _config_hash(hinks))}
     try:
@@ -232,6 +248,7 @@ def api_hinkspix_put(cid):
         return err
     body = request.get_json(silent=True) or {}
     hinks = dict(child.get("hinks") or {})
+    caps = hc.caps_for(hinks)
 
     if "baseUniverse" in body:
         try:
@@ -244,7 +261,7 @@ def api_hinkspix_put(cid):
 
     if "protocol" in body:
         proto = str(body["protocol"]).lower()
-        supported = hc.input_protocols_supported(bool(hinks.get("hardwareV3")))
+        supported = hc.input_protocols_for(hinks)
         if proto not in supported:
             # DDP is a mode the firmware accepts but this controller's
             # definition never offers (#943 B14) — writing it produces a config
@@ -268,6 +285,18 @@ def api_hinkspix_put(cid):
         hinks["dmxOut"] = {"enabled": enabled,
                            "universe": uni if enabled else None}
 
+    if "defaults" in body:
+        d = body["defaults"] or {}
+        cur = dict(hinks.get("defaults") or {})
+        if "brightness" in d:
+            cur["brightness"] = hb.encode_brightness(d["brightness"])
+        if "gamma" in d:
+            cur["gamma"] = hb.encode_gamma(d["gamma"])
+        # Stored already encoded, so the editor shows the step the controller
+        # will actually use rather than the number that was typed.
+        hinks["defaults"] = {k: cur[k] for k in ("brightness", "gamma")
+                             if k in cur}
+
     if "ports" in body:
         ports, seen = [], set()
         for i, p in enumerate(body["ports"] or []):
@@ -275,8 +304,17 @@ def api_hinkspix_put(cid):
                 num = int(p.get("port"))
             except (TypeError, ValueError):
                 return jsonify(err=f"ports[{i}].port must be an integer"), 400
-            if not 1 <= num <= MAX_PORTS:
-                return jsonify(err=f"ports[{i}].port {num} out of range 1..{MAX_PORTS}"), 400
+            # The model's own ceiling, not the protocol's 80: a port the
+            # controller has no board for can never be written, so storing it
+            # would only produce a config that cannot be uploaded. Whether the
+            # board on a port *within* the ceiling is actually fitted is a fact
+            # about the device rather than about this model, so it is a finding
+            # (`port_on_absent_board`) — the operator can lay out a board they
+            # are about to fit (#946).
+            if not 1 <= num <= caps.max_pixel_port:
+                return jsonify(err=f"ports[{i}].port {num} out of range 1.."
+                                   f"{caps.max_pixel_port} for a "
+                                   f"{caps.name}"), 400
             if num in seen:
                 return jsonify(err=f"duplicate port {num}"), 400
             seen.add(num)
@@ -286,6 +324,32 @@ def api_hinkspix_put(cid):
                 return jsonify(err=f"ports[{i}].leds must be an integer"), 400
             if leds < 0:
                 return jsonify(err=f"ports[{i}].leds must be >= 0"), 400
+            try:
+                nulls = int(p["startNulls"] if p.get("startNulls") is not None
+                            else (p.get("nullPixels") or 0))
+            except (TypeError, ValueError):
+                return jsonify(err=f"ports[{i}].startNulls must be an integer"), 400
+            if nulls < 0:
+                return jsonify(err=f"ports[{i}].startNulls must be >= 0"), 400
+
+            # The smart receiver on this output. Absent, empty or false clears
+            # it; the letter the operator reads off the dial and the number that
+            # goes on the wire are both accepted, and the letter is what is
+            # stored so the table reads the way the hardware does (#946).
+            raw_id = p.get("smartRemote")
+            rec_id = hc.smart_remote_id({"smartRemote": raw_id})
+            if raw_id not in (None, "", False) and rec_id < 0:
+                return jsonify(err=f"ports[{i}].smartRemote must be A..P or "
+                                   f"0..15"), 400
+            if rec_id >= 0 and not caps.smart_remote_types:
+                return jsonify(err=f"a {caps.name} has no smart receivers"), 400
+            rec_type = ""
+            if rec_id >= 0:
+                rec_type = str(p.get("smartRemoteType") or "").strip().lower()
+                if rec_type not in hb.SMART_REMOTE_TYPES:
+                    return jsonify(err=f"ports[{i}].smartRemoteType must be one "
+                                       f"of {'/'.join(hb.SMART_REMOTE_TYPES)}"), 400
+
             ports.append({
                 "port": num, "leds": leds,
                 "mm": p.get("mm") if p.get("mm") is not None
@@ -293,10 +357,12 @@ def api_hinkspix_put(cid):
                 "protocol": p.get("protocol", "ws2811"),
                 "colorOrder": p.get("colorOrder", "RGB"),
                 "direction": p.get("direction", 0),
-                "nullPixels": int(p.get("nullPixels") or 0),
+                "startNulls": nulls,
                 "brightness": hb.encode_brightness(p.get("brightness", 100)),
                 "gamma": hb.encode_gamma(p.get("gamma", 1)),
                 "enabled": bool(p.get("enabled", True)),
+                "smartRemote": hc.smart_id_label(rec_id) if rec_id >= 0 else None,
+                "smartRemoteType": rec_type or None,
             })
         hinks["ports"] = sorted(ports, key=lambda p: p["port"])
 
@@ -314,7 +380,9 @@ def api_hinkspix_put(cid):
                 child.get("ip"), len(hinks.get("ports") or []),
                 len(output_map.universes), hinks.get("baseUniverse"))
     return jsonify(ok=True, hinks=hinks, map=output_map.to_json(),
-                   configHash=_config_hash(hinks))
+                   configHash=_config_hash(hinks),
+                   findings=[f.to_json() for f in
+                             _config_findings(probe_child, output_map)])
 
 
 @bp.get("/api/hinkspix/<int:cid>/map")
@@ -441,8 +509,12 @@ def api_hinkspix_probe(cid):
         child["seen"] = int(time.time())
         child["fwVersion"] = info.get("mcpuRaw")
         hinks = child.setdefault("hinks", {})
+        # `controller` and `type` are what the caps row is chosen from (#946);
+        # they are recorded here because they are answers of the *device*, and
+        # a model read off a probe is worth more than one inferred from a
+        # universe limit.
         for k in ("mcpu", "pcpu", "ecpu", "web", "maxU", "hardwareV3",
-                  "uploadSupported", "boards", "model"):
+                  "uploadSupported", "boards", "model", "controller", "type"):
             if k in info:
                 hinks[k] = info[k]
         ps._save("children", ps._children)
@@ -484,13 +556,54 @@ def api_hinkspix_device_config(cid):
                              else "the controller's universe limit is not known")
     else:
         try:
-            intended = hc.intended_config(child, output_map,
-                                          max_universes=max_u)
+            intended = _intended_config(child, output_map,
+                                        max_universes=max_u)
             body["diff"] = hc.diff(current, intended)
         except hc.ConfigError as exc:
             body["diff"] = None
             body["diffError"] = str(exc)
     return jsonify(body)
+
+
+def _intended_config(child, output_map, max_universes=0):
+    """``hc.intended_config`` with this module's one live input supplied.
+
+    The ordered fixture strings bound to each port are what make a chain of
+    smart receivers on one output expressible, and they live in the fixture
+    list rather than in ``hinks`` — so every caller here goes through this
+    rather than calling the pure builder directly (#946).
+    """
+    return hc.intended_config(
+        child, output_map, max_universes=max_universes,
+        port_strings=hc.strings_by_port(child, ps._fixtures))
+
+
+def _validate(child, intended=None):
+    """``hc.validate`` with the two inputs that live outside the stored config.
+
+    The fixtures bound to this controller decide which ports carry a receiver
+    chain and which enabled ports are driving nothing; the engine protocol
+    decides whether the controller is listening to the wire SlyLED streams.
+    Neither is readable from ``hinks`` — they are read here, where both are
+    known, rather than passed in from every route (#946).
+    """
+    return hc.validate(child, intended=intended, fixtures=ps._fixtures,
+                       engine_protocol=ps._dmx_settings.get("protocol"))
+
+
+def _config_findings(child, output_map):
+    """Findings for a config that is not necessarily uploadable yet.
+
+    The intended config is built best-effort: a stored state that cannot
+    express one at all is itself something ``validate`` reports, and the editor
+    should still be told about the rest rather than being handed a bare error.
+    """
+    try:
+        intended = _intended_config(child, output_map,
+                                    (child.get("hinks") or {}).get("maxU"))
+    except hc.ConfigError:
+        intended = None
+    return _validate(child, intended=intended)
 
 
 def _blocking_findings(findings, ack):
@@ -515,12 +628,12 @@ def _build_plan(child, output_map):
     """
     hinks = child.get("hinks") or {}
     try:
-        intended = hc.intended_config(child, output_map,
-                                      max_universes=hinks.get("maxU"))
+        intended = _intended_config(child, output_map,
+                                    max_universes=hinks.get("maxU"))
     except hc.ConfigError as exc:
         return None, None, (jsonify(ok=False, err=str(exc)), 400)
 
-    findings = hc.validate(child, intended=intended, fixtures=ps._fixtures)
+    findings = _validate(child, intended=intended)
     blocked = hc.errors(findings)
     if blocked:
         return None, findings, (
@@ -1102,6 +1215,23 @@ def api_hinkspix_fixtures_from_ports(cid):
         if created:
             ps._save("fixtures", ps._fixtures)
     return jsonify(ok=True, created=created, skipped=skipped)
+
+
+@bp.post("/api/hinkspix/<int:cid>/defaults-from-fixtures")
+def api_hinkspix_defaults_from_fixtures(cid):
+    """Propose a port table from the fixtures already bound to this controller.
+
+    A *proposal*: nothing is stored and nothing is written to the controller.
+    The caller puts the rows in the editor for the operator to look at, because
+    the one thing a "fill it in for me" button must not do is change a port the
+    operator never saw (#946). ``changes`` says what would differ, and
+    ``unbound`` lists the enabled ports driving nothing — the two things worth
+    a second look before saving.
+    """
+    child, err = _child(cid)
+    if err:
+        return err
+    return jsonify(ok=True, **hc.defaults_from_fixtures(child, ps._fixtures))
 
 
 # ── Offline standalone playback (#941) ───────────────────────────────────────

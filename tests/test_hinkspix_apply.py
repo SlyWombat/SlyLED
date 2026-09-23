@@ -295,8 +295,26 @@ def controller(cid=CID, **kw):
             parent_server._children.remove(child)
 
 
+def warn_codes(c, cid=CID):
+    """Every code the plan for this controller warns about.
+
+    The wizard acknowledges these on the way in; a helper that did not would be
+    asserting a push that is blocked by design (#945), and a test asserting a
+    409 would pass for the wrong reason.
+    """
+    plan = c.get(f"/api/hinkspix/{cid}/plan").get_json() or {}
+    return [f["code"] for f in plan.get("findings", [])
+            if f.get("level") == "warn"]
+
+
 def apply_now(c, cid=CID, **body):
-    """Start an apply and wait for the job, the way a script (not the SPA) does."""
+    """Start an apply and wait for the job, the way a script (not the SPA) does.
+
+    Warnings are acknowledged unless the caller names its own ``ack``, so the
+    gate itself stays testable.
+    """
+    if "ack" not in body:
+        body["ack"] = warn_codes(c, cid)
     body["wait"] = True
     r = c.post(f"/api/hinkspix/{cid}/apply", json=body)
     return r, r.get_json()
@@ -359,7 +377,7 @@ def main():
            str(state.get("verify"))[:200])
         sent = [hc.PortRow(x["output"], x["protocol"], x["start"], x["pixels"],
                            x["end"], x["direction"], x["colorOrder"],
-                           x["nullPixels"], x["brightness"], x["gamma"]).to_v()
+                           x["startNulls"], x["brightness"], x["gamma"]).to_v()
                 for x in intended_rows]
         ok("the controller's port table now holds what was sent",
            sent == dev.ports[1], f"{dev.ports[1][:1]} vs {sent[:1]}")
@@ -490,7 +508,9 @@ def main():
                        "Every port is disabled, so this upload blanks the "
                        "controller's output.")]
         try:
-            r, gated = apply_now(c)
+            # An explicit empty list, so the helper does not fetch the plan and
+            # acknowledge the very warning under test.
+            r, gated = apply_now(c, ack=[])
             ok("a warning blocks an unacknowledged push",
                r.status_code == 409 and gated.get("ok") is False,
                str(gated)[:200])
@@ -510,7 +530,8 @@ def main():
         real = c.post(f"/api/hinkspix/{CID}/backups").get_json()["id"]
         oh._config_state[CID] = {"running": True, "phase": "upload"}
         try:
-            r = c.post(f"/api/hinkspix/{CID}/apply", json={})
+            r = c.post(f"/api/hinkspix/{CID}/apply",
+                       json={"ack": warn_codes(c)})
             ok("a second push is refused while one is running",
                r.status_code == 409, str(r.get_json())[:120])
             r = c.post(f"/api/hinkspix/{CID}/restore", json={"backupId": real})
@@ -521,7 +542,8 @@ def main():
 
         oh._deploy_state[CID] = {"running": True}
         try:
-            r = c.post(f"/api/hinkspix/{CID}/apply", json={})
+            r = c.post(f"/api/hinkspix/{CID}/apply",
+                       json={"ack": warn_codes(c)})
             ok("a push is refused while a standalone deploy is running",
                r.status_code == 409, str(r.get_json())[:120])
         finally:

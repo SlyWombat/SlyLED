@@ -1,8 +1,15 @@
 // hinkspix.js — HinksPix PRO port table editor (#939)
 //
-// The controller keeps its own port inventory (up to 48 outputs), and SlyLED
-// mirrors it on the child record as `child.hinks`. This modal edits that mirror
-// and shows the universe map derived from it. It never writes the controller.
+// The controller keeps its own port inventory, and SlyLED mirrors it on the
+// child record as `child.hinks`. This modal edits that mirror and shows the
+// universe map derived from it. It never writes the controller.
+//
+// The table is built per expansion board and from the model's own capabilities
+// (#946): a PRO V1/V2 addresses 48 outputs over 3 boards, a PRO V3 80 over 5,
+// and the pixel protocols and smart-receiver options differ between them. A
+// board the controller does not report as fitted still gets its rows — greyed,
+// disabled, and labelled with the reason — because "16 empty outputs" and "no
+// board in that slot" are different facts and only one of them is editable.
 //
 // Two deliberate behaviours worth knowing:
 //  * Saving here only updates SlyLED's copy. Putting it on the device is a
@@ -15,7 +22,17 @@
 //    The operator corrects lengths in the fixture editor.
 
 var _hpState = {cid: null, hinks: null, map: null, inSync: false,
-                protocols: null, plan: null, device: null, diff: null};
+                protocols: null, caps: null, plan: null, device: null, diff: null};
+
+// What the server says this controller model can do. The fallback is the
+// narrowest useful model rather than an empty table, so a page talking to an
+// older server still renders a port table instead of an exception (#946).
+function _hpCaps() {
+  return _hpState.caps || {key: 'pro_v12', name: 'PRO V1/V2', boards: 3,
+                           maxPixelPort: 48, maxPixelPortChannels: 2040,
+                           pixelProtocols: ['ws2811'],
+                           smartRemoteTypes: []};
+}
 
 // `nested` (#945): the push wizard opens this editor *on top of itself*, and
 // expects closeModal() to hand the operator back to the wizard. A top-level
@@ -31,6 +48,10 @@ function hinksConfigure(cid, nested) {
                   // Server-supplied so the picker can never offer a mode this
                   // controller cannot serve (e.g. DDP on PRO V1/V2 — #943 B14).
                   protocols: d.protocols,
+                  // ...and so the table is built for the model it is editing:
+                  // how many boards it addresses, which pixel protocols it
+                  // takes, whether it has smart receivers at all (#946).
+                  caps: d.caps,
                   protocolMatch: d.protocolMatch !== false};
       _hpRender();
     })
@@ -38,6 +59,70 @@ function hinksConfigure(cid, nested) {
 }
 
 function _hpPorts() { return (_hpState.hinks && _hpState.hinks.ports) || []; }
+
+// What the controller says is in an expansion slot, in the operator's terms.
+// `null` means the probe never reported that slot at all, which is a different
+// statement from "reported as empty" — but both mean nothing is plugged in.
+function _hpBoardNote(kind) {
+  if (kind === 'Long_Range') return 'long-range differential — smart receivers available';
+  if (kind === 'Local_SPI') return 'local SPI — pixel outputs, no smart receivers';
+  if (kind === 'Local_AC') return 'local AC dimming — no pixel outputs';
+  if (kind === 'Not_Present') return 'not fitted — the controller reports Not_Present for this slot';
+  return 'not fitted — no board reports as present in this slot';
+}
+
+function _hpRecvSelect(port, p, enabled) {
+  var opts = '<option value="">—</option>';
+  for (var i = 0; i < 16; i++) {
+    var letter = String.fromCharCode(65 + i);
+    opts += '<option value="' + letter + '"'
+          + ((String(p.smartRemote || '').toUpperCase() === letter) ? ' selected' : '')
+          + '>' + letter + '</option>';
+  }
+  return '<select class="hp-rec" data-port="' + port + '"'
+       + (enabled ? ' onchange="_hpRecvChanged(' + port + ')"'
+                  : ' disabled title="This board cannot carry a smart receiver."')
+       + (enabled ? ' title="A-P, as printed on the receiver dial"' : '')
+       + '>' + opts + '</select>';
+}
+
+function _hpRecvTypeSelect(port, p, enabled) {
+  var names = {'hinkspix_4': '4-port', 'hinkspix_16': '16-port', 'hinkspix_16ac': '16AC'};
+  var types = (_hpCaps().smartRemoteTypes || []);
+  var opts = '<option value="">—</option>';
+  types.forEach(function (t) {
+    opts += '<option value="' + t + '"'
+          + ((p.smartRemoteType === t) ? ' selected' : '') + '>'
+          + (names[t] || t) + '</option>';
+  });
+  return '<select class="hp-rectype" data-port="' + port + '"'
+       + ((enabled && p.smartRemote) ? '' : ' disabled') + '>' + opts + '</select>';
+}
+
+// Write a value into a cell the operator is allowed to edit. A select whose
+// options do not include the value is left alone rather than being set to
+// nothing: an option the model does not offer must not become a silent blank.
+function _hpSet(port, cls, value) {
+  var el = document.querySelector('.' + cls + '[data-port="' + port + '"]');
+  if (!el || el.disabled) return;
+  if (el.tagName === 'SELECT') {
+    for (var i = 0; i < el.options.length; i++) {
+      if (el.options[i].value === String(value)) { el.value = String(value); return; }
+    }
+    return;
+  }
+  el.value = value;
+}
+
+// A receiver's type only means something once its id is set, so choosing one
+// unlocks the other. Wired as an inline handler on the id select.
+function _hpRecvChanged(port) {
+  var id = document.querySelector('.hp-rec[data-port="' + port + '"]');
+  var ty = document.querySelector('.hp-rectype[data-port="' + port + '"]');
+  if (!id || !ty) return;
+  ty.disabled = !id.value;
+  if (!id.value) ty.value = '';
+}
 
 function _hpRender() {
   var h = _hpState.hinks || {}, ports = _hpPorts();
@@ -60,16 +145,33 @@ function _hpRender() {
         + (dmx.enabled ? ' checked' : '') + '> universe '
         + '<input id="hp-dmx-uni" type="number" min="1" max="63999" value="'
         + (dmx.universe || '') + '" style="width:6em"></label></div>';
+  // What a port gets when the table is filled in from the fixtures. Per-port
+  // values stay editable in the table below; this is only the starting point.
+  var defs = h.defaults || {};
+  body += '<div title="Applied to a port when the table is filled in from the '
+        + 'fixtures — not to ports already set">'
+        + '<label style="font-size:.8em;color:#9ab">New-port defaults</label><br>'
+        + '<label style="font-size:.85em">bright <input id="hp-def-bri" type="number" '
+        + 'min="15" max="100" step="10" value="' + (defs.brightness != null ? defs.brightness : 100)
+        + '" style="width:5em"> gamma <input id="hp-def-gamma" type="number" min="1" '
+        + 'max="4" value="' + (defs.gamma || 1) + '" style="width:4em"></label></div>';
   body += '</div>';
 
   // Firmware / capability banner. The upload gate is the single most useful
   // fact about a HinksPix, because below it the device cannot be managed.
   var mcpu = h.mcpu, canUpload = h.uploadSupported;
+  var caps = _hpCaps();
   if (mcpu != null) {
     body += '<div style="margin-bottom:1em;padding:.6em .8em;border-radius:6px;background:'
           + (canUpload ? '#123' : '#421') + ';font-size:.85em">'
           + 'Main CPU <b>MS_' + mcpu + '</b> &middot; web ' + (h.web || '?')
           + ' &middot; max universes ' + (h.maxU || '?')
+          // The model the caps came out of, because it is what explains the
+          // table below: its port count, its pixel protocols, its receivers.
+          + ' &middot; <b>' + escapeHtml(caps.name) + '</b> ('
+          + caps.boards + ' board' + (caps.boards === 1 ? '' : 's') + ', '
+          + caps.maxPixelPort + ' ports, '
+          + caps.maxPixelPortChannels + ' ch/port)'
           + (canUpload ? ' &middot; <span style="color:#6d6">network upload supported</span>'
                        : ' &middot; <span style="color:#fa6">firmware too old for network'
                          + ' upload (needs MS_151+) — update via SD card first</span>')
@@ -101,9 +203,23 @@ function _hpRender() {
   }
 
   body += '<table class="tbl" style="width:100%;font-size:.85em"><thead><tr>'
-        + '<th>On</th><th>Port</th><th>Pixels</th><th>Length (mm)</th><th>Protocol</th>'
-        + '<th>Order</th><th>Null</th><th>Bright</th><th>Gamma</th><th>Universe</th>'
-        + '</tr></thead><tbody>';
+        + '<th>On</th><th>Port</th>'
+        + '<th title="Nodes this output drives. The controller owns this — a fixture bound here must agree.">Pixels</th>'
+        + '<th title="Strip length in stage mm (SlyLED geometry, not a controller field)">Length (mm)</th>'
+        + '<th title="Pixel protocol this output drives">Protocol</th>'
+        + '<th title="Colour order the nodes latch">Order</th>'
+        + '<th title="Pixels to skip at the start of this output — the controller begins its data this many pixels in">Skip start</th>'
+        + '<th title="Per-output brightness step">Bright</th>'
+        + '<th title="Per-output gamma 1-4">Gamma</th>'
+        + '<th>Universe</th>'
+        // The caveat is in the header rather than in a dialog on every change:
+        // it is a property of the column, not of any one edit.
+        + '<th title="Smart receiver on this output, A-P as printed on the receiver '
+        + 'dial. The controller has no readback for receivers, so nothing here can be '
+        + 'confirmed after a push — the wizard says so too. Only a Long_Range board '
+        + 'can carry one.">Recv</th>'
+        + '<th title="Which smart receiver is fitted — a 4-port, a 16-port, or a 16AC">Type</th>'
+        + '</tr></thead>';
   var uniByPort = {};
   if (_hpState.map) {
     _hpState.map.spans.forEach(function (s) {
@@ -111,32 +227,71 @@ function _hpRender() {
       (uniByPort[s.port] = uniByPort[s.port] || []).push(s.universe);
     });
   }
-  for (var i = 1; i <= 48; i++) {
-    var p = ports.filter(function (x) { return x.port === i; })[0] || {port: i, leds: 0, enabled: false};
-    var u = uniByPort[i];
-    body += '<tr>'
-      + '<td><input type="checkbox" class="hp-en" data-port="' + i + '"' + (p.enabled ? ' checked' : '') + '></td>'
-      + '<td>' + i + '</td>'
-      + '<td><input type="number" class="hp-leds" data-port="' + i + '" min="0" max="1024" value="' + (p.leds || 0) + '" style="width:5em"></td>'
-      + '<td><input type="number" class="hp-mm" data-port="' + i + '" min="0" value="' + (p.mm != null ? p.mm : Math.round((p.leds || 0) * 16.67)) + '" style="width:6em"></td>'
-      + '<td><select class="hp-proto" data-port="' + i + '">'
-        + ['ws2811', 'ws2801', 'tls3001', 'apa102'].map(function (x) {
-            return '<option' + ((p.protocol === x) ? ' selected' : '') + '>' + x + '</option>'; }).join('')
-      + '</select></td>'
-      + '<td><select class="hp-order" data-port="' + i + '">'
-        + ['RGB', 'RBG', 'GRB', 'GBR', 'BRG', 'BGR', 'RGBW', 'WRGB'].map(function (x) {
-            return '<option' + ((p.colorOrder === x) ? ' selected' : '') + '>' + x + '</option>'; }).join('')
-      + '</select></td>'
-      + '<td><input type="number" class="hp-null" data-port="' + i + '" min="0" max="10" value="' + (p.nullPixels || 0) + '" style="width:4em"></td>'
-      + '<td><input type="number" class="hp-bri" data-port="' + i + '" min="15" max="100" step="10" value="' + (p.brightness != null ? p.brightness : 100) + '" style="width:5em"></td>'
-      + '<td><input type="number" class="hp-gamma" data-port="' + i + '" min="1" max="4" value="' + (p.gamma || 1) + '" style="width:4em"></td>'
-      + '<td style="color:#9ab">' + (u ? u.join(', ') : '—') + '</td>'
-      + '</tr>';
+
+  // One section per expansion board, because that is the unit the controller
+  // addresses: a port number alone cannot say whether the slot exists, and a
+  // board that is not fitted has to say so rather than showing 16 editable rows
+  // that go nowhere (#946).
+  var fitted = h.boards || {};
+  var maxPixels = Math.floor(caps.maxPixelPortChannels / 3);   // RGB nodes
+  for (var b = 1; b <= caps.boards; b++) {
+    var kind = fitted['BD' + b] || null;
+    var isPixel = (kind === 'Local_SPI' || kind === 'Long_Range');
+    var hasRecv = (kind === 'Long_Range') && (caps.smartRemoteTypes || []).length > 0;
+    var note = _hpBoardNote(kind);
+    body += '<tbody class="hp-board-group"><tr><th colspan="12" style="text-align:left;'
+          + 'padding-top:.8em;background:#1a2430">BD' + b
+          + (kind ? (' — ' + kind) : '')
+          + '<span style="font-weight:normal;color:#9ab"> &middot; ' + note + '</span></th></tr>';
+
+    for (var i = (b - 1) * 16 + 1; i <= b * 16; i++) {
+      var p = ports.filter(function (x) { return x.port === i; })[0]
+              || {port: i, leds: 0, enabled: false};
+      var u = uniByPort[i];
+      var dis = isPixel ? '' : ' disabled';
+      body += '<tr' + (isPixel ? '' : ' style="opacity:.45"') + '>'
+        + '<td><input type="checkbox" class="hp-en" data-port="' + i + '"' + dis
+          + (p.enabled ? ' checked' : '') + '></td>'
+        + '<td>' + i + '</td>'
+        + '<td><input type="number" class="hp-leds" data-port="' + i + '" min="0" max="'
+          + maxPixels + '" value="' + (p.leds || 0) + '" style="width:5em"' + dis + '></td>'
+        + '<td><input type="number" class="hp-mm" data-port="' + i + '" min="0" value="'
+          + (p.mm != null ? p.mm : Math.round((p.leds || 0) * 16.67)) + '" style="width:6em"' + dis + '></td>'
+        + '<td><select class="hp-proto" data-port="' + i + '"' + dis + '>'
+          + (caps.pixelProtocols || ['ws2811']).map(function (x) {
+              return '<option' + ((p.protocol === x) ? ' selected' : '') + '>' + x + '</option>'; }).join('')
+        + '</select></td>'
+        + '<td><select class="hp-order" data-port="' + i + '"' + dis + '>'
+          + ['RGB', 'RBG', 'GRB', 'GBR', 'BRG', 'BGR', 'RGBW', 'WRGB'].map(function (x) {
+              return '<option' + ((p.colorOrder === x) ? ' selected' : '') + '>' + x + '</option>'; }).join('')
+        + '</select></td>'
+        + '<td><input type="number" class="hp-null" data-port="' + i + '" min="0" max="10" value="'
+          + (p.startNulls || 0) + '" style="width:4em"' + dis + '></td>'
+        + '<td><input type="number" class="hp-bri" data-port="' + i + '" min="15" max="100" step="10" value="'
+          + (p.brightness != null ? p.brightness : 100) + '" style="width:5em"' + dis + '></td>'
+        + '<td><input type="number" class="hp-gamma" data-port="' + i + '" min="1" max="4" value="'
+          + (p.gamma || 1) + '" style="width:4em"' + dis + '></td>'
+        + '<td style="color:#9ab">' + (u ? u.join(', ') : '—') + '</td>'
+        // The receiver is a wiring fact, not a layout one — and only a
+        // long-range differential board can carry one, so the cell says which
+        // of the two it is rather than being silently absent.
+        + '<td>' + (isPixel ? _hpRecvSelect(i, p, hasRecv) : '—') + '</td>'
+        + '<td>' + (isPixel ? _hpRecvTypeSelect(i, p, hasRecv) : '—') + '</td>'
+        + '</tr>';
+    }
+    body += '</tbody>';
   }
-  body += '</tbody></table>';
+  body += '</table>';
+
+  // Findings sit between the table and the buttons: they are what the operator
+  // reads *after* pressing Save, and an error here is what a push would refuse.
+  body += '<div id="hp-findings" style="margin-top:.8em;font-size:.85em"></div>';
 
   body += '<div style="margin-top:1em;display:flex;gap:.5em;flex-wrap:wrap">'
     + '<button class="btn btn-on" onclick="hinksSave()">Save</button>'
+    + '<button class="btn" style="background:#446;color:#fff" onclick="hinksDefaultsFromFixtures()" '
+    + 'title="Proposes pixels, length, colour order and receivers from the fixtures already bound to '
+    + 'this controller. Nothing is saved and nothing is written to the controller.">Fill from fixtures</button>'
     // #945 — pushing is no longer a two-dialog affair in here. Everything that
     // writes the controller (snapshot, review, push, verify, restore) lives in
     // hinkspix_config.js; this modal only edits SlyLED's copy of the layout.
@@ -160,24 +315,35 @@ function _hpRender() {
 function _hpCollect() {
   var ports = [];
   document.querySelectorAll('.hp-en').forEach(function (el) {
+    // A port on an unfitted board is shown so the table says why it is empty,
+    // but it is not part of the config: it has no controller output to describe.
+    if (el.disabled) return;
     var i = el.getAttribute('data-port');
     var q = function (cls) { return document.querySelector('.' + cls + '[data-port="' + i + '"]'); };
     var leds = parseInt(q('hp-leds').value, 10) || 0;
     if (!el.checked && leds === 0) return;   // keep the payload small
+    var rec = q('hp-rec');
     ports.push({
       port: parseInt(i, 10), leds: leds,
       mm: parseInt(q('hp-mm').value, 10) || 0,
       protocol: q('hp-proto').value,
       colorOrder: q('hp-order').value,
-      nullPixels: parseInt(q('hp-null').value, 10) || 0,
+      startNulls: parseInt(q('hp-null').value, 10) || 0,
       brightness: parseInt(q('hp-bri').value, 10) || 100,
       gamma: parseInt(q('hp-gamma').value, 10) || 1,
-      enabled: el.checked
+      enabled: el.checked,
+      smartRemote: (rec && !rec.disabled) ? (rec.value || null) : null,
+      smartRemoteType: (rec && !rec.disabled && rec.value)
+        ? (q('hp-rectype').value || null) : null
     });
   });
   return {
     baseUniverse: parseInt(document.getElementById('hp-base').value, 10) || 1,
     protocol: document.getElementById('hp-inproto').value,
+    // The starting point for a row the operator has not set; the per-port
+    // values below always win (#946).
+    defaults: {brightness: parseInt(document.getElementById('hp-def-bri').value, 10) || 100,
+               gamma: parseInt(document.getElementById('hp-def-gamma').value, 10) || 1},
     dmxOut: {enabled: document.getElementById('hp-dmx-en').checked,
              universe: parseInt(document.getElementById('hp-dmx-uni').value, 10) || null},
     ports: ports
@@ -189,6 +355,42 @@ function _hpSay(msg, good) {
   if (el) el.innerHTML = '<span style="color:' + (good ? '#6d6' : '#f88') + '">' + escapeHtml(msg) + '</span>';
 }
 
+// The findings the saved config raises, in the operator's words. Same two
+// levels the push wizard uses: an error is a configuration a push would refuse,
+// a warning is a decision they are allowed to make — and both are shown here,
+// at the moment the table is saved, rather than only when they push (#946).
+function _hpFindings(list) {
+  var el = document.getElementById('hp-findings');
+  if (!el) return;
+  list = list || [];
+  if (!list.length) { el.innerHTML = ''; return; }
+  var order = {error: 0, warn: 1};
+  list = list.slice().sort(function (a, b) {
+    return (order[a.level] || 2) - (order[b.level] || 2);
+  });
+  el.innerHTML = list.map(function (f) {
+    var bad = f.level === 'error';
+    return '<div style="margin:.3em 0;padding:.4em .6em;border-radius:4px;background:'
+         + (bad ? '#511' : '#421') + '">'
+         + '<b>' + (bad ? 'Cannot push' : 'Check') + '</b> — '
+         + escapeHtml(f.text)
+         + (f.port ? ' <span style="color:#9ab">(port ' + f.port + ')</span>' : '')
+         + '</div>';
+  }).join('');
+  // Mark the rows the findings are about, so a 48-row table says which ones.
+  document.querySelectorAll('.hp-row-bad').forEach(function (tr) {
+    tr.classList.remove('hp-row-bad');
+    tr.style.boxShadow = '';
+  });
+  list.filter(function (f) { return f.port; }).forEach(function (f) {
+    var el2 = document.querySelector('.hp-en[data-port="' + f.port + '"]');
+    var tr = el2 && el2.closest('tr');
+    if (!tr) return;
+    tr.classList.add('hp-row-bad');
+    tr.style.boxShadow = 'inset 3px 0 0 ' + (f.level === 'error' ? '#f66' : '#fa6');
+  });
+}
+
 function hinksSave() {
   fetch('/api/hinkspix/' + _hpState.cid, {
     method: 'PUT', headers: {'Content-Type': 'application/json'},
@@ -197,8 +399,51 @@ function hinksSave() {
     .then(function (x) {
       if (x.s !== 200) { _hpSay(x.d.err || 'save failed', false); return; }
       _hpState.hinks = x.d.hinks; _hpState.map = x.d.map; _hpState.mapError = null;
-      _hpSay('Saved to SlyLED. The controller is unchanged until you push.', true);
+      _hpState.inSync = false;
+      var errs = (x.d.findings || []).filter(function (f) { return f.level === 'error'; });
+      _hpSay('Saved to SlyLED. The controller is unchanged until you push.'
+             + (errs.length ? (' ' + errs.length + ' thing(s) below would stop a push.')
+                            : ''), !errs.length);
       _hpRender();
+      _hpFindings(x.d.findings);
+    }).catch(function (e) { _hpSay(String(e), false); });
+}
+
+// Fill the table in from the fixtures already bound to this controller.
+//
+// A proposal, and only ever a proposal: the server computes it, this writes it
+// into the inputs without saving anything, and the operator reviews the result
+// before Save. Only the fields a fixture can actually speak to are touched —
+// pixels, length, colour order, receivers — so a value that came from the
+// controller or from the operator is not overwritten by a guess.
+function hinksDefaultsFromFixtures() {
+  _hpSay('Reading the fixtures bound to this controller…', true);
+  fetch('/api/hinkspix/' + _hpState.cid + '/defaults-from-fixtures', {method: 'POST'})
+    .then(function (r) { return r.json().then(function (d) { return {s: r.status, d: d}; }); })
+    .then(function (x) {
+      if (x.s !== 200 || !x.d.ok) { _hpSay(x.d.err || 'failed', false); return; }
+      var d = x.d, n = 0;
+      (d.ports || []).forEach(function (p) {
+        var leds = document.querySelector('.hp-leds[data-port="' + p.port + '"]');
+        if (!leds || leds.disabled) return;
+        _hpSet(p.port, 'hp-leds', p.leds);
+        if (p.mm != null) _hpSet(p.port, 'hp-mm', p.mm);
+        _hpSet(p.port, 'hp-order', p.colorOrder);
+        _hpSet(p.port, 'hp-rec', p.smartRemote || '');
+        _hpSet(p.port, 'hp-rectype', p.smartRemoteType || '');
+        var en = document.querySelector('.hp-en[data-port="' + p.port + '"]');
+        if (en) en.checked = true;
+        _hpRecvChanged(p.port);
+        n++;
+      });
+      var msg = 'Filled ' + n + ' port(s) from the fixtures';
+      if ((d.changes || []).length) msg += '. Changed: ' + d.changes.join('; ');
+      if ((d.unbound || []).length) {
+        msg += '. Enabled port(s) with no fixture on them: ' + d.unbound.join(', ')
+             + ' — switch them off or bind a fixture';
+      }
+      msg += '. Nothing saved yet — review, then Save.';
+      _hpSay(msg, true);
     }).catch(function (e) { _hpSay(String(e), false); });
 }
 

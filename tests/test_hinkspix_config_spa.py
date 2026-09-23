@@ -70,7 +70,7 @@ def _port_rows(board):
         rows.append({"output": out, "protocol": 1 if used else 0,
                      "start": 4801 if used else 1, "pixels": 200 if used else 100,
                      "end": 5100 if used else 300, "direction": 0,
-                     "colorOrder": 0, "nullPixels": 0, "brightness": 100,
+                     "colorOrder": 0, "startNulls": 0, "brightness": 100,
                      "gamma": 1, "used": used})
     return rows
 

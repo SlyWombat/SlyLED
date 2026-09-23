@@ -411,6 +411,11 @@ def main():
         ok("plan touches nothing on the device",
            not [req for req in body.get("requests", [])
                 if req["kind"] == "reload"])
+        # Every warning the plan raised is acknowledged on the way in, exactly
+        # as the wizard does: an unacknowledged warn is a 409 by design (#945),
+        # so a test that skipped them would be asserting a blocked push.
+        acks = [f["code"] for f in body.get("findings", [])
+                if f.get("level") == "warn"]
 
         # The apply job is asserted by capturing its calls: the transport itself
         # is covered above, so what matters here is the dispatch — the right
@@ -444,7 +449,8 @@ def main():
         hb.read_board_ports = lambda ip, board, **kw: row_strings((board - 1) * 16 + 1)
         hb.read_e131_text = lambda ip, row, **kw: ",".join(planned.get(row, []))
         try:
-            r = c.post("/api/hinkspix/7/apply", json={"wait": True})
+            r = c.post("/api/hinkspix/7/apply",
+                       json={"wait": True, "ack": acks})
             ab = r.get_json()
         finally:
             (hb.command, hb.read_data_mode, hb.fire_and_forget, hb.read_board_info,

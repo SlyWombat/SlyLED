@@ -95,11 +95,32 @@ BOARD_MODES = {"e131": "E131", "sacn": "E131", "artnet": "ARTNET", "ddp": "DDP"}
 MIN_MCPU_UPLOAD = 151        # HinksPix PRO (MS_* / V1-V2, 48 ports)
 MIN_MCPU_UPLOAD_V3 = 129     # PRO 80 / hardware V3 (GM_* GigaDevice)
 
+# There is no smart-receiver (SCONFIG) firmware floor here, deliberately. The
+# reference client does not gate one — `UploadSmartReceivers` sends to whatever
+# answered the probe — and the only candidate number we ever had (MS_101) was
+# unreachable anyway: it sits below both upload gates above, so firmware old
+# enough to trip it is blocked by `upload_unsupported` first. `validate` says as
+# much where the warning used to be.
+
 PORTS_PER_BOARD = 16
 MAX_BOARDS = 5
-MAX_PORTS = 48               # 3 addressable boards x 16
+# The widest port count any HinksPix model addresses: PRO 80 / hardware V3
+# (`MaxPixelPort 80` in `hinkspix.xcontroller`). This is the *protocol* ceiling,
+# not a per-unit one — a PRO V1/V2 addresses 48 and an EasyLights 16, and which
+# applies is a property of the model (#946). Keeping three copies of "48" in
+# three modules is how the PRO 80 became unconfigurable (#943 B21).
+MAX_PORTS = MAX_BOARDS * PORTS_PER_BOARD
 PIXELS_PER_UNIVERSE = 170     # 510 of 512 channels; the xLights convention
 UNIVERSES_PER_BLOCK = 6      # xLights UN_PER — the E131 table is sent 6 rows at a time
+
+# Smart-receiver types (`SmartRemoteTypes` in `hinkspix.xcontroller`). The
+# strings are xLights' own and are load-bearing: `HinksPix::CalculateSmartReceivers`
+# switches on the *text*, not on a code (#946).
+SMART_REMOTE_4 = "hinkspix_4"
+SMART_REMOTE_16 = "hinkspix_16"
+SMART_REMOTE_16AC = "hinkspix_16ac"
+SMART_REMOTE_TYPES = (SMART_REMOTE_4, SMART_REMOTE_16, SMART_REMOTE_16AC)
+SMART_RECEIVERS_PER_BANK = 16   # ids 0..15, shown to the operator as A..P
 
 
 class HinksPixError(RuntimeError):
