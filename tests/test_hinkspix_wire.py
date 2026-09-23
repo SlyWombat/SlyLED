@@ -86,6 +86,42 @@ class Recorder:
         return self.seen[0]
 
 
+def row_strings(start):
+    """16 PCONFIG row strings for the block starting at output ``start``."""
+    return [f"{o},0,1,0,0,0,0,0,100,1" for o in range(start, start + 16)]
+
+
+def rows_body(start):
+    """The controller's reply for the block starting at output ``start``."""
+    return json.dumps({"LIST": [{"V": v} for v in row_strings(start)]}).encode()
+
+
+class BoardRecorder:
+    """A urlopen stand-in that answers **per BLK**, the way the controller does.
+
+    The previous fake replayed one scripted body no matter which block was
+    asked for, so a read that was one block late still looked correct — which
+    is exactly how the #943 QA blocker (a read sending the raw 0-based board
+    instead of ``board - 1``) survived a green run. Keying the reply on the
+    ``BLK:`` header is the entire point of this fake.
+    """
+
+    def __init__(self, blocks):
+        self.blocks = blocks          # {blk: body}
+        self.seen = []
+
+    def __call__(self, req, timeout=None):
+        self.seen.append(req)
+        blk = int(req.headers.get("Blk"))
+        if blk not in self.blocks:
+            return FakeReply(b'{"LIST":[]}')
+        return FakeReply(self.blocks[blk])
+
+    @property
+    def blks(self):
+        return [int(r.headers.get("Blk")) for r in self.seen]
+
+
 # ── The operator's real layout ───────────────────────────────────────────────
 # Garage eaves: one model, 200 WS2811 RGB nodes on port 17, start channel 1
 # (universes 1-2). Port 17 is on BLK 1 = BD2, which is a Local_SPI board;
@@ -131,30 +167,59 @@ def main():
     ok("unquoted OK is not an acknowledgement",
        hb.matches_ok("OK") is False and hb.matches_ok('"OK"') is True)
 
-    print("transport — BLK selects the board (#943 B3)")
+    print("transport — BLK selects the board (#943 B3, QA blocker)")
     # The real reply is JSON `{"LIST":[{"V": "<row>"}, ...]}` — verified against
-    # InitExpansionBoardData (HinksPix.cpp:303-322), which is also where the
-    # "exactly `length` rows" rule and `BLK: expansion - 1` come from.
-    body = ('{"LIST":[' + ",".join(
-        '{"V":"%d,0,1,0,0,0,0,0,100,1"}' % o for o in range(17, 33)) + ']}').encode()
-    rec = Recorder(body)
-    rows = hb.read_board_ports("10.0.0.1", 1, opener=rec)
-    ok("a board read carries BLK", rec.only.headers.get("Blk") == "1",
-       rec.only.headers.get("Blk"))
+    # InitExpansionBoardData (HinksPix.cpp:300-321), which is also where the
+    # "exactly `length` rows" rule and `BLK: expansion - 1` come from. The fake
+    # answers per BLK, so an off-by-one shows up as one instead of passing.
+    boards = BoardRecorder({0: rows_body(1), 1: rows_body(17)})
+    rows1 = hb.read_board_ports("10.0.0.1", 1, opener=boards)
+    ok("board 1 asks for BLK 0, not BLK 1", boards.blks == [0], str(boards.blks))
+    ok("board 1 comes back as ports 1-16, not 17-32",
+       len(rows1) == 16 and rows1[0].split(",")[0] == "1"
+       and rows1[-1].split(",")[0] == "16", f"{rows1[0]} .. {rows1[-1]}")
     ok("a board read sends no DATA header",
-       rec.only.headers.get("Data") is None)
-    ok("board 1 comes back as ports 17-32, not 1-16",
-       rows[0].split(",")[0] == "17" and len(rows) == 16, rows[0])
+       boards.seen[0].headers.get("Data") is None)
 
-    short = ('{"LIST":[' + ",".join(
-        '{"V":"%d,0,1,0,0,0,0,0,100,1"}' % o for o in range(1, 16)) + ']}').encode()
+    boards = BoardRecorder({0: rows_body(1), 1: rows_body(17)})
+    rows2 = hb.read_board_ports("10.0.0.1", 2, opener=boards)
+    ok("board 2 asks for BLK 1", boards.blks == [1], str(boards.blks))
+    ok("board 2 comes back as ports 17-32 (the eaves port lives here)",
+       len(rows2) == 16 and rows2[0].split(",")[0] == "17", rows2[0])
+
+    # The controller-level read is the other half of B3: DATA_MODE is a register,
+    # not a board, and xLights sends a fixed `BLK: 0` for it (HinksPix.cpp:333).
+    # Pinned because it is the same board/BLK confusion in a neighbouring call.
+    rec = Recorder(b'{"CMD":"DATA_MODE","MODE":"E131"}')
+    hb.read_data_mode("10.0.0.1", opener=rec)
+    ok("a DATA_MODE read sends BLK 0, not BLK 1",
+       rec.only.headers.get("Blk") == "0", rec.only.headers.get("Blk"))
+
+    # The QA symptom, pinned: rows for the *next* block filed under board 1.
+    # decode_device_config looks for outputs 1-16, finds none, drops all 32 rows
+    # and reports "board 1 not read" forever — which is what made verify
+    # impossible on the real unit. Board 1 must therefore mean BLK 0.
+    good = hc.decode_device_config(
+        board_info={"MaxU": 402},
+        board_ports={1: row_strings(1), 2: row_strings(17)})
+    ok("both fitted boards' ports decode, 1-32",
+       sorted(good.ports) == list(range(1, 33)), str(sorted(good.ports))[:60])
+    ok("...keyed by the 1-based board number",
+       sorted(good.board_ports) == [1, 2], str(sorted(good.board_ports)))
+    wrong = hc.decode_device_config(
+        board_info={"MaxU": 402}, board_ports={1: row_strings(17)})
+    ok("rows for the next block under board 1 decode to nothing (the pre-fix "
+       "symptom)", wrong.ports == {} and wrong.board_ports == {},
+       f"ports={sorted(wrong.ports)}")
+
+    short = json.dumps({"LIST": [{"V": v} for v in row_strings(1)[:15]]}).encode()
     try:
-        hb.read_board_ports("10.0.0.1", 0, opener=Recorder(short))
+        hb.read_board_ports("10.0.0.1", 1, opener=Recorder(short))
         ok("a 15-row reply is rejected rather than padded", False, "no exception")
     except hb.HinksPixError:
         ok("a 15-row reply is rejected rather than padded", True)
     try:
-        hb.read_board_ports("10.0.0.1", 0, opener=Recorder(b"not json at all"))
+        hb.read_board_ports("10.0.0.1", 1, opener=Recorder(b"not json at all"))
         ok("a non-JSON reply is reported, not guessed at", False, "no exception")
     except hb.HinksPixError:
         ok("a non-JSON reply is reported, not guessed at", True)
@@ -349,9 +414,49 @@ def main():
         ok("apply records a config hash so the UI can say in-sync",
            bool(ab.get("configHash")))
 
-        r = c.get("/api/hinkspix/7/device-config")
-        ok("GET device-config fails cleanly when the device is unreachable",
-           r.status_code in (200, 502), str(r.status_code))
+        # The read path, with a fake that honours the documented contract:
+        # 1-based board in, that block's rows out. QA's blocker was this route
+        # handing read_board_ports the wrong convention, so what catches a
+        # regression is asserting what the route *asked for* — and the fake is
+        # stubbed rather than letting the suite reach the operator's real unit
+        # at 192.168.10.6.
+        asked = []
+        real_ports, real_mode = hb.read_board_ports, hb.read_data_mode
+        hb.read_board_ports = lambda ip, board, **kw: (
+            asked.append(board) or row_strings((board - 1) * 16 + 1))
+        hb.read_data_mode = lambda ip, **kw: {"MODE": "E131"}
+        try:
+            r = c.get("/api/hinkspix/7/device-config")
+            dc = r.get_json()
+        finally:
+            hb.read_board_ports, hb.read_data_mode = real_ports, real_mode
+        dev = dc.get("device") or {}
+        ok("device-config asks for the fitted boards 1-based, not 0/1",
+           asked == [1, 2], str(asked))
+        ok("device-config returns the controller's ports, not an empty set",
+           r.status_code == 200
+           and sorted(int(p) for p in (dev.get("ports") or {})) == list(range(1, 33)),
+           f"status={r.status_code} ports={sorted(dev.get('ports') or [])[:12]}")
+        ok("...and files them under both fitted boards",
+           sorted(dev.get("boardPorts") or {}) == ["1", "2"],
+           str(sorted(dev.get("boardPorts") or {})))
+        unread = [i for i in ((dc.get("diff") or {}).get("items") or [])
+                  if i.get("unread") and i.get("section") == "port"]
+        ok("the diff reports no board as unread (the QA symptom)",
+           not unread, str(unread[:2]))
+
+        # A transport failure must surface as 502. Stubbed, so this asserts the
+        # error path without depending on whether the real controller is up.
+        def _refused(ip, board, **kw):
+            raise hb.HinksPixError("connection refused")
+        hb.read_board_ports = _refused
+        try:
+            r = c.get("/api/hinkspix/7/device-config")
+        finally:
+            hb.read_board_ports = real_ports
+        ok("GET device-config reports a transport failure as 502",
+           r.status_code == 502 and not r.get_json().get("ok"),
+           f"status={r.status_code}")
         parent_server._children.remove(child)
 
     print(f"\n{_passed} passed, {_failed} failed out of {_passed + _failed} tests")

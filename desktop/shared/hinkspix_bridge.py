@@ -361,13 +361,25 @@ def read_data_mode(ip, blk=0, timeout=DEFAULT_TIMEOUT, opener=None):
 def read_board_ports(ip, board, timeout=DEFAULT_TIMEOUT, opener=None):
     """One 16-port board's configuration, as row strings.
 
-    ``board`` is the 0-based ``BOARD`` value; the device selects the block with
-    ``BLK: <board>``. On this hardware ``BLK n`` answers for BD(n+1), so board 1
-    is ports 17-32 (#943 B2 — the operator's garage-eaves port is 17, BLK 1).
+    ``board`` is the **1-based** board number — the same ``expansion`` xLights
+    means and the same value ``hinkspix_config`` uses for ``BOARD``. The wire
+    wants one less: ``BLK: expansion - 1`` (``HinksPix.cpp:300-321``), and
+    board *n* answers with outputs ``(n-1)*16 + 1 .. n*16``. So board 1 is
+    ``BLK 0`` and carries ports 1-16; the operator's garage-eaves port 17 is on
+    board 2, ``BLK 1`` (#943 B2).
+
+    Feeding the raw 0-based value in here is what the #943 QA pass caught: the
+    read lands one block late, so board 1 returns ports 17-32,
+    ``decode_device_config`` finds no output in 1-16 and discards all 32 rows,
+    and the diff reports "board 1 not read" forever. Converting in one place —
+    as ``hinkspix_config.build_commands`` does with ``str(board - 1)`` — is why
+    this function takes the 1-based number rather than the wire one.
+
     Exactly 16 rows must come back; anything else means the reply was for the
-    wrong board and is rejected rather than silently padding.
+    wrong block and is rejected rather than silently padding.
     """
-    text = _cgi(ip, CGI_PORT_CONFIG, blk=board, timeout=timeout, opener=opener)
+    text = _cgi(ip, CGI_PORT_CONFIG, blk=board - 1, timeout=timeout,
+                opener=opener)
     try:
         data = json.loads(text)
     except ValueError as exc:
