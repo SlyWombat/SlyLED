@@ -495,6 +495,147 @@ issue text is the one that should give way — but a field note against MS_151 a
 settle it. The `Type "8"` = PRO 80 mapping is likewise read from `:378-382` rather than from a
 probe of that hardware; the operator's unit is Type `"P"`.
 
+### 4.8 Importing the layout from an xLights show folder (#947)
+
+**Why an import at all.** xLights is where this operator's layout actually lives. Which output
+drives which strip, how many pixels are on it and what the model is called were typed into
+xLights years ago; retyping them into SlyLED is tedious *and* a chance to get one wrong, and a
+wrong port is a dark line on the house on the night. So the two files xLights keeps the layout in
+are read, and a port table is **proposed** from them. Nothing is written to the controller, and
+nothing is stored, until the operator has seen the diff against what SlyLED already holds and
+accepted it. Pushing is still §4.4's job.
+
+`desktop/shared/hinkspix_xlights_import.py` is pure: XML text in, plain dicts out — no Flask, no
+sockets, no filesystem. The caller reads the files (path or upload) and hands over their bytes, so
+every rule below is testable against captured XML and nothing in the module can touch a controller.
+
+**The two files**, both copied from the operator's real show folder
+(`…/SlyMega Art Inc/Projects/Xlights - Home Eves`) into `tests/fixtures/xlights_home_eves/`, which
+is the acceptance corpus:
+
+| File | Carries | Read? |
+|---|---|---|
+| `xlights_networks.xml` | one `<Controller>` per controller, one `<network>` child per universe | yes |
+| `xlights_rgbeffects.xml` | one `<model>` per model, with its binding to an output | yes |
+| `hinks_export.json` | the xLights *export dialog's* own state — upload-tab controller list, schedule day list, folder picker | **deliberately never** — it carries no layout |
+
+**The networks file, and the one quirk worth writing down.** A controller element looks like
+
+```xml
+<Controller Name="Ethernet_" Description="Garage" Vendor="HinksPix" Model="PRO V1/V2"
+            IP="192.168.2.10" Protocol="E131" FullxLightsControl="TRUE"
+            DefaultBrightnessUnderFullControl="100" DefaultGammaUnderFullControl="1">
+  <network ComPort="192.168.2.10" BaudRate="1" NetworkType="E131" MaxChannels="510"/>
+```
+
+— and **the E1.31 universe number is in `BaudRate`**, with `ComPort` holding the IP a second time.
+That is not a guess: it is what the operator's own file says, and reading `ComPort` as the universe
+(or `BaudRate` as a serial rate, as the attribute name invites) would produce a plausible-looking
+table bound to the wrong universes. The universes are 1-based and contiguous from the first row,
+so `baseUniverse` is the first and the count is the number of rows; a file whose universes are
+*not* contiguous is imported from its first universe with a warning naming the gap, because SlyLED
+lays universes out contiguously from its base and cannot reproduce holes. `MaxChannels` is the
+row width, used only to resolve a channel index back into a universe + channel.
+`FullxLightsControl` off means xLights is not driving this controller, so the universes are what it
+*would* use rather than what the unit is running — a warning, and a line in the dialog.
+`Default*UnderFullControl` become the port table's `defaults` (`hb.encode_brightness` /
+`encode_gamma`).
+
+**The models file.** One `<model>` per model, and the attributes that matter:
+
+| In the file | Becomes |
+|---|---|
+| `name` | the fixture name, and the row label in the dialog |
+| `DisplayAs` | which node rule applies (`Single Line`, `Tree`, `Matrix`, `Arches`, `Circle`, `Custom`) |
+| `StringType` | channels per node (RGB 3, RGBW 4, single colour 1, any permutation likewise) |
+| `parm1` / `parm2` | strings × nodes per string |
+| `Controller` | which controller's models this row belongs to |
+| `StartChannel` | the universe/channel the model begins at — shown in the diff, never used to bind |
+| `<ControllerConnection Protocol Port>` | the output this model drives, and the port's pixel protocol |
+
+**One string per output is the rule that matters most.** `parm1` strings of `parm2` nodes, so a
+three-string model takes three *consecutive* outputs of `parm2` pixels each and its total is
+`parm1 × parm2`. A port set to the model's *total* would drive three times the channels the strip
+has — the expensive kind of wrong — so the per-output number is the one proposed.
+`parm3` is **not** interpreted: its meaning differs between model types (for some it groups strands
+onto one output, for others it does not), and every model in the operator's file has it at 1;
+anything outside `{0, 1}` is a warning that says how the importer read the file rather than a
+guess. A pixel protocol with no code in the bridge (`ws2812x`, a strip type the controller does not
+serve) is proposed as `ws2811` with a warning naming what was asked for, since a protocol the
+upload cannot encode would store a port that cannot be pushed.
+
+**`StartChannel` forms.** All six are resolved, with a cycle guard on the chained ones:
+`!Controller:N` (absolute channel within that controller's universe block — the operator's form),
+`#U:C`, `#ip:U:C`, a bare integer (xLights' show-wide channel space, walking every controller's
+universes in file order), and `>Model:N` / `@Model:N` (after / at another model's end). The channel
+position is only ever *shown* — the binding is the `<ControllerConnection Port>`, which is a
+statement about wiring rather than about channels.
+
+**Two readings are derived, not captured**, and both say so where they are implemented: the
+`CustomModel` text header (the `strings,strands,nodesPerString` header sizes the model, and its
+`;`-separated rows are only checked against it), and the chained `>Model:N` / `@Model:N` offsets.
+Neither shape appears in the operator's folder, so neither could be checked against real bytes.
+Both therefore fail **closed**: anything unreadable comes back with a reason and falls back to
+`parm1 × parm2` (or an error naming the channel), so a wrong reading surfaces as a warning or a
+refused row the operator can see — never as a plausible-looking port table.
+
+**The routes.**
+
+| Route | Body | Does |
+|---|---|---|
+| `POST /api/hinkspix/import/xlights` | `{showFolder, cid?, controller?}` — read by the orchestrator, so a Windows path and its `/mnt/…` twin both work — or a multipart form with the two XML files | reads, resolves, proposes. **Stores nothing, opens no socket to the unit** |
+| `POST /api/hinkspix/<cid>/import/xlights/accept` | `{proposal, createFixtures}` | writes the port table, then a fixture per accepted model |
+
+The preview returns the proposal (`controller`, `universes`, `hinks`, `fixtures`, `models`,
+`warnings`), plus three things the editor draws: `source` (what was read), `diff` — `added` /
+`changed` / `kept` / `withdrawn` / `settings` — and `notes` in words. A show with more than one
+controller is a 400 carrying `controllers: [names]`, so the dialog offers the names instead of
+making the operator retype one the file already gave. `models[]` is the per-row view: a row with an
+**error**-level problem comes back `accepted: false`, because a row the port table cannot hold must
+not be applied by default (the operator would have to find the one bad row by hand) — warnings
+never un-accept a row. Ports beyond the target model's output count are warnings here and errors at
+the accept, which is the same ordering as a hand-typed edit: the editor lets you type anything, and
+saving is what checks it.
+
+**An import is held to the editor's own rules.** `_apply_config_body` is the PUT's body extracted
+into one function; the accept calls *it*, so base-universe range, protocol list, DMX-out,
+brightness/gamma encoding, per-port ranges, duplicate outputs, LED counts, start nulls and
+smart-receiver checks are the same code on both paths — an import cannot store a config the editor
+would have refused, and five refusals leave `child["hinks"]` byte-identical (asserted in
+`tests/test_hinkspix_xlights_routes.py`). One duplicate-output check sits in the accept rather than
+in the shared validator, because the accept keys its port set by output number and a duplicate
+would collapse there before the validator ever saw it; a body naming output 17 twice is refused as
+a layout that disagrees with itself rather than resolved by keeping the last.
+
+**What is written, and what is left alone.** Rows the operator accepted, minus rows they unticked,
+laid over the ports the controller already has. Ports the proposal never mentions are **kept**, and
+so is a port the preview could not accept: an xLights folder describes the models it knows about,
+not every output on the unit, and importing a one-model folder into a configured controller must
+not clear the other 47 outputs. Unticking means *not written*, not *removed* — for an output the
+unit already has, that is leaving it as it was; for a new one, not adding it. A base-universe move
+is reported in words on top of the numeric diff, because it renumbers every page below it *and*
+rewrites the routes derived from it.
+
+**Fixtures.** One per accepted model, named after it, bound to the outputs `ControllerConnection`
+names — and the pixel count is read from the row that was just applied rather than from the
+proposal's own copy, so a fixture can never disagree with the output it drives. A name or an output
+already taken is **skipped with the reason** rather than renamed or rebound, and creating no
+fixture at all is a legitimate outcome the dialog states plainly. The port table and the fixtures
+are one transaction: if creating a fixture raises, the config, the fixture list and `_nxt_fix` are
+put back, both are saved, and the routes are republished from the config that survived.
+
+**The surface.** "Import from xLights…" sits in the port table (not a top-level tab — the import is
+a way to fill *this* controller's table), and opens a modal over it so Cancel gives the table back.
+Inside: the folder box (with the two files as a picker, for the case where the browser and the
+orchestrator cannot see the same disk), the controller chooser when the show is ambiguous, the
+proposal as a table with the diff and the notes above it, a tick per row, the create-fixtures
+toggle, and a result screen with one way on — back to the port table, re-read from the server
+rather than patched in place. Reading again clears the previous result, so a second read always
+presents the new proposal with its Apply button. The dialog only ever talks to the orchestrator:
+`tests/test_hinkspix_xlights_spa.py` records every request the panel makes and asserts they are all
+`/api/hinkspix/` paths and none of them the unit's address — a dialog that configured the
+controller from the browser would be a second, unverified write path.
+
 ---
 
 ## 5. Live output path
@@ -768,6 +909,9 @@ Offline first, all under the `unit` job in `.github/workflows/python-tests.yml`
 | `tests/test_hinkspix_apply.py` | (#945) the push lifecycle against a **stateful in-process fake** that stores what it is told: the snapshot before the first write and the two invariants that matter — nothing is written to a controller that cannot be read, and a failed request stops the sequence, leaves the reboot unsent and names the snapshot to restore. Plus restore round-trip (rows and table back, `inSync` cleared), restore refusals, the findings gate + `ack`, one-job-at-a-time, and `BACKUP_KEEP` retention per device |
 | `tests/test_hinkspix_config_spa.py` | (#945) Playwright against **stubbed `fetch`** — the panel only: the five-step flow, the editor opening *on top of* the wizard and `closeModal()` returning to it, the acknowledgement gate, the apply poll stopping when the job ends and when the modal closes. Every recorded request must be an orchestrator path: a wizard that reached the controller from the browser would be a second, unverified configuration path |
 | `tests/test_hinkspix_smart.py` | (#946) the caps table and `caps_key` for every witness (Controller E / Type 8 / MaxU 65-402-684 / V3 / un-probed); port → board/bank/sub-port; five `calculate_smart_receivers` cases pinned to `HinksPix.cpp:860-918` (per-sub-port slots, a chain on one output, the 16-port group of four, the 16AC's `/3` start pixel, a non-Long_Range board skipped); the `SCONFIG` payload and its place between `BD_INFO` and `PCONFIG`, with no request at all for an empty bank; a five-board PRO V3 at port 80; every `validate` code and its level; the PUT/GET contract (`caps`, caps-filtered protocols, `startNulls` + its `nullPixels` alias, receiver id/type accept-reject, the model's port ceiling) and `defaults-from-fixtures` storing nothing. The bridge's device entry points are replaced with ones that raise for the whole file, so the suite cannot reach a controller |
+| `tests/test_hinkspix_xlights_import.py` | (#947) the pure importer against the operator's real show folder (`tests/fixtures/xlights_home_eves/`): the `BaudRate`-is-the-universe quirk, non-contiguous and mixed-width universe blocks, `FullxLightsControl` off, every `StartChannel` form with a cycle guard, the per-output rule (`parm1 × parm2`, one string per output) for every `DisplayAs`, `StringType` → channels per node, a `parm3` outside `{0,1}`, the unknown-protocol fallback, and the two derived-not-captured shapes (Custom header, chain offsets) failing closed. No socket is opened — the module has none to open |
+| `tests/test_hinkspix_xlights_routes.py` | (#947) the two routes through Flask with **the wire shut** (both transports patched to raise for the whole file): path spellings incl. a Windows path, its WSL twin and a pasted *file* path; uploads; the multi-controller chooser; the targeted preview and its diff/notes; the accept happy path, the idempotent re-accept, an unticked row, a port already bound, `createFixtures` off, and five refusals that leave the stored config byte-identical to the editor's own — the parity that makes an import safe. Plus a monkeypatched mid-write failure: config, fixtures and routes all rolled back |
+| `tests/test_hinkspix_xlights_spa.py` | (#947) Playwright against **stubbed `fetch`** — the panel only, with the canned bodies produced by calling the real routes in-process rather than written by hand: the modal over the port table, the folder box and its upload fallback, the controller chooser, the proposal rendered as a diff, the tick state that travels back as `accepted`, the result screen, and re-reading after an apply. Every recorded request must be an orchestrator path, never the unit's address |
 | `tests/test_hinkspix_device.py` | Flask: add device with mocked probe; port-table CRUD + collision 400s; fixtures-from-ports; strings `port` validation; universeRoutes upsert; `_is_performer` guards (no RUNNER_GO/LOAD_STEP/PING to hinkspix); sweep marks offline via HTTP probe; the #944 firmware gate on `set-clock`/`mode` (asserted by capturing that no connection is attempted) |
 | `tests/test_hinkspix_output.py` | show start with a baked timeline → after one loop tick `peek_universe(u).get_data()` holds renderer output at the right offsets; LED-only show no longer idles; blackout on stop; master-brightness scaling on sACN pixel universes |
 | *not yet covered — QA lane* | deploy render (`render_hseq_frames`): size = 336 + frames x channels; frames equal `render_fixture`; DMX-out trailing span; hseq channel map identical to the live map. No suite asserts this today |
@@ -782,10 +926,12 @@ playback; confirm items 1-5 and 7 of §8 and record results in `docs/live-test-s
 
 ## 10. Implementation issues (dependency-ordered, complete PRs)
 
-**Status as of 2026-09-23: #938, #939, #940, #941, #943, #944, #945 and #946 are implemented;
-#947 is open.** The 2026-09-23 bench session (§8b) found the wire protocol broken in
-several places, so #943-#947 were filed and are being worked in order — the write path first
-(#943, #944, #945), then guidance (#946) and import (#947).
+**Status as of 2026-09-23: #938, #939, #940, #941, #943, #944, #945, #946 and #947 are
+implemented.** The 2026-09-23 bench session (§8b) found the wire protocol broken in
+several places, so #943-#947 were filed and worked in order — the write path first
+(#943, #944, #945), then guidance (#946) and import (§4.8). What remains for the QA lane is
+the harness work §9 defers: the shared gated `http.server` fake, replaying golden MS_160
+captures, and wiring the hinkspix suites into `python-tests.yml`.
 Deviations from this plan, and why, are recorded in each commit message. The
 notable ones: the 64-segment bake cap moved from #938 to #939 (bake_timeline had
 no `children` parameter), and the standalone scheduling UI lives in the HinksPix
@@ -802,7 +948,7 @@ place.
 | #944 | `fix: firmware gate on the upload path` (`FirmwareSupportsUpload()`; issue's `MS_152` floor vs source `151`/`129` still needs a bench capture, §6.3) | #943 |
 | #945 | `feat: HinksPix configuration management — snapshots, push job, verify wizard` (§4.6) | #943, #944 |
 | #946 | `feat: HinksPix configuration guidance — capability table, smart receivers, the finding table` (§4.7) | #945 |
-| #947 | `feat: import an existing xLights layout — networks/models → fixtures` | #946 |
+| #947 | `feat: import an existing xLights layout — networks/models → fixtures` (§4.8) | #946 |
 
 Order: **#938 ∥ #939 → #940 → #941**, then the bench-driven run **#943 → #944 → #945 → #946 → #947**.
 A and B are independently landable complete units; C is the first PR where both halves must change

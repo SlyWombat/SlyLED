@@ -297,6 +297,10 @@ function _hpRender() {
     // hinkspix_config.js; this modal only edits SlyLED's copy of the layout.
     + '<button class="btn" style="background:#dc2626;color:#fff" onclick="hinksConfig(' + _hpState.cid + ',3)">Review &amp; push…</button>'
     + '<button class="btn" style="background:#335;color:#fff" onclick="hinksConfig(' + _hpState.cid + ',1)">Controller state &amp; snapshots…</button>'
+    + '<button class="btn" style="background:#446;color:#fff" onclick="hinksXlightsImport(' + _hpState.cid + ')" '
+    + 'title="Read an xLights show folder (or its two XML files) and propose a port table from the models '
+    + 'in it. Nothing is saved, and nothing is written to the controller, until you accept the proposal.">'
+    + 'Import from xLights…</button>'
     + '<button class="btn" style="background:#446;color:#fff" onclick="hinksFixturesFromPorts()">Create fixtures from ports</button>'
     + '<button class="btn" style="background:#446;color:#fff" onclick="hinksProbe()">Probe</button>'
     + '<button class="btn" style="background:#059669;color:#fff" onclick="hinksStandalone(' + _hpState.cid + ')">Standalone playback →</button>'
@@ -468,6 +472,343 @@ function hinksFixturesFromPorts() {
              true);
       if (typeof loadFixtures === 'function') loadFixtures();
     }).catch(function (e) { _hpSay(String(e), false); });
+}
+
+
+// ── xLights show-folder import (#947) ────────────────────────────────────────
+//
+// The operator's layout already exists in xLights: which controller, which
+// universes, which model drives which output. This dialog reads it and offers
+// it back as a *proposal* — the port table behind it is not touched until the
+// operator ticks the models they want and accepts. Accepting writes SlyLED's
+// copy through the same save the editor uses, so an imported port table is
+// held to the same rules a hand-typed one is; the controller is not written
+// either way (that is still the push wizard's job, #945).
+//
+// The file's controller address is usually *not* the unit's own — xLights
+// keeps whatever was typed when the show was set up (the operator's Home Eves
+// folder says 192.168.2.10 for a controller at 192.168.10.6) — so it is shown
+// rather than reconciled. Which of the two is right is a fact about the
+// network, not about either file.
+
+var _hxi = {cid: null, folder: '', controllers: null, proposal: null,
+            off: {}, createFixtures: true, busy: false, result: null};
+
+function hinksXlightsImport(cid) {
+  _pushModal();     // Cancel hands the port table back, edits and all
+  _hxi = {cid: cid, folder: '', controllers: null, proposal: null,
+          off: {}, createFixtures: true, busy: false, result: null};
+  _hxiRender();
+}
+
+function _hxiSay(msg, good) {
+  var el = document.getElementById('hxi-msg');
+  if (el) {
+    el.innerHTML = '<span style="color:' + (good ? '#6d6' : '#f88') + '">'
+                 + escapeHtml(msg) + '</span>';
+  }
+}
+
+function _hxiFetch(url, opts) {
+  return fetch(url, opts).then(function (r) {
+    return r.json().then(function (d) { return {s: r.status, d: d}; },
+                        function () { return {s: r.status, d: {}}; });
+  });
+}
+
+// Read the folder the operator pasted, or the two files they picked. The
+// orchestrator does the reading, so the path is resolved on the machine the
+// server runs on — a Windows path and its WSL mount both work, and a path to
+// either one of the files is taken as the folder holding them.
+function hinksXlightsRead(files) {
+  if (_hxi.busy) return;
+  var body;
+  if (files && files.length) {
+    var fd = new FormData();
+    for (var i = 0; i < files.length; i++) fd.append('files', files[i]);
+    body = {form: fd};
+  } else {
+    var el = document.getElementById('hxi-folder');
+    var folder = el ? el.value.trim() : '';
+    if (!folder) { _hxiSay('Give the folder xLights keeps this show in.', false); return; }
+    var ctrl = document.getElementById('hxi-ctrl');
+    body = {json: {showFolder: folder, cid: _hxi.cid,
+                   controller: ctrl ? ctrl.value : undefined}};
+  }
+  _hxi.busy = true;
+  _hxiSay('Reading…', true);
+  var opts = {method: 'POST'};
+  if (body.form) { opts.body = body.form; }
+  else {
+    opts.headers = {'Content-Type': 'application/json'};
+    opts.body = JSON.stringify(body.json);
+  }
+  _hxiFetch('/api/hinkspix/import/xlights', opts)
+    .then(function (x) {
+      _hxi.busy = false;
+      if (x.s !== 200 || !x.d.ok) {
+        // A show with more than one controller is not an error the operator
+        // can fix by retyping: the server sends the names, so this offers them.
+        if ((x.d.controllers || []).length > 1) {
+          _hxi.controllers = x.d.controllers;
+          _hxi.proposal = null;
+          _hxiRender();
+          _hxiSay(x.d.err || 'choose a controller', false);
+          return;
+        }
+        _hxiSay(x.d.err || ('read failed (' + x.s + ')'), false);
+        return;
+      }
+      _hxi.controllers = x.d.controllers || [];
+      _hxi.proposal = x.d;
+      _hxi.off = {};
+      // A previous apply's result is about a proposal this read just replaced:
+      // leaving it up would show a stale summary with no Apply button on it.
+      _hxi.result = null;
+      _hxiRender();
+      _hxiSay('Read ' + (x.d.models || []).length + ' model(s) from '
+              + (x.d.source || 'the folder') + '.', true);
+    })
+    .catch(function (e) { _hxi.busy = false; _hxiSay(String(e), false); });
+}
+
+function _hxiToggle(i, on) {
+  if (on) { delete _hxi.off[i]; } else { _hxi.off[i] = true; }
+  _hxiRender();
+}
+
+function hinksXlightsApply() {
+  if (_hxi.busy || !_hxi.proposal) return;
+  // The tick state travels as `accepted` on the same proposal object the server
+  // handed over, because the accept reads it there: an unticked row withdraws
+  // its outputs, and a row the proposal itself rejected cannot be re-ticked
+  // (its ports are ones the port table cannot hold).
+  var prop = JSON.parse(JSON.stringify(_hxi.proposal));
+  (prop.models || []).forEach(function (m, i) {
+    if (m.accepted !== false && _hxi.off[i]) m.accepted = false;
+  });
+  _hxi.busy = true;
+  _hxiSay('Applying…', true);
+  _hxiFetch('/api/hinkspix/' + _hxi.cid + '/import/xlights/accept', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({proposal: prop,
+                          createFixtures: _hxi.createFixtures})
+  }).then(function (x) {
+    _hxi.busy = false;
+    if (x.s !== 200) {
+      _hxiSay(x.d.err || ('apply failed (' + x.s + ')'), false);
+      return;
+    }
+    _hxi.result = x.d;
+    _hxiRender();
+    _hxiSay('Saved to SlyLED.', true);
+    if (typeof loadFixtures === 'function') loadFixtures();
+  }).catch(function (e) { _hxi.busy = false; _hxiSay(String(e), false); });
+}
+
+// Leave the dialog and show the port table as it now stands: the edits the
+// accept made are the server's copy, so the table is re-read rather than
+// patched in place.
+function hinksXlightsDone() {
+  closeModal();                       // pops the port table back
+  if (typeof hinksConfigure === 'function') hinksConfigure(_hxi.cid, true);
+}
+
+function _hxiPortList(row) {
+  var ps = row.ports || (row.port != null ? [row.port] : []);
+  return ps.length ? ps.join(', ') : '—';
+}
+
+function _hxiModelRows(p) {
+  var rows = p.models || [];
+  if (!rows.length) {
+    return '<div style="color:#fa6;font-size:.85em">No model in the show folder '
+         + 'belongs to this controller, so there is no output to import.</div>';
+  }
+  var html = '<table class="tbl" style="width:100%;font-size:.85em">'
+           + '<thead><tr><th title="Import this model\'s outputs">Use</th>'
+           + '<th>Model</th><th>Shape</th><th>Output(s)</th><th>Nodes</th>'
+           + '<th title="Where its StartChannel lands, resolved against the '
+           + 'controller\'s universes">Starts at</th><th>Notes</th></tr></thead>';
+  rows.forEach(function (m, i) {
+    var rejected = m.accepted === false;
+    var on = !rejected && !_hxi.off[i];
+    html += '<tr' + (on ? '' : ' style="opacity:.5"') + '>'
+      + '<td><input type="checkbox" ' + (on ? 'checked' : '')
+      + (rejected ? ' disabled title="This row cannot be imported — see its notes."' : '')
+      + ' onchange="_hxiToggle(' + i + ', this.checked)"></td>'
+      + '<td>' + escapeHtml(String(m.name || '?')) + '</td>'
+      + '<td>' + escapeHtml(String(m.displayAs || '?')) + '<br>'
+      + '<span style="color:#9ab">' + escapeHtml(String(m.stringType || '?')) + '</span></td>'
+      + '<td>' + escapeHtml(_hxiPortList(m)) + '</td>'
+      + '<td>' + (m.nodes != null ? m.nodes : '?')
+      + (m.nodesPerString != null ? (' <span style="color:#9ab">('
+          + m.nodesPerString + '/string x' + (m.strings || 0) + ')</span>') : '')
+      + '</td>'
+      + '<td>' + (m.universe != null ? ('u' + m.universe + ' ch' + m.channel) : '—')
+      + (m.startChannel ? ('<br><span style="color:#9ab;font-size:.9em">'
+          + escapeHtml(String(m.startChannel)) + '</span>') : '')
+      + '</td><td>'
+      + (m.problems || []).map(function (pr) {
+          return '<div style="color:' + (pr.level === 'error' ? '#f88' : '#fa6')
+               + '">' + escapeHtml(String(pr.text)) + '</div>';
+        }).join('')
+      + '</td></tr>';
+  });
+  return html + '</table>';
+}
+
+function _hxiDiff(p) {
+  var d = p.diff;
+  if (!d) return '';
+  var bits = [];
+  if ((d.added || []).length) bits.push((d.added.length) + ' output(s) added: ' + d.added.join(', '));
+  if ((d.changed || []).length) {
+    bits.push((d.changed.length) + ' changed: ' + d.changed.map(function (c) {
+      return c.port + ' (' + Object.keys(c.fields || {}).join(', ') + ')';
+    }).join('; '));
+  }
+  if ((d.kept || []).length) {
+    bits.push((d.kept.length) + ' kept as they are, because the show folder says '
+              + 'nothing about them: ' + d.kept.join(', '));
+  }
+  if ((d.withdrawn || []).length) bits.push('unticked: ' + d.withdrawn.join(', '));
+  var bu = (d.settings || {}).baseUniverse;
+  if (bu) {
+    bits.push('base universe ' + bu.from + ' → ' + bu.to
+              + ' (renumbers every universe below it and the routes that publish them)');
+  }
+  if (!bits.length) return '';
+  return '<div style="margin:.6em 0;font-size:.85em;color:#9ab">Against this '
+       + 'controller now: ' + bits.map(escapeHtml).join(' · ') + '</div>';
+}
+
+function _hxiRender() {
+  var p = _hxi.proposal;
+  var body = '<div style="font-size:.9em;line-height:1.45">';
+
+  body += '<div style="margin-bottom:.8em;color:#9ab">Read the show folder xLights '
+        + 'keeps for this controller — <code>xlights_networks.xml</code> for the '
+        + 'controller and its universes, <code>xlights_rgbeffects.xml</code> for the '
+        + 'models. The orchestrator reads them, so the path must be one <i>it</i> can '
+        + 'see; a Windows path and its <code>/mnt/…</code> equivalent both work, and '
+        + 'the export-dialog file in the same folder is ignored.</div>';
+
+  body += '<div style="display:flex;gap:.5em;flex-wrap:wrap;align-items:center">'
+        + '<input id="hxi-folder" type="text" placeholder="C:\\Users\\…\\Xlights - Show" '
+        + 'value="' + escapeHtml(_hxi.folder) + '" style="flex:1;min-width:18em" '
+        + 'oninput="_hxi.folder=this.value">'
+        + '<button class="btn btn-on" onclick="hinksXlightsRead()"'
+        + (_hxi.busy ? ' disabled' : '') + '>Read folder</button>'
+        + '</div>';
+
+  // The same read, from a machine the orchestrator cannot see into: hand it the
+  // two files instead of a path.
+  body += '<div style="margin:.5em 0 .8em;font-size:.85em">'
+        + '<label>…or pick the two files: '
+        + '<input type="file" id="hxi-files" multiple accept=".xml" '
+        + 'onchange="hinksXlightsRead(this.files)"></label> '
+        + '<span style="color:#9ab">(select both — <code>xlights_networks.xml</code> '
+        + 'and <code>xlights_rgbeffects.xml</code>)</span></div>';
+
+  body += '<div id="hxi-msg" style="min-height:1.2em;font-size:.85em;margin-bottom:.6em"></div>';
+
+  if (_hxi.controllers && _hxi.controllers.length > 1 && !p) {
+    body += '<div style="margin-bottom:.8em"><label style="font-size:.85em">This show '
+          + 'has ' + _hxi.controllers.length + ' controllers — which one is this? '
+          + '<select id="hxi-ctrl">'
+          + _hxi.controllers.map(function (n) {
+              return '<option value="' + escapeHtml(String(n)) + '">'
+                   + escapeHtml(String(n)) + '</option>';
+            }).join('')
+          + '</select></label></div>';
+  }
+
+  if (p && !_hxi.result) {
+    var c = p.controller || {};
+    body += '<div style="margin-bottom:.6em;font-size:.85em">'
+          + '<b>' + escapeHtml(String(c.name || '?')) + '</b>'
+          + (c.description ? (' — ' + escapeHtml(String(c.description))) : '')
+          + ' &middot; ' + escapeHtml(String(c.vendor || '?')) + ' '
+          + escapeHtml(String(c.model || '?'))
+          + ' &middot; ' + escapeHtml(String(p.protocol || '?').toUpperCase())
+          + ' to <b>' + escapeHtml(String(c.ip || '?')) + '</b>'
+          + ' &middot; universes ' + ((p.universes || {}).base || '?')
+          + (p.universes && p.universes.count
+              ? ('..' + ((p.universes.base || 0) + p.universes.count - 1)
+                 + ' (' + p.universes.count + ')') : '')
+          + (c.fullControl ? '' : ' &middot; <span style="color:#fa6">xLights is not '
+             + 'in full control — these are the universes it would use, not what the '
+             + 'controller is running</span>')
+          + '</div>';
+
+    (p.notes || []).forEach(function (n) {
+      body += '<div style="margin:.3em 0;padding:.4em .6em;border-radius:4px;'
+            + 'background:#421;font-size:.85em">' + escapeHtml(String(n)) + '</div>';
+    });
+    (p.warnings || []).forEach(function (w) {
+      body += '<div style="margin:.3em 0;padding:.4em .6em;border-radius:4px;'
+            + 'background:#421;font-size:.85em">' + escapeHtml(String(w)) + '</div>';
+    });
+
+    body += _hxiDiff(p);
+    body += _hxiModelRows(p);
+
+    body += '<div style="margin-top:.8em;font-size:.85em">'
+          + '<label><input type="checkbox" id="hxi-mkfix"' + (_hxi.createFixtures ? ' checked' : '')
+          + ' onchange="_hxi.createFixtures=this.checked"> create a fixture for each '
+          + 'model, named after it, bound to the output it drives</label>'
+          + '<div style="color:#9ab">Fixtures already on this controller keep their '
+          + 'names and their outputs; one whose name or output is taken is skipped and '
+          + 'reported rather than renamed or rebound.</div></div>';
+
+    body += '<div style="margin-top:1em;display:flex;gap:.5em">'
+          + '<button class="btn btn-on" onclick="hinksXlightsApply()"'
+          + (_hxi.busy ? ' disabled' : '') + '>Apply to SlyLED</button>'
+          + '<button class="btn" onclick="closeModal()">Cancel</button>'
+          + '</div>';
+    body += '<div style="margin-top:.5em;color:#9ab;font-size:.8em">This updates '
+          + "SlyLED's copy of the layout. The controller is not written — pushing "
+          + 'is “Review &amp; push…” in the port table.</div>';
+  }
+
+  if (_hxi.result) {
+    var r = _hxi.result;
+    body += '<div style="font-size:.9em"><b>Written to SlyLED.</b> '
+          + ((r.created || []).length
+              ? ('Created ' + r.created.length + ' fixture(s): '
+                 + r.created.map(function (f) {
+                     return escapeHtml(String(f.name)) + ' (port '
+                          + (f.ports || []).join(', ') + ')';
+                   }).join('; ') + '.')
+              : 'No fixture was created.')
+          + '</div>';
+    (r.skipped || []).forEach(function (s) {
+      body += '<div style="margin:.3em 0;padding:.4em .6em;border-radius:4px;'
+            + 'background:#421;font-size:.85em">Skipped <b>'
+            + escapeHtml(String(s.name)) + '</b> — ' + escapeHtml(String(s.reason))
+            + '</div>';
+    });
+    (r.notes || []).forEach(function (n) {
+      body += '<div style="margin:.3em 0;font-size:.85em;color:#9ab">'
+            + escapeHtml(String(n)) + '</div>';
+    });
+    (r.findings || []).forEach(function (f) {
+      body += '<div style="margin:.3em 0;padding:.4em .6em;border-radius:4px;background:'
+            + (f.level === 'error' ? '#511' : '#421') + ';font-size:.85em">'
+            + '<b>' + (f.level === 'error' ? 'Cannot push' : 'Check') + '</b> — '
+            + escapeHtml(String(f.text))
+            + (f.port ? (' <span style="color:#9ab">(port ' + f.port + ')</span>') : '')
+            + '</div>';
+    });
+    body += '<div style="margin-top:1em"><button class="btn btn-on" '
+          + 'onclick="hinksXlightsDone()">Back to the port table</button></div>';
+  }
+
+  body += '</div>';
+  document.getElementById('modal-title').textContent = 'Import from xLights — port configuration';
+  document.getElementById('modal-body').innerHTML = body;
+  document.getElementById('modal').style.display = 'block';
 }
 
 

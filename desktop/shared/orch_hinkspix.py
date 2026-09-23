@@ -13,6 +13,7 @@ module deliberately stops at "the device is described, configured, and bound to
 fixtures".
 """
 
+import copy
 import hashlib
 import json
 import os
@@ -29,6 +30,7 @@ assert ps is not None, "orch_state.bind() must run before importing orch_hinkspi
 
 import hinkspix_bridge as hb
 import hinkspix_config as hc
+import hinkspix_xlights_import as xi
 from pixel_output import PixelOutputMap, UniverseCollision, to_wire_frame
 
 bp = Blueprint("hinkspix", __name__)
@@ -246,7 +248,33 @@ def api_hinkspix_put(cid):
     child, err = _child(cid)
     if err:
         return err
-    body = request.get_json(silent=True) or {}
+    out = {}
+    rejected = _apply_config_body(child, request.get_json(silent=True) or {}, out)
+    if rejected is not None:
+        return rejected
+    hinks = out["hinks"]
+    return jsonify(ok=True, hinks=hinks, map=out["map"].to_json(),
+                   configHash=_config_hash(hinks),
+                   findings=[f.to_json() for f in
+                             _config_findings(child, out["map"])])
+
+
+def _apply_config_body(child, body, out):
+    """Validate and store a config body on `child`, or reject it.
+
+    Returns a ``(response, status)`` pair when the body cannot be stored, else
+    ``None`` — and on success fills ``out`` with ``{"hinks": ..., "map": ...}``.
+
+    Shared by the PUT route and the xLights import's accept route, so a port
+    table that arrived from an xLights show folder is held to exactly the rules a
+    hand-typed one is: same ranges, same protocol list, same DMX-out and
+    smart-receiver checks. Two implementations of "is this config valid" is how
+    an import turns into a second way to write a config the editor would have
+    refused (#947).
+
+    Nothing is stored until the whole body validates: the map is built against a
+    copy of the child first, so a rejected body leaves the child untouched.
+    """
     hinks = dict(child.get("hinks") or {})
     caps = hc.caps_for(hinks)
 
@@ -379,10 +407,9 @@ def api_hinkspix_put(cid):
     ps.log.info("HinksPix %s config updated: %d ports, %d universes from %d",
                 child.get("ip"), len(hinks.get("ports") or []),
                 len(output_map.universes), hinks.get("baseUniverse"))
-    return jsonify(ok=True, hinks=hinks, map=output_map.to_json(),
-                   configHash=_config_hash(hinks),
-                   findings=[f.to_json() for f in
-                             _config_findings(probe_child, output_map)])
+    out["hinks"] = hinks
+    out["map"] = output_map
+    return None
 
 
 @bp.get("/api/hinkspix/<int:cid>/map")
@@ -1232,6 +1259,437 @@ def api_hinkspix_defaults_from_fixtures(cid):
     if err:
         return err
     return jsonify(ok=True, **hc.defaults_from_fixtures(child, ps._fixtures))
+
+
+# ── xLights show-folder import (#947) ────────────────────────────────────────
+# The operator already owns the show's layout in xLights: which controller, how
+# many universes it feeds, which model drives which output. Retyping that into
+# the port table is transcription work whose failure mode is a controller
+# configured for a show nobody is running, so the layout is *read from the two
+# files xLights keeps it in* and offered back as a proposal (#947).
+#
+# Reading and writing are two routes on purpose. The preview stores nothing; the
+# accept writes the config through `_apply_config_body`, which is the same
+# function the editor's own save uses — so an import cannot become a second way
+# to write a config the editor would have refused.
+
+XLI_NETWORKS_FILE = "xlights_networks.xml"
+XLI_RGBEFFECTS_FILE = "xlights_rgbeffects.xml"
+
+# Port fields worth showing in a diff. The rest of a port row (mm defaulting,
+# smart-receiver labels) is normalised by the port table itself.
+XLI_PORT_DIFF_KEYS = ("leds", "mm", "protocol", "colorOrder", "direction",
+                      "startNulls", "brightness", "gamma", "enabled")
+
+
+def _win_to_wsl(path):
+    """``C:\\Users\\x`` -> ``/mnt/c/Users/x``, or None when it is not that shape."""
+    m = re.match(r"^([A-Za-z]):[\\/](.*)$", path)
+    if not m:
+        return None
+    return "/mnt/" + m.group(1).lower() + "/" + m.group(2).replace("\\", "/")
+
+
+def _wsl_to_win(path):
+    """``/mnt/c/Users/x`` -> ``C:\\Users\\x``, or None when it is not that shape."""
+    m = re.match(r"^/mnt/([A-Za-z])/(.*)$", path)
+    if not m:
+        return None
+    return m.group(1).upper() + ":\\" + m.group(2).replace("/", "\\")
+
+
+def _show_folder_candidates(raw):
+    """The spellings of a show-folder path worth trying, most literal first.
+
+    The orchestrator reads the folder itself, which means it needs the path in
+    *its own* platform's spelling — and the operator copied it from wherever
+    they happen to be looking. So a Windows path is also tried as its WSL mount
+    and vice versa, and only a spelling that exists is ever opened.
+    """
+    raw = str(raw or "").strip().strip('"').strip("'")
+    if not raw:
+        return []
+    out = []
+    for cand in (raw, _win_to_wsl(raw), _wsl_to_win(raw)):
+        if not cand:
+            continue
+        # A path to either file is as good as the folder holding it: the
+        # operator copies whatever they had selected in their file manager.
+        # Trimmed by hand rather than with `os.path.dirname`, which only knows
+        # this platform's separator — on a POSIX orchestrator a Windows path has
+        # no separator at all as far as it is concerned, and the folder it would
+        # return is ""/"." , i.e. the orchestrator's working directory. A bare
+        # filename is left alone so it fails as "no such folder" instead of
+        # quietly reading whatever `xlights_networks.xml` happens to be in cwd.
+        if re.search(r"\.xml$", cand, re.I):
+            cand = re.sub(r"[\\/][^\\/]*$", "", cand)
+        if cand not in out:
+            out.append(cand)
+    return out
+
+
+def _read_show_folder(raw):
+    """Read both xLights files out of a show folder.
+
+    Returns ``(networks_text, rgbeffects_text, folder, err)``. A folder missing
+    either file is refused rather than half-imported: without models there is
+    nothing to import, and without networks there is no controller whose
+    universes the channels resolve against — so in both cases the likelier
+    explanation is the wrong folder, and saying which file is missing is how the
+    operator finds the right one.
+
+    ``hinks_export.json`` sits in the same folder and is deliberately never read:
+    it is export-dialog state (which dialog was last open), not the show.
+    """
+    tried = _show_folder_candidates(raw)
+    if not tried:
+        return None, None, None, "showFolder is required"
+    for folder in tried:
+        if not os.path.isdir(folder):
+            continue
+        missing = [n for n in (XLI_NETWORKS_FILE, XLI_RGBEFFECTS_FILE)
+                   if not os.path.isfile(os.path.join(folder, n))]
+        if missing:
+            return None, None, None, (f"'{folder}' has no {' or '.join(missing)}"
+                                      f" — pick the folder holding xLights' show "
+                                      f"files")
+        try:
+            texts = []
+            for name in (XLI_NETWORKS_FILE, XLI_RGBEFFECTS_FILE):
+                with open(os.path.join(folder, name), "r", encoding="utf-8",
+                          errors="replace") as fh:
+                    texts.append(fh.read())
+        except OSError as exc:
+            return None, None, None, f"could not read '{folder}': {exc}"
+        return texts[0], texts[1], folder, None
+    return None, None, None, (f"no such folder: {tried[0]}"
+                              + (f" (also tried {', '.join(tried[1:])})"
+                                 if len(tried) > 1 else ""))
+
+
+def _show_from_upload(files):
+    """Both XML files posted as a multipart form, for a remote orchestrator.
+
+    Matched on the part's field name *and* its filename, because the sender is a
+    browser file picker and what it names the field is the sender's business.
+    """
+    texts = {}
+    for part in files.values():
+        label = (getattr(part, "filename", "") or part.name or "").lower()
+        if "network" in label:
+            texts.setdefault("networks", part.read().decode("utf-8", "replace"))
+        elif "effect" in label:
+            texts.setdefault("rgbeffects", part.read().decode("utf-8", "replace"))
+    missing = [n for n in ("networks", "rgbeffects") if n not in texts]
+    if missing:
+        return None, None, None, ("upload both xLights files (missing "
+                                  + " and ".join(missing) + ")")
+    return texts["networks"], texts["rgbeffects"], "(uploaded)", None
+
+
+def _entries_differ(now, new, keys):
+    """The subset of `keys` whose value would change, as ``{key: {from, to}}``."""
+    return {k: {"from": now.get(k), "to": new.get(k)}
+            for k in keys if now.get(k) != new.get(k)}
+
+
+def _port_rows(hinks):
+    """A hinks config's port table keyed by port number."""
+    return {int(p["port"]): p for p in (hinks or {}).get("ports") or []
+            if p.get("port") is not None}
+
+
+def _import_diff(child, proposal):
+    """The proposal against what the controller holds now.
+
+    Four lists, because they are four different decisions: an output that is new
+    (added), one whose settings would change (changed), one the show folder
+    never mentions (kept), and one the operator unticked (withdrawn — the
+    editor's own view of `models[]`, so it is only reported here).
+
+    `kept` is the one worth reading. An xLights folder describes the models it
+    knows about, not every output on the controller, so the ports it is silent
+    about are *carried over* rather than deleted — importing a one-model show
+    folder into a configured unit must not clear the other 47 outputs.
+    """
+    now_ports = _port_rows(child.get("hinks") or {})
+    new_ports = _port_rows(proposal.get("hinks") or {})
+    added = sorted(n for n in new_ports if n not in now_ports)
+    changed = [{"port": n, "fields": _entries_differ(now_ports[n], new_ports[n],
+                                                     XLI_PORT_DIFF_KEYS)}
+               for n in sorted(new_ports)
+               if n in now_ports
+               and _entries_differ(now_ports[n], new_ports[n],
+                                   XLI_PORT_DIFF_KEYS)]
+    kept = sorted(n for n in now_ports if n not in new_ports)
+    withdrawn = sorted({int(p) for row in proposal.get("models") or []
+                        if isinstance(row, dict) and row.get("accepted") is False
+                        for p in row.get("ports") or []})
+    settings = _entries_differ(child.get("hinks") or {},
+                               proposal.get("hinks") or {},
+                               ("baseUniverse", "protocol", "defaults"))
+    return {"added": added, "changed": changed, "kept": kept,
+            "withdrawn": withdrawn, "settings": settings}
+
+
+@bp.post("/api/hinkspix/import/xlights")
+def api_hinkspix_import_xlights():
+    """Read an xLights show folder and propose a port table from it.
+
+    Body is ``{showFolder}`` — read by the orchestrator, so a Windows path and
+    its WSL mount both work — or a multipart form carrying the two XML files,
+    for an orchestrator on another machine. Optional ``cid`` names the target
+    controller so the proposal can be checked against *its* boards, and
+    ``controller`` names which controller in the file to import when the show
+    has more than one.
+
+    Stores nothing and opens no socket to the controller: the proposal goes back
+    to the editor, which shows it against the current port table. Accepting it is
+    a separate call (#947).
+    """
+    body = request.get_json(silent=True) or {}
+    if request.files:
+        networks, rgbeffects, source, err = _show_from_upload(request.files)
+    else:
+        networks, rgbeffects, source, err = _read_show_folder(
+            body.get("showFolder"))
+    if err:
+        return jsonify(err=err), 400
+
+    try:
+        layout = xi.parse_show(networks, rgbeffects)
+    except xi.XlightsImportError as exc:
+        # `controllers` is always present in the payload, empty or not, so the
+        # editor has one shape to read whether the file was unreadable or had
+        # more controllers in it than the operator wants to pick from by name.
+        return jsonify(err=str(exc), controllers=[]), 400
+
+    child = None
+    caps = None
+    cid = body.get("cid")
+    if cid is not None:
+        try:
+            cid = int(cid)
+        except (TypeError, ValueError):
+            return jsonify(err="cid must be an integer"), 400
+        child, err = _child(cid)
+        if err:
+            return err
+        caps = hc.caps_for(child.get("hinks") or {})
+
+    names = [c.get("name") for c in layout.get("controllers") or []]
+    try:
+        proposal = xi.propose(layout, controller=body.get("controller"),
+                              caps=caps)
+    except xi.XlightsImportError as exc:
+        # An ambiguous controller comes back with the list attached: the editor
+        # offers the choice instead of making the operator retype a name it
+        # already knows.
+        return jsonify(err=str(exc), controllers=names), 400
+
+    diff = _import_diff(child, proposal) if child is not None else None
+    notes = []
+    if child is None:
+        notes.append("no target controller — the port table is proposed "
+                     "against the HinksPix PRO's own limits, not this unit's "
+                     "fitted boards")
+    else:
+        ip = (proposal.get("controller") or {}).get("ip")
+        if ip and ip != child.get("ip"):
+            notes.append(f"xLights sends to {ip}; this controller is at "
+                         f"{child.get('ip')} — the address xLights has is one "
+                         f"this unit must answer on")
+        # The universe block is the mapping, so moving the base renumbers every
+        # page below it *and* rewrites the Art-Net routes derived from it. It is
+        # one number in the diff and a wholesale change on the wire, which is
+        # why it is called out in words as well.
+        base = (diff or {}).get("settings", {}).get("baseUniverse")
+        if base and base.get("from") != base.get("to"):
+            notes.append(f"the base universe would move from {base.get('from')} "
+                         f"to {base.get('to')} — the universes below it and the "
+                         f"routes that publish them follow, so an existing "
+                         f"config is renumbered")
+    proposal.update({"source": source, "controllers": names, "notes": notes,
+                     "diff": diff})
+    return jsonify(ok=True, **proposal)
+
+
+@bp.post("/api/hinkspix/<int:cid>/import/xlights/accept")
+def api_hinkspix_import_accept(cid):
+    """Apply an xLights proposal: the port table, then a fixture per model.
+
+    Body is ``{proposal, createFixtures}``, where ``proposal`` is what the
+    preview returned — the editor may have unticked rows in it, and an unticked
+    model's outputs are dropped. Unticking narrows what is written; it never
+    widens it, because a row the preview rejected was rejected for a reason the
+    port table cannot hold.
+
+    Two things are carried over deliberately. Ports the proposal never mentions
+    keep the config they have, so a folder holding one model does not clear the
+    other outputs; and a port the preview could not accept keeps what it has
+    too. Everything written goes through `_apply_config_body`, the editor's own
+    save path — same ranges, same protocol list, same DMX-out and
+    smart-receiver checks.
+
+    The config and the fixtures are one transaction: if a fixture cannot be
+    created, the port table is put back rather than left half-imported.
+    """
+    child, err = _child(cid)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    prop = body.get("proposal")
+    if not isinstance(prop, dict) or not isinstance(prop.get("hinks"), dict):
+        return jsonify(err="proposal must be the object "
+                           "/api/hinkspix/import/xlights returned"), 400
+
+    hinks_before = copy.deepcopy(child.get("hinks") or {})
+    fixtures_before = list(ps._fixtures)
+    nxt_fix_before = ps._nxt_fix
+    notes = []
+
+    # Two rows for one output is refused rather than resolved by keeping the
+    # last: the port table addresses each output once, and a body that says
+    # otherwise is not a layout with a preference, it is a layout that
+    # disagrees with itself. (`_apply_config_body` refuses this too — the check
+    # is here because the port set below is keyed by output, so a duplicate
+    # would collapse before it ever reached the validator.)
+    def _port_number(row):
+        try:
+            return int(row.get("port"))
+        except (AttributeError, TypeError, ValueError):
+            return None
+
+    numbers = [n for n in (_port_number(p) for p in prop["hinks"].get("ports") or [])
+               if n is not None]
+    dupes = sorted({n for n in numbers if numbers.count(n) > 1})
+    if dupes:
+        return jsonify(err=f"the proposal names output(s) {dupes} more than "
+                           f"once"), 400
+
+    # The port set to write: the proposal's own accepted rows, minus the ones
+    # the operator unticked, laid over the ports this controller already has.
+    applied = {n: dict(p) for n, p in _port_rows(prop.get("hinks")).items()}
+    withdrawn = []
+    for row in prop.get("models") or []:
+        if not isinstance(row, dict) or row.get("accepted") is not False:
+            continue
+        for num in row.get("ports") or []:
+            if applied.pop(int(num), None) is not None:
+                withdrawn.append(int(num))
+    if withdrawn:
+        # Unticking a row means "do not write this output" — for an output the
+        # controller already has, that is leaving it alone; for a new one, it is
+        # not adding it. Either way nothing is deleted, which is why the wording
+        # is "not written" rather than "removed".
+        notes.append(f"{len(withdrawn)} unticked output(s) not written: "
+                     + ", ".join(str(n) for n in sorted(withdrawn)))
+
+    current = _port_rows(hinks_before)
+    kept = sorted(n for n in current if n not in applied)
+    merged = dict(current)
+    merged.update(applied)
+    if kept:
+        notes.append(f"{len(kept)} output(s) on this controller are not in the "
+                     f"show folder and were kept: "
+                     + ", ".join(str(n) for n in kept))
+
+    cfg_body = {"ports": [merged[n] for n in sorted(merged)]}
+    for key in ("baseUniverse", "protocol"):
+        if key in prop["hinks"]:
+            cfg_body[key] = prop["hinks"][key]
+    if prop["hinks"].get("defaults"):
+        cfg_body["defaults"] = prop["hinks"]["defaults"]
+
+    out = {}
+    rejected = _apply_config_body(child, cfg_body, out)
+    if rejected is not None:
+        # Nothing was stored — `_apply_config_body` validates the whole body
+        # before it touches the child — so there is nothing to roll back.
+        return rejected
+    if hinks_before.get("baseUniverse") != out["hinks"].get("baseUniverse"):
+        notes.append(f"base universe moved {hinks_before.get('baseUniverse')} to "
+                     f"{out['hinks'].get('baseUniverse')} — the universes below "
+                     f"it and their routes are renumbered")
+
+    created, skipped = [], []
+    if body.get("createFixtures"):
+        rejected_names = {row.get("name") for row in prop.get("models") or []
+                          if isinstance(row, dict)
+                          and row.get("accepted") is False}
+        try:
+            with ps._lock:
+                for f in prop.get("fixtures") or []:
+                    if not isinstance(f, dict) or not f.get("name"):
+                        continue
+                    name = str(f["name"])
+                    if name in rejected_names:
+                        continue
+                    # The pixel count comes from the port row that was just
+                    # applied rather than from the proposal's own copy, so a
+                    # fixture can never disagree with the output it drives.
+                    strings = []
+                    for s in f.get("strings") or []:
+                        if not isinstance(s, dict) or s.get("port") is None:
+                            continue
+                        row = applied.get(int(s["port"]))
+                        if row is None:
+                            continue
+                        strings.append({"port": int(s["port"]),
+                                        "leds": int(row.get("leds") or 0),
+                                        "mm": row.get("mm")})
+                    if not strings:
+                        skipped.append({"name": name,
+                                        "reason": "no output left in the "
+                                                  "accepted rows"})
+                        continue
+                    problem = ps._validate_fixture_strings(strings)
+                    if problem is None and any(
+                            x.get("childId") == cid
+                            and (x.get("name") or "") == name
+                            for x in ps._fixtures):
+                        problem = (f"a fixture named '{name}' is already on "
+                                   f"this controller")
+                    if problem is None:
+                        # Checked against the config that was just stored, so
+                        # "the port exists and the device owns its pixel count"
+                        # is a statement about the table, not about the file.
+                        problem = ps._validate_fixture_ports(
+                            strings, child, ps._fixtures)
+                    if problem is not None:
+                        skipped.append({"name": name, "reason": problem})
+                        continue
+                    fix = {"id": ps._nxt_fix, "name": name,
+                           "fixtureType": "led", "type": "linear",
+                           "childId": cid, "strings": strings}
+                    ps._fixtures.append(fix)
+                    ps._nxt_fix += 1
+                    created.append({"id": fix["id"], "name": name,
+                                    "ports": [s["port"] for s in strings]})
+                if created:
+                    ps._save("fixtures", ps._fixtures)
+        except Exception as exc:                      # noqa: BLE001
+            with ps._lock:
+                child["hinks"] = hinks_before
+                ps._fixtures[:] = fixtures_before
+                ps._nxt_fix = nxt_fix_before
+                ps._save("children", ps._children)
+                ps._save("fixtures", ps._fixtures)
+            old_map, _ = _build_map_or_error(child)
+            if old_map is not None:
+                _sync_universe_routes(child, old_map)
+            ps.log.error("HinksPix %s xLights import rolled back: %s",
+                         child.get("ip"), exc)
+            return jsonify(err=f"import failed, nothing was changed: {exc}"), 500
+
+    ps.log.info("HinksPix %s xLights import: %d port(s) written, %d fixture(s), "
+                "%d skipped", child.get("ip"), len(applied), len(created),
+                len(skipped))
+    return jsonify(ok=True, hinks=out["hinks"], map=out["map"].to_json(),
+                   configHash=_config_hash(out["hinks"]), created=created,
+                   skipped=skipped, notes=notes,
+                   findings=[f.to_json() for f in
+                             _config_findings(child, out["map"])])
 
 
 # ── Offline standalone playback (#941) ───────────────────────────────────────
