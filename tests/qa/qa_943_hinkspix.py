@@ -191,6 +191,31 @@ def add_child(ip, cid):
     return child
 
 
+ACKED = []
+
+
+def do_apply(c, cid, path="apply", extra=None):
+    """POST apply/restore as a blocking job (#945: wait:true). Warnings block
+    until acknowledged by code; acknowledge only non-error blockers, and record
+    them so the report says what was waved through."""
+    body = dict(extra or {}, wait=True)
+    r = c.post(f"/api/hinkspix/{cid}/{path}", json=body)
+    if r.status_code == 409:
+        j = r.get_json() or {}
+        blk = j.get("blocking") or []
+        # Only ever wave through warnings known to be benign for these tests.
+        # NEVER empty_config: acknowledging it pushes a blank layout (QA burned
+        # the real unit's universe table this way on 2026-09-23).
+        safe = {"reboot_required", "engine_protocol_mismatch", "port_unbound"}
+        if blk and all(b.get("level") != "error" and b.get("code") in safe for b in blk):
+            codes = [b.get("code") for b in blk]
+            ACKED.append((cid, path, [(b.get("level"), b.get("code")) for b in blk]))
+            print(f"  (acknowledging {[(b.get('level'), b.get('code')) for b in blk]})")
+            body["ack"] = codes
+            r = c.post(f"/api/hinkspix/{cid}/{path}", json=body)
+    return r
+
+
 def port_rows(dev_json, port):
     """Find a port in the device-config JSON regardless of nesting."""
     hits = []
@@ -267,21 +292,30 @@ def offline(c):
     print("\n== apply")
     fake.log.clear()
     t0 = time.time()
-    r = c.post(f"/api/hinkspix/{cid}/apply", json={})
+    r = do_apply(c, cid)
     res = r.get_json() or {}
-    ok("apply 200 ok=true despite the reboot dropping the connection",
-       r.status_code == 200 and res.get("ok") is True, r.data[:300])
+    print(f"  apply response keys: {sorted(res)[:12]}  state={json.dumps(res.get('state') or {})[:300]}")
+    ok("apply (wait) 200 ok=true despite the reboot dropping the connection",
+       r.status_code == 200 and res.get("ok") is True, r.data[:400])
     print(f"  apply took {time.time() - t0:.1f}s, {len(fake.log)} requests on the wire")
 
-    log = list(fake.log)
+    full = list(fake.log)
+    first_write = next((i for i, e in enumerate(full) if e[2].get("DATA")), len(full))
+    ok("snapshot taken before the first write (BLK port reads precede writes)",
+       any(e[1] == "/Xlights_Board_Port_Config.cgi" for e in full[:first_write]),
+       [e[1] for e in full[:first_write]])
+    ok("readback after the reboot (port reads follow the last OP_MODE)",
+       any(e[1] == "/Xlights_Board_Port_Config.cgi" for e in full[max(i for i, e in enumerate(full) if "OP_MODE" in (e[2].get("DATA") or "")):]))
+    log = [e for e in full if e[2].get("DATA")]
     ok("no POSTs on the wire", all(m == "GET" for m, *_ in log),
        [(m, p) for m, p, *_ in log if m != "GET"][:3])
     ok("no request bodies", all(not b for *_, b in log))
     ok("every request carries Content-type: text/plain",
        all((hd.get("CONTENT-TYPE") or "").startswith("text/plain")
            for _, _, hd, _ in log))
-    ok("plan request count == apply request count (+1 for the doubled reboot)",
-       len(log) == len(reqs) + 1, f"plan {len(reqs)} vs wire {len(log)}")
+    plan_writes = [q for q in reqs if (q.get("headers") or {}).get("DATA")]
+    ok("plan writes == wire writes (+1 for the doubled reboot)",
+       len(log) == len(plan_writes) + 1, f"plan {len(plan_writes)} vs wire {len(log)}")
 
     cmds = []
     for m, p, hd, _ in log:
@@ -301,11 +335,11 @@ def offline(c):
                "UNPACK" if p == "/Xlights_UnPack_Config.cgi" else name)
         if not seq or seq[-1] != tag or tag not in ("E131", "PCONFIG"):
             seq.append(tag)
-    ok("sequence matches HinksPix::SetOutputs",
-       seq == ["READ_MODE", "DATA_MODE", "E131", "BD_INFO", "PCONFIG", "DATA_MODE",
+    ok("write sequence matches HinksPix::SetOutputs",
+       seq == ["DATA_MODE", "E131", "BD_INFO", "PCONFIG", "DATA_MODE",
                "UNPACK", "OP_MODE", "OP_MODE"], seq)
 
-    mode_cmd = json.loads(cmds[1][3]) if len(cmds) > 1 and cmds[1][3] else {}
+    mode_cmd = json.loads(cmds[0][3]) if cmds and cmds[0][3] else {}
     ok("first DATA_MODE is {CMD, MODE: E131} only", mode_cmd == {"CMD": "DATA_MODE", "MODE": "E131"}, mode_cmd)
 
     rows = []
@@ -366,20 +400,21 @@ def offline(c):
 
     print("\n== failure handling: controller rejects PCONFIG")
     fake.reject_cmd = "PCONFIG"
-    r = c.post(f"/api/hinkspix/{cid}/apply", json={})
+    fake.log.clear()
+    r = do_apply(c, cid)
     res = r.get_json() or {}
-    ok("apply 502 on a rejected command", r.status_code == 502, r.status_code)
-    ok("apply reports failedAt / failedNote / completed",
-       "failedAt" in res and "completed" in res, list(res)[:6])
+    print(f"  rejected-apply response: {r.status_code} {json.dumps(res)[:400]}")
+    ok("apply reports failure on a rejected command (ok=false)", res.get("ok") is False, r.status_code)
     ok("no reboot sent after a failure",
-       not any((e[2].get("DATA") or "").find("OP_MODE") >= 0 for e in fake.log[-5:]))
+       not any("OP_MODE" in (e[2].get("DATA") or "") for e in fake.log))
     fake.reject_cmd = None
 
     print("\n== failure handling: unreachable controller")
     add_child("127.0.0.1:9", 9432)
     parent_server._children[-1]["hinks"].update(h)
-    r = c.post("/api/hinkspix/9432/apply", json={})
-    ok("apply to an unreachable controller fails cleanly (502, not 500)", r.status_code == 502, r.status_code)
+    r = do_apply(c, 9432)
+    ok("apply to an unreachable controller fails cleanly (not 500, ok=false)",
+       r.status_code != 500 and (r.get_json() or {}).get("ok") is False, (r.status_code, r.data[:200]))
     srv.shutdown()
 
 
@@ -457,6 +492,8 @@ def main():
         cid = hw_read(c)
         if "--hw-apply" in sys.argv:
             hw_apply(c, cid)
+    if ACKED:
+        print(f"acknowledged warnings: {ACKED}")
     print(f"\n{_passed} passed, {_failed} failed out of {_passed + _failed} tests")
     if _findings:
         print(f"{len(_findings)} note(s) — divergences from xLights to review")
