@@ -270,34 +270,97 @@ HinksPix-backed fixtures are ordinary `fixtureType:"led", type:"linear"` fixture
 
 ### 4.4 Device configuration push (explicit, operator-triggered)
 
-Rewritten under #943 into a preview-then-upload pair, so the operator sees the exact requests
-before anything touches the device:
+Rewritten under #943 into a preview-then-upload pair, then under #945 into a job that snapshots
+first and verifies after, so the operator sees the exact requests before anything touches the
+device and can put the device back afterwards:
 
 - `GET /api/hinkspix/<cid>/plan` — dry run. Returns the protocol, `maxUniverses`,
   `universesUsed`, the `boards` that will receive `PCONFIG`, the full request list (`kind`,
-  `method`, `path`, `headers`) and the intended `DeviceConfig`. Touches nothing.
+  `method`, `path`, `headers`), the intended `DeviceConfig` and the `findings` (§4.6). Touches
+  nothing.
 - `POST /api/hinkspix/<cid>/apply` — sends that same sequence (`hc.build_commands` builds both,
-  so they cannot drift). Stops at the first failure with `502` + `failedAt`/`failedNote`/
-  `completed`; on success records `configPushedAt`/`configHash` and returns `rebooted: true`.
+  so they cannot drift). **Asynchronous since #945**: `202` + `state`, or `409` when a finding is
+  unacknowledged or another job is already running. `wait: true` runs it to completion and
+  answers `200`. Progress is `GET /api/hinkspix/<cid>/apply`; `POST /backups` is refused while a
+  job runs.
 - `GET /api/hinkspix/<cid>/device-config` — reads `BoardInfo` (`MaxU`), the current `DATA_MODE`
   (`BLK 0`) and the port table of every fitted pixel board, then returns `device` and a `diff`
   against the intended config. The SPA shows "config differs from device" from that diff; an
-  unread section is reported as unread, never as a difference.
+  unread section is reported as unread (`diffError`), never as a difference.
 
 ### 4.5 UX surfaces
 
 - **Setup → Hardware**: row with badge "HinksPix" (new `boardColors` entry), status, firmware,
   buttons Refresh / Configure / Web UI (`http://<ip>/`) / Remove.
-- **Device modal** (new `hinkspix.js`): port table (48 rows: enabled, leds, mm, protocol,
-  colour order, null pixels, brightness, gamma), base universe, protocol readout, DMX-out
-  toggle + universe, "Create fixtures from ports", "Preview & upload…", "Read controller",
-  mode indicator (Live / Standalone / unknown), "Set clock".
+- **Device modal** (`hinkspix.js`): port table (48 rows: enabled, leds, mm, protocol, colour
+  order, null pixels, brightness, gamma), base universe, protocol readout, DMX-out toggle +
+  universe, "Create fixtures from ports", "Probe", mode indicator (Live / Standalone /
+  unknown), "Set clock", and two buttons into the wizard below. Since #945 this modal **never
+  writes the controller** — everything that touches the device moved to `hinkspix_config.js`.
 - **Add device**: `POST /api/children` already tries PING then WLED; add a HinksPix probe
   (`XLights_BoardInfo.cgi`) in the same fall-through. No mDNS/ArtPoll guarantee → manual IP add
   (like WLED) is the supported path; an ArtPoll reply, if the unit answers, folds through the
   existing `_artnet_oneshot_poll` merge with type promotion to `hinkspix`.
 - **Layout / 3D / Control**: nothing new — fixtures are `led`. `fixture-types.js led` gets a
   badge chip "HinksPix P<port>" and `panelDetailHtml` shows port numbers.
+
+### 4.6 Configuration management — snapshots, the push job, and verify (#945)
+
+`desktop/shared/spa/js/hinkspix_config.js` is one five-step wizard over
+`orch_hinkspix.py`'s config endpoints. It exists because the failure mode that matters here is
+not "the request was refused" — it is **the controller was left half-written**, and that state
+has no description to reason from. So every push is bracketed by a read of the device.
+
+**Read → Edit → Review → Apply → Verify.** Nothing on the device changes before step 4, and
+step 2 edits only SlyLED's copy. The port editor is opened *on top of* the wizard
+(`_pushModal()` + `hinksConfigure(cid, nested=true)`), so `closeModal()` returns to the wizard
+rather than closing the modal — the editor's own `_hpRender` skips its stack-clear when it was
+opened that way.
+
+**Snapshot first, or not at all.** `_config_worker` takes the snapshot before the first write;
+if the read fails, nothing is written and the job fails with `backupId: null` ("nothing to
+restore"). A snapshot stores the **raw row strings** the controller handed over, replayed
+verbatim — re-deriving them from our decoded model would quietly "fix" anything the decoder
+misreads, which is the opposite of what a restore is for. Blocks arrive six rows at a time, so
+`flatten_blocks()` puts them back into wire order for the summary, the restore and the
+post-restore diff.
+
+**What a snapshot cannot hold.** UnPack and SCONFIG have no read CGI in xLights (`HinksPix.cpp`
+has no `GetSmartReceiverData`; `UploadUnPack` has no counterpart), so a restore **resets** them
+rather than recreating them. This is a documented limitation of the controller, surfaced in
+`restore_commands`' warnings before the operator confirms — not hidden. E131 blocks the read
+missed are named the same way and left as they are, never blanked.
+
+**A failed push is never resumed.** The sequence stops at the failed request (every later
+request would be written against a device in an unknown state) and reports `failedAt` plus the
+snapshot id. The way forward is `POST /restore`, not a retry — the wizard's failure panel
+carries the Restore button.
+
+**Restore is a job too**, and it snapshots first, so a restore is itself undoable. Its preview
+(`GET /restore?backupId=…`) reports the summary, the request count and the warnings the
+operator is agreeing to. `BACKUP_KEEP = 10` snapshots per device, newest first.
+
+**Verify is the only evidence.** After the reboot the wizard waits up to `REBOOT_WAIT_S = 90` s
+for the device, then reads it back and diffs it against what was sent; the result lands in
+`lastVerify` and is shown as "the controller holds what was sent" / "differs from what was
+sent", with the differing rows listed. A device that never comes back reports
+`unknown: True` — unread is reported as unread, never as agreement.
+
+**"In sync" (`inSync`/`configHash`) means one thing only**: the stored config has not changed
+since the last successful push. It is not a claim about the device. A restore clears it
+deliberately — a restored device holds a state this orchestrator does not describe.
+
+**Findings.** Every `error` blocks the push outright; every `warn` blocks until the request
+names its code in `ack`. The gate is enforced server-side (`_blocking_findings` → `409`), and
+the SPA renders the same list from `GET /plan` so the two can never disagree about what is
+refused. `code` is a stable slug (`text` may be reworded freely) and `port` marks the row the
+finding is about, so #946's per-port guidance can key on both. The split is in place here; the
+guidance table itself — per-port channel caps, board-type rules, fixture binding — is #946.
+
+**Poll lifetime.** `_hwPollTick` stops when the wizard is no longer the visible modal
+(`_hwOpen()` tests visibility *and* presence, because `closeModal()` only sets
+`display:none` and leaves `#modal-body` intact). A poll that outlives its panel is a request
+loop nobody can see or switch off.
 
 ---
 
@@ -569,6 +632,8 @@ Offline first, all under the `unit` job in `.github/workflows/python-tests.yml`
 | `tests/test_pixel_renderer_parity.py` | Node runs `spa/js/pixel_renderer.js` on the same corpus (pattern: `test_fixture_shortcuts.py`; skips without node) |
 | `tests/test_hinkspix_offline.py` | static: `struct.calcsize` = 608/34/26/22, 18-byte header literal, `TotalSize = 28 + DataSize`, FAT word round-trip, `.hseq` header bytes at every documented offset, `.ply`/`.sched` exact text, schedule validation, short-name rules. **Also the in-process fake TCP controller** (parses chunks, reassembles files, replies `\|FOK`, injects failure/timeouts): reassembled bytes, close-packet name/DTTM and its `DataSize 0` field, the exact-multiple flush chunk, time-packet fields, mode packet, errors surfaced |
 | `tests/test_hinkspix_wire.py` | HTTP wire protocol (#943): GET + headers, quoted `"OK"`, `BLK` board select, gzip replies, the 1-based universe table, per-port start channels, full-board `PCONFIG`, `UnPack` gating, reboot-last, DDP. **Light self-check only** — it asserts the request shape and the command sequence. Standing up a gated in-process `http.server` fake, replaying golden MS_160 captures, and wiring the hinkspix suites into this job are deferred to the QA lane |
+| `tests/test_hinkspix_apply.py` | (#945) the push lifecycle against a **stateful in-process fake** that stores what it is told: the snapshot before the first write and the two invariants that matter — nothing is written to a controller that cannot be read, and a failed request stops the sequence, leaves the reboot unsent and names the snapshot to restore. Plus restore round-trip (rows and table back, `inSync` cleared), restore refusals, the findings gate + `ack`, one-job-at-a-time, and `BACKUP_KEEP` retention per device |
+| `tests/test_hinkspix_config_spa.py` | (#945) Playwright against **stubbed `fetch`** — the panel only: the five-step flow, the editor opening *on top of* the wizard and `closeModal()` returning to it, the acknowledgement gate, the apply poll stopping when the job ends and when the modal closes. Every recorded request must be an orchestrator path: a wizard that reached the controller from the browser would be a second, unverified configuration path |
 | `tests/test_hinkspix_device.py` | Flask: add device with mocked probe; port-table CRUD + collision 400s; fixtures-from-ports; strings `port` validation; universeRoutes upsert; `_is_performer` guards (no RUNNER_GO/LOAD_STEP/PING to hinkspix); sweep marks offline via HTTP probe; the #944 firmware gate on `set-clock`/`mode` (asserted by capturing that no connection is attempted) |
 | `tests/test_hinkspix_output.py` | show start with a baked timeline → after one loop tick `peek_universe(u).get_data()` holds renderer output at the right offsets; LED-only show no longer idles; blackout on stop; master-brightness scaling on sACN pixel universes |
 | *not yet covered — QA lane* | deploy render (`render_hseq_frames`): size = 336 + frames x channels; frames equal `render_fixture`; DMX-out trailing span; hseq channel map identical to the live map. No suite asserts this today |
@@ -583,7 +648,10 @@ playback; confirm items 1-5 and 7 of §8 and record results in `docs/live-test-s
 
 ## 10. Implementation issues (dependency-ordered, complete PRs)
 
-**Status as of 2026-09-18: #938, #939, #940 and #941 are implemented.**
+**Status as of 2026-09-23: #938, #939, #940, #941, #943, #944 and #945 are implemented; #946
+and #947 are open.** The 2026-09-23 bench session (§8b) found the wire protocol broken in
+several places, so #943-#947 were filed and are being worked in order — the write path first
+(#943, #944, #945), then guidance (#946) and import (#947).
 Deviations from this plan, and why, are recorded in each commit message. The
 notable ones: the 64-segment bake cap moved from #938 to #939 (bake_timeline had
 no `children` parameter), and the standalone scheduling UI lives in the HinksPix
@@ -596,6 +664,14 @@ place.
 | #939 | `feat: HinksPix PRO as a first-class device — probe, port model, fixture binding, config push` | — |
 | #940 | `feat: HinksPix live output — streamed LED fixtures in show playback and live actions` | #938, #939 |
 | #941 | `feat: HinksPix offline playback — hseq/ply/sched writers, raw-TCP upload, RTC sync, mode switch, Deploy UI` | #938, #939, #940 |
+| #943 | `fix: HinksPix protocol parity against the xLights reference` (bench audit; the wire-protocol QA harness landed as `tests/test_hinkspix_wire.py`) | #939 |
+| #944 | `fix: firmware gate on the upload path` (`FirmwareSupportsUpload()`; issue's `MS_152` floor vs source `151`/`129` still needs a bench capture, §6.3) | #943 |
+| #945 | `feat: HinksPix configuration management — snapshots, push job, verify wizard` (§4.6) | #943, #944 |
+| #946 | `feat: HinksPix configuration guidance — capability table, smart receivers, the finding table` | #945 |
+| #947 | `feat: import an existing xLights layout — networks/models → fixtures` | #946 |
 
-Order: **#938 ∥ #939 → #940 → #941.** A and B are independently landable complete units; C is the first PR
-where both halves must change together and is scoped as one coordinated PR; D likewise.
+Order: **#938 ∥ #939 → #940 → #941**, then the bench-driven run **#943 → #944 → #945 → #946 → #947**.
+A and B are independently landable complete units; C is the first PR where both halves must change
+together and is scoped as one coordinated PR; D likewise. #945 is the last of the bench findings to
+touch the write path; #946 and #947 are additive (guidance, then import) and neither changes what an
+upload sends without the operator asking for it.

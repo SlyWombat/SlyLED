@@ -343,7 +343,11 @@ function _renderSetup(){
             chLeds='—';
           }
           actions='<button class="btn" onclick="editFixture('+f.id+')" style="background:#446;color:#fff">Edit</button>';
-          if(ch&&ch.type==='hinkspix')actions+=' <button class="btn" onclick="hinksConfigure('+f.childId+')" style="background:#dc2626;color:#fff" title="Port table, universes, config push">Configure</button>'
+          // #945 — the Configure button opens the push wizard, whose step 2 is
+          // the port editor. One entry point covers both: the wizard says what
+          // the controller holds now and what the last push verified, which is
+          // the context an edit needs to be safe.
+          if(ch&&ch.type==='hinkspix')actions+=' <button class="btn" onclick="hinksConfig('+f.childId+')" style="background:#dc2626;color:#fff" title="Port table, universes, push, verify, snapshots">Configure</button>'
             +' <button class="btn" onclick="window.open(\'http://'+escapeHtml(ch.ip)+'/\',\'_blank\')" style="background:#335;color:#fff" title="Controller web UI">Web UI</button>';
           if(ch&&ch.type!=='hinkspix')actions+=' <button class="btn" onclick="showDetails('+f.childId+')" style="background:#335;color:#fff">Test</button>'
             +' <button class="btn btn-on" onclick="refreshChild('+f.childId+')">Refresh</button>'

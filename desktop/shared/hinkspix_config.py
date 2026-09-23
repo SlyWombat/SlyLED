@@ -20,10 +20,15 @@ in a comment; there is no other source of truth for this protocol.
 
 import json
 import logging
+import time
 
 import hinkspix_bridge as hb
 
 log = logging.getLogger("slyled.hinkspix")
+
+# Bumped when the *shape* of a stored backup changes, so a restore can refuse a
+# snapshot it does not understand rather than replaying half of one.
+BACKUP_VERSION = 1
 
 # The row past the end of the table. xLights walks a fixed 6 slots per call and
 # emits this for any index beyond MaxU, so the final block is always full.
@@ -254,16 +259,17 @@ class DeviceConfig:
         }
 
 
-def present_boards(child):
-    """``{board_number: type_name}`` for the expansion boards that are fitted.
+def normalise_boards(raw):
+    """Board names -> ``{board_number: type_name}``, sorted keys.
 
-    ``probe()`` leaves ``hinks.boards`` as ``{"BD1": "Long_Range", ...}``.
-    Accepts a plain ``{1: "Long_Range"}`` too, so a caller that has already
-    normalised the keys is not forced back into the BD names.
+    Accepts the ``{"BD1": "Long_Range"}`` shape ``probe()`` stores, a plain
+    ``{1: "Long_Range"}``, and a raw ``XLights_BoardInfo.cgi`` reply whose
+    values are still the single-letter codes — so a caller holding any of the
+    three is not forced to convert first. Anything that is not a board of this
+    controller is dropped.
     """
-    raw = ((child or {}).get("hinks") or {}).get("boards") or {}
     out = {}
-    for k, v in raw.items():
+    for k, v in (raw or {}).items():
         if isinstance(k, int):
             num = k
         else:
@@ -272,19 +278,38 @@ def present_boards(child):
                 continue
             num = int(name[2:])
         if 1 <= num <= hb.MAX_BOARDS:
-            out[num] = v
+            out[num] = hb.EXPANSION_TYPES.get(v, v)
     return out
 
 
-def pixel_boards(child):
-    """Boards that carry pixel ports, in ascending order.
+def _pixel_boards(boards):
+    """The ``Local_SPI``/``Long_Range`` subset, ascending.
 
-    A board is written only if it is a ``Local_SPI`` or ``Long_Range``
-    differential board — ``Not_Present`` and ``Local_AC`` get no PCONFIG at all
-    (``HinksPix.cpp:670-675``, #943 B7).
+    A board is written only if it is one of those two — ``Not_Present`` and
+    ``Local_AC`` get no PCONFIG at all (``HinksPix.cpp:670-675``, #943 B7).
     """
-    return sorted(b for b, t in present_boards(child).items()
-                  if t in hb.PIXEL_BOARD_TYPES)
+    return sorted(b for b, t in boards.items() if t in hb.PIXEL_BOARD_TYPES)
+
+
+def present_boards(child):
+    """``{board_number: type_name}`` for the expansion boards that are fitted."""
+    return normalise_boards(((child or {}).get("hinks") or {}).get("boards"))
+
+
+def pixel_boards(child):
+    """Boards of this child that carry pixel ports, in ascending order."""
+    return _pixel_boards(present_boards(child))
+
+
+def pixel_boards_from_info(board_info):
+    """The same, straight off a ``XLights_BoardInfo.cgi`` reply.
+
+    Reading the fitted boards from the reply in hand rather than from the last
+    probe is what makes a snapshot safe to take: a board fitted since that
+    probe would otherwise be missing from the backup, and the ports on it would
+    be the ones an apply overwrote without a way back (#945).
+    """
+    return _pixel_boards(normalise_boards(board_info))
 
 
 # ── Building what we want ────────────────────────────────────────────────────
@@ -571,6 +596,267 @@ def build_commands(intended, mcpu=None, hardware_v3=False, read_mode=True):
     out.append(CgiRequest(
         hb.CGI_POST_DATA, data=_dump(hb.OP_MODE_ETHERNET), kind="reboot",
         note="reboot into live-Ethernet mode (sent twice, 100 ms apart)"))
+    return out
+
+
+# ── Backups and restore (#945) ───────────────────────────────────────────────
+#
+# A backup is a *snapshot of the readbacks*, not of our model of them: the raw
+# row strings the controller handed over are kept verbatim and replayed
+# verbatim, because a restore's only job is to put the device back the way it
+# was. Re-deriving the rows from `decoded` would quietly "fix" anything our
+# decoder misreads, which is the opposite of what a restore is for.
+#
+# Two things cannot be captured at all: UnPack and SCONFIG have no read CGI in
+# xLights (`HinksPix.cpp` has no `GetSmartReceiverData`, and `UploadUnPack` has
+# no counterpart), so a restore resets them rather than recreating them. That is
+# a documented limitation of the controller, surfaced in `restore_commands`'
+# warnings rather than hidden (design doc §4.6).
+
+def flatten_blocks(blocks):
+    """``{block index: [row strings]}`` -> one row list, in wire order.
+
+    The table is read six rows at a time, so it arrives as blocks; anything
+    that wants to look at it as the controller's own table — a summary, a
+    restore, a post-restore diff — has to put it back in order first.
+    """
+    rows = []
+    for blk in sorted(blocks or {}, key=lambda k: int(k)):
+        rows.extend(blocks[blk])
+    return rows
+
+
+def backup_from_read(probe=None, data_mode=None, board_ports=None,
+                     universe_blocks=None, at=None):
+    """A restorable snapshot built from one round of device reads.
+
+    ``board_ports`` is ``{1-based board: [16 row strings]}`` as returned by
+    ``hinkspix_bridge.read_board_ports``; ``universe_blocks`` is
+    ``{block index: [6 row strings]}`` as returned by ``read_e131_text``. Both
+    are stored as received, and ``decoded`` is kept beside them so the SPA can
+    show what was captured without re-parsing — the decoded side includes the
+    universe table, because a snapshot whose decode says nothing about the
+    universes reads as a snapshot with none.
+    """
+    decoded = decode_device_config(board_info=probe, data_mode=data_mode,
+                                   board_ports=board_ports,
+                                   universe_rows=flatten_blocks(universe_blocks)
+                                   or None)
+    return {
+        "version": BACKUP_VERSION,
+        "at": int(time.time() if at is None else at),
+        "probe": dict(probe or {}),
+        "raw": {
+            "dataMode": dict(data_mode or {}),
+            "boards": {str(int(b)): list(rows)
+                       for b, rows in sorted((board_ports or {}).items())},
+            "e131": {str(int(k)): list(v)
+                     for k, v in sorted((universe_blocks or {}).items())},
+        },
+        "decoded": decoded.to_json(),
+    }
+
+
+def backup_summary(backup):
+    """The one-line description of a snapshot, for a list or a banner."""
+    if not backup:
+        return ""
+    decoded = backup.get("decoded") or {}
+    ports = decoded.get("ports") or {}
+    used = [p for p in ports.values() if p.get("used")]
+    universes = len([u for u in (decoded.get("universes") or [])
+                     if u.get("channels")])
+    return (f"{len(backup.get('raw', {}).get('boards') or {})} board(s), "
+            f"{len(used)} port(s) in use, {universes} universe row(s), mode "
+            f"{decoded.get('mode') or '?'}")
+
+
+def decode_backup(backup):
+    """The ``DeviceConfig`` a snapshot describes, universe table included.
+
+    ``decode_device_config`` leaves the universe table out because an ordinary
+    readback has none. A backup does, so the snapshot can be the "intended"
+    side of the verification diff after a restore — the comparison then asks
+    the one question worth asking, which is whether the controller came back
+    holding what was put back.
+    """
+    raw = (backup or {}).get("raw") or {}
+    return decode_device_config(board_info=backup.get("probe"),
+                                data_mode=raw.get("dataMode"),
+                                board_ports=raw.get("boards"),
+                                universe_rows=flatten_blocks(raw.get("e131"))
+                                or None)
+
+
+def _e131_gaps(blocks):
+    """Block indices missing from the low end of a captured universe table.
+
+    A backup taken over a flaky link can come back with a hole in it. Replaying
+    a gapped table leaves the controller's rows for the missing blocks exactly
+    as they are — the restore is not wrong, but it is not complete either, and
+    the operator needs to know which blocks were not covered.
+    """
+    indices = sorted(int(k) for k in (blocks or {}))
+    return [i for i in range(indices[-1] + 1) if i not in indices] if indices else []
+
+
+def restore_commands(backup, mcpu=None, hardware_v3=False):
+    """The requests that put a snapshot back — ``(cmds, warnings)``.
+
+    The same sequence :func:`build_commands` emits, in the same order and with
+    the same reboot at the end, but every payload is taken from the snapshot
+    rather than from the layout. The one thing it does *not* replay is the
+    UnPack remap, which a backup cannot contain: the reset form is sent when
+    the firmware understands it, which is also what an ordinary upload sends.
+    """
+    warnings = []
+    if not backup:
+        raise ConfigError("there is no backup to restore")
+    version = int(backup.get("version") or 0)
+    if version != BACKUP_VERSION:
+        raise ConfigError(f"backup version {version} is not one this build "
+                          f"understands (expected {BACKUP_VERSION})")
+
+    raw = backup.get("raw") or {}
+    decoded = backup.get("decoded") or {}
+    mode = decoded.get("mode")
+    if not mode:
+        raise ConfigError("the backup does not record an input mode, so it "
+                          "cannot be put back")
+
+    boards = raw.get("boards") or {}
+    if not boards:
+        warnings.append("the backup holds no port rows — the controller's port "
+                        "table will be left as it is")
+    e131 = raw.get("e131") or {}
+    if mode != "DDP":
+        if not e131:
+            warnings.append("the backup holds no universe table — the "
+                            "controller's existing table will be left as it is")
+        else:
+            gaps = _e131_gaps(e131)
+            if gaps:
+                warnings.append(
+                    "the backup is missing universe block(s) "
+                    + ", ".join(str(g) for g in gaps)
+                    + " — those rows will be left as they are")
+    warnings.append("UnPack and smart-receiver settings are not captured by a "
+                    "backup, so a restore resets them (design doc §4.6)")
+
+    out = [CgiRequest(hb.CGI_DATA_MODE, blk=0, kind="read",
+                      note="read the current input mode")]
+    out.append(CgiRequest(hb.CGI_POST_DATA,
+                          data=_dump({"CMD": "DATA_MODE", "MODE": mode}),
+                          note=f"input mode -> {mode} (from the backup)"))
+
+    if mode != "DDP":
+        for blk in sorted(e131, key=lambda k: int(k)):
+            rows = list(e131[blk])
+            out.append(CgiRequest(
+                hb.CGI_POST_DATA,
+                data=_dump({"CMD": "E131", "BLK": str(int(blk)),
+                            "LIST": [{"V": r} for r in rows]}),
+                note=f"universe table block {blk} (from the backup, verbatim)"))
+        num_u = (backup.get("probe") or {}).get("NumU")
+        if num_u is not None:
+            out.append(CgiRequest(
+                hb.CGI_POST_DATA, data=_dump({"CMD": "BD_INFO", "NumU": str(num_u)}),
+                note=f"universes in use -> {num_u} (from the backup)"))
+
+    for board in sorted(boards, key=lambda b: int(b)):
+        rows = list(boards[board])
+        used = sum(1 for r in rows
+                   if (hb.parse_port_row(r) or {}).get("pixels"))
+        out.append(CgiRequest(
+            hb.CGI_POST_DATA,
+            data=_dump({"CMD": "PCONFIG", "BOARD": str(int(board) - 1),
+                        "LIST": [{"V": r} for r in rows]}),
+            note=f"board {board} ports {(int(board) - 1) * hb.PORTS_PER_BOARD + 1}-"
+                 f"{int(board) * hb.PORTS_PER_BOARD} (from the backup, verbatim), "
+                 f"{used} in use"))
+
+    ser = decoded.get("serial")
+    if ser:
+        out.append(CgiRequest(
+            hb.CGI_POST_DATA,
+            data=_dump(SerialRow(ser["dmxActive"], ser["dmxUniverse"],
+                                 ser["dmxStart"], ser["dmxChannels"],
+                                 ser["ddpActive"], ser["ddpStart"],
+                                 ser["ddpChannels"]).to_payload()),
+            note="J3 DMX-512 output bridge (from the backup)"))
+    else:
+        warnings.append("the backup does not record the J3 DMX-512 bridge, so "
+                        "it will be left as it is")
+
+    if hb.supports_unpack(mcpu, hardware_v3):
+        out.append(CgiRequest(hb.CGI_UNPACK, data="{" + hb.UNPACK_RESET + "}",
+                              note="reset the UnPack remap table (a backup "
+                                   "cannot capture it)"))
+    out.append(CgiRequest(
+        hb.CGI_POST_DATA, data=_dump(hb.OP_MODE_ETHERNET), kind="reboot",
+        note="reboot into live-Ethernet mode (sent twice, 100 ms apart)"))
+    return out, warnings
+
+
+# ── Findings (#945, filled out in #946) ──────────────────────────────────────
+
+class Finding:
+    """One statement about a configuration, in the operator's own words.
+
+    ``level`` is ``"error"`` — Apply is refused — or ``"warn"``, which needs an
+    acknowledgement. ``code`` is a stable slug: tests key on it and the SPA
+    groups by it, so the wording of ``text`` can change without breaking
+    anything. ``port`` is set when the finding is about one port, so the editor
+    can mark that row rather than printing a list.
+    """
+
+    __slots__ = ("level", "code", "port", "text")
+
+    def __init__(self, level, code, text, port=None):
+        self.level = level
+        self.code = code
+        self.port = port
+        self.text = text
+
+    def to_json(self):
+        return {"level": self.level, "code": self.code, "port": self.port,
+                "text": self.text}
+
+
+def errors(findings):
+    return [f for f in (findings or []) if f.level == "error"]
+
+
+def validate(child, intended=None, current=None, fixtures=None, caps=None):
+    """Reasons the stored configuration should not go to the controller.
+
+    Only the *blocking* half lives here for now: a controller that has not been
+    probed, one with no fitted pixel boards, and a layout the controller's
+    universe limit cannot hold. #946 fills in the guidance — per-port channel
+    caps, board-type rules, fixture binding — on top of this same list.
+    """
+    hinks = (child or {}).get("hinks") or {}
+    out = []
+
+    if not int(hinks.get("maxU") or 0):
+        out.append(Finding(
+            "error", "not_probed",
+            "The controller has not been probed, so its universe limit and "
+            "fitted boards are unknown. Probe it before uploading a "
+            "configuration."))
+    boards = pixel_boards(child)
+    if not boards:
+        out.append(Finding(
+            "error", "no_boards",
+            "No expansion boards are known for this controller. Probe it so "
+            "the fitted boards are recorded."))
+    if intended is not None:
+        max_u = int(intended.max_universes or 0)
+        if max_u and len(intended.universes) > max_u:
+            out.append(Finding(
+                "error", "universes_exceed_maxu",
+                f"The layout needs {len(intended.universes)} universes but this "
+                f"controller supports {max_u}."))
     return out
 
 

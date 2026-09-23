@@ -15,6 +15,9 @@ fixtures".
 
 import hashlib
 import json
+import os
+import re
+import threading
 import time
 
 from flask import Blueprint, jsonify, request
@@ -84,6 +87,15 @@ def _gate_payload(child):
             "minMcpu": body.get("minMcpu")}
 
 
+# Everything about a port that PCONFIG carries a byte for, plus the two SlyLED
+# fields (`mm`, and `enabled` — which decides whether the row is written at all)
+# that change what goes on the wire. A port field *not* listed here would be
+# edited in the UI, change what an upload sends, and leave the "device in sync"
+# badge lying. #946 adds the smart-receiver fields to this list.
+_PORT_HASH_FIELDS = ("port", "leds", "mm", "protocol", "colorOrder", "direction",
+                     "nullPixels", "brightness", "gamma", "enabled")
+
+
 def _config_hash(hinks):
     """Stable hash of everything that must be pushed to the controller, so the
     UI can say "config differs from device" without a readback round-trip.
@@ -92,17 +104,22 @@ def _config_hash(hinks):
     which ports exist at all, comes from the probe rather than from the port
     table. A re-probe that reports a different board layout changes what an
     upload would write even though no port row was edited (#943 B7).
+
+    The main-CPU version and hardware generation are part of it too, because
+    they gate two requests in the sequence itself — the UnPack remap reset and
+    the DDP branch (`build_commands`). A firmware update therefore changes what
+    an upload sends even with the port table untouched.
     """
     payload = {
         "baseUniverse": hinks.get("baseUniverse"),
         "protocol": hinks.get("protocol"),
         "dmxOut": hinks.get("dmxOut"),
+        "mcpu": hinks.get("mcpu"),
+        "hardwareV3": bool(hinks.get("hardwareV3")),
         "boards": {str(k): v for k, v in sorted(
             (hinks.get("boards") or {}).items())},
         "ports": sorted(
-            [{k: p.get(k) for k in ("port", "leds", "protocol", "colorOrder",
-                                    "direction", "nullPixels", "brightness",
-                                    "gamma", "enabled")}
+            [{k: p.get(k) for k in _PORT_HASH_FIELDS}
              for p in (hinks.get("ports") or [])],
             key=lambda p: p.get("port") or 0),
     }
@@ -151,6 +168,20 @@ def _sync_universe_routes(child, output_map):
     routes.extend(output_map.route_rows(child.get("ip") or ""))
     ps._dmx_settings["universeRoutes"] = routes
     ps._save("dmx_settings", ps._dmx_settings)
+
+
+# ── Per-device storage ───────────────────────────────────────────────────────
+
+def _device_dir(cid):
+    """Orchestrator-side scratch for one controller: sequences, snapshots.
+
+    Shared by the standalone deploy (#941) and configuration backups (#945) —
+    neither lives on the controller, because both exist to survive it.
+    """
+    d = os.path.join(str(ps.DATA), "hinkspix", str(cid))
+    os.makedirs(d, exist_ok=True)
+    return d
+
 
 
 # ── Device config ────────────────────────────────────────────────────────────
@@ -299,6 +330,100 @@ def api_hinkspix_map(cid):
 
 # ── Device I/O ───────────────────────────────────────────────────────────────
 
+def _read_e131_text(ip, row_index):
+    """One universe-table read, or ``''`` when the controller refuses.
+
+    Best-effort wherever it is used: ``GetControllerE131Data`` is declared and
+    never called by xLights, so its ``ROW:`` semantics are unverified on
+    hardware (#943). A read that fails must not fail a snapshot or a
+    verification that can still say something useful.
+    """
+    try:
+        return hb.read_e131_text(ip, row_index)
+    except hb.HinksPixError as exc:
+        ps.log.info("HinksPix %s E131 row %d read failed: %s", ip, row_index, exc)
+        return ""
+
+
+def _e131_indices(rows):
+    """The table-row indices a reply covers; unparseable rows are dropped."""
+    out = []
+    for r in rows:
+        row = hb.parse_universe_row(r)
+        if row:
+            out.append(row["index"])
+    return out
+
+
+def _e131_block_offset(ip):
+    """Whether the universe table's ``ROW:`` header counts from 0 or from 1.
+
+    Nothing in the reference says what ``ROW:`` selects, but the controller
+    answers, and its first block is unambiguous: whichever index comes back
+    carrying table rows 1-6 is the one block 0 is asked for. Returns None when
+    neither does, and the caller then skips the table rather than storing rows
+    it cannot place (#945).
+    """
+    want = list(range(1, hb.UNIVERSES_PER_BLOCK + 1))
+    for idx in (0, 1):
+        if _e131_indices(hb.parse_e131_reply(_read_e131_text(ip, idx))) == want:
+            return idx
+    return None
+
+
+def _read_universe_blocks(ip, board_info):
+    """The universe table, block by block — ``(blocks, warnings)``.
+
+    Only blocks that came back carrying the rows they must hold are kept. A
+    snapshot with a known gap is one a restore can describe ("these rows are
+    left as they are"); a block stored against the wrong rows is a restore that
+    silently writes them somewhere else, which is worse than not having it.
+    """
+    max_u = int((board_info or {}).get("MaxU") or 0)
+    if max_u <= 0:
+        return {}, ["the controller's universe limit is unknown, so its "
+                    "universe table was not read"]
+    offset = _e131_block_offset(ip)
+    if offset is None:
+        return {}, ["the controller's universe table could not be read — it did "
+                    "not return the rows that were asked for, so this backup "
+                    "holds no universe rows"]
+    per = hb.UNIVERSES_PER_BLOCK
+    blocks, missing = {}, []
+    for blk in range((max_u + per - 1) // per):
+        rows = hb.parse_e131_reply(_read_e131_text(ip, blk + offset))
+        if _e131_indices(rows) == list(range(blk * per + 1, blk * per + per + 1)):
+            blocks[blk] = rows
+        else:
+            missing.append(str(blk))
+    warnings = []
+    if missing:
+        warnings.append("the controller's universe table did not read back for "
+                        "block(s) " + ", ".join(missing) + " — those rows are "
+                        "not in this backup and a restore leaves them as they are")
+    return blocks, warnings
+
+
+def _read_device(child, with_e131=False):
+    """One round of reads off a controller — ``(read, warnings)``.
+
+    BoardInfo, the block-0 input mode, one entry per fitted pixel board, and —
+    when asked — the universe table. The boards come from *this* reply rather
+    than from the last probe, so a board fitted since then is picked up rather
+    than overwritten unbacked-up.
+    """
+    ip = child["ip"]
+    read = {"probe": hb.read_board_info(ip),
+            "dataMode": hb.read_data_mode(ip, blk=0),
+            "boards": {}, "e131": {}}
+    for board in hc.pixel_boards_from_info(read["probe"]):
+        read["boards"][board] = hb.read_board_ports(ip, board)
+    warnings = []
+    if with_e131:
+        read["e131"], warnings = _read_universe_blocks(ip, read["probe"])
+    return read, warnings
+
+
 @bp.post("/api/hinkspix/<int:cid>/probe")
 def api_hinkspix_probe(cid):
     child, err = _child(cid)
@@ -330,9 +455,10 @@ def api_hinkspix_device_config(cid):
 
     Three reads: BoardInfo (MaxU and the fitted boards), the input mode, and
     16 PCONFIG rows per fitted pixel board. The universe table is **not** read
-    — xLights never reads it either (`GetControllerE131Data` has no callers) and
-    it would be one request per row; `diff` says so rather than reporting every
-    row as a difference.
+    here — it is one request per block, and this route answers on every panel
+    open. `diff` says so rather than reporting every row as a difference; the
+    snapshot route and the apply job's verification do read it, which is where
+    that cost earns its keep (#945).
 
     Also returns the diff against the stored config, so one call answers "is
     what I have on screen what the device has?".
@@ -341,28 +467,25 @@ def api_hinkspix_device_config(cid):
     if err:
         return err
     hinks = child.get("hinks") or {}
-    ip = child["ip"]
     try:
-        raw_ports = {}
-        for board in hc.pixel_boards(child):
-            raw_ports[board] = hb.read_board_ports(ip, board)
-        current = hc.decode_device_config(
-            board_info={"MaxU": hinks.get("maxU")},
-            data_mode=hb.read_data_mode(ip, blk=0),
-            board_ports=raw_ports)
+        read, _ = _read_device(child)
     except hb.HinksPixError as exc:
         return jsonify(ok=False, err=str(exc)), 502
 
+    current = hc.decode_device_config(board_info=read["probe"],
+                                      data_mode=read["dataMode"],
+                                      board_ports=read["boards"])
+    max_u = int(current.max_universes or hinks.get("maxU") or 0)
     body = {"ok": True, "id": cid, "device": current.to_json()}
     output_map, merr = _build_map_or_error(child)
-    if merr or not hinks.get("maxU"):
+    if merr or not max_u:
         body["diff"] = None
         body["diffError"] = (merr[0].get_json().get("err") if merr
                              else "the controller's universe limit is not known")
     else:
         try:
             intended = hc.intended_config(child, output_map,
-                                          max_universes=hinks.get("maxU"))
+                                          max_universes=max_u)
             body["diff"] = hc.diff(current, intended)
         except hc.ConfigError as exc:
             body["diff"] = None
@@ -370,37 +493,50 @@ def api_hinkspix_device_config(cid):
     return jsonify(body)
 
 
-def _plan_preconditions(child, output_map):
-    """Reasons the stored config cannot be uploaded yet, or []."""
-    hinks = child.get("hinks") or {}
-    reasons = []
-    if not hinks.get("maxU"):
-        reasons.append("the controller has not been probed — its universe "
-                       "limit and fitted boards are unknown")
-    if not hc.pixel_boards(child):
-        reasons.append("no expansion boards are known — probe the controller")
-    max_u = int(hinks.get("maxU") or 0)
-    if max_u and len(output_map.universes) > max_u:
-        reasons.append(f"layout needs {len(output_map.universes)} universes "
-                       f"but the controller supports {max_u}")
-    return reasons
+def _blocking_findings(findings, ack):
+    """Findings that stop a push: every error, plus warnings not acknowledged.
+
+    An error is never passable. A warning is a decision the operator is allowed
+    to make — but only after being shown it, so it blocks until the request
+    names it by code. Anything else is a warning nobody reads (#945).
+    """
+    acked = {str(c) for c in (ack if isinstance(ack, list) else [])}
+    return [f for f in findings
+            if f.level == "error" or f.code not in acked]
 
 
 def _build_plan(child, output_map):
-    """``(plan, None)`` or ``(None, error_response)``."""
+    """``((intended, cmds), findings, None)`` or ``(None, None, response)``.
+
+    The findings are computed even when the plan cannot be built, so one list
+    answers both "this cannot be uploaded" and "this can, but read this first".
+    A blocked plan returns 409 with the findings as well as the flat ``reasons``
+    the preview has always quoted.
+    """
     hinks = child.get("hinks") or {}
-    reasons = _plan_preconditions(child, output_map)
-    if reasons:
-        return None, (jsonify(ok=False, err="; ".join(reasons),
-                              reasons=reasons), 409)
     try:
         intended = hc.intended_config(child, output_map,
                                       max_universes=hinks.get("maxU"))
+    except hc.ConfigError as exc:
+        return None, None, (jsonify(ok=False, err=str(exc)), 400)
+
+    findings = hc.validate(child, intended=intended, fixtures=ps._fixtures)
+    blocked = hc.errors(findings)
+    if blocked:
+        return None, findings, (
+            jsonify(ok=False, err="; ".join(f.text for f in blocked),
+                    reasons=[f.text for f in blocked],
+                    findings=[f.to_json() for f in findings]), 409)
+
+    try:
         cmds = hc.build_commands(intended, mcpu=hinks.get("mcpu"),
                                  hardware_v3=bool(hinks.get("hardwareV3")))
     except hc.ConfigError as exc:
-        return None, (jsonify(ok=False, err=str(exc)), 400)
-    return (intended, cmds), None
+        # A backstop: `validate` above already rejects every state build_commands
+        # refuses, so this only fires if a finding is ever removed from it.
+        return None, findings, (jsonify(ok=False, err=str(exc),
+                                        findings=[f.to_json() for f in findings]), 400)
+    return (intended, cmds), findings, None
 
 
 @bp.get("/api/hinkspix/<int:cid>/plan")
@@ -410,8 +546,8 @@ def api_hinkspix_plan(cid):
 
     Every entry carries the real method, path and header values, so the
     preview the operator approves is the same sequence `apply` executes rather
-    than a description of it. Also returns the diff against the device when it
-    has been read recently enough to be worth comparing.
+    than a description of it. ``findings`` are the reasons to hesitate: an
+    ``error`` blocks the upload, a ``warn`` needs acknowledging on the way in.
     """
     child, err = _child(cid)
     if err:
@@ -419,7 +555,7 @@ def api_hinkspix_plan(cid):
     output_map, err = _build_map_or_error(child)
     if err:
         return err
-    built, err = _build_plan(child, output_map)
+    built, findings, err = _build_plan(child, output_map)
     if err:
         return err
     intended, cmds = built
@@ -428,21 +564,336 @@ def api_hinkspix_plan(cid):
                    universesUsed=len(intended.used_universes),
                    boards=sorted(intended.board_ports),
                    requests=[c.to_json() for c in cmds],
+                   findings=[f.to_json() for f in (findings or [])],
                    intended=intended.to_json())
+
+
+# ── Applying a configuration: snapshot, push, reboot, verify (#945) ──────────
+#
+# A configuration push is not a request, it is a sequence that ends in a reboot:
+# the controller goes away mid-run, comes back on whatever it managed to store,
+# and is only *proven* to hold it by being read back. Run synchronously that
+# made the browser sit on a socket for a minute with no progress and no way to
+# tell "rebooting" from "hung" (#945).
+#
+# So an apply is a job: POST starts it, GET reports progress, and the job ends
+# by reading the device back and diffing it against what was intended. Every run
+# snapshots the controller first, because the one thing an overwrite needs is a
+# way back — and if that snapshot cannot be taken, nothing is written at all.
+#
+# The sequence is never cancelled part-way: a controller left with half a
+# configuration is worse than one that finished the wrong thing, because the
+# half-written one has no description. The failure path is a deliberate restore
+# of the snapshot the run took, which is why its id is in the failure record.
+
+_config_state = {}                 # cid -> progress dict
+_config_lock = threading.Lock()
+
+BACKUP_KEEP = 10                   # snapshots kept per device, newest first
+BACKUP_ID_RE = re.compile(r"[0-9]{8}-[0-9]{6}(-[0-9]+)?\Z")
+REBOOT_SETTLE_S = 3                # the controller does not drop instantly
+REBOOT_WAIT_S = 90                 # give up well after a normal boot (~20 s)
+REBOOT_POLL_S = 3
+
+
+def _set_config_state(cid, **kw):
+    with _config_lock:
+        _config_state.setdefault(cid, {}).update(kw)
+
+
+def _config_running(cid):
+    return bool((_config_state.get(cid) or {}).get("running"))
+
+
+def _backup_dir(cid):
+    d = os.path.join(_device_dir(cid), "backups")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _backup_path(cid, backup_id):
+    """Where a snapshot lives, or None when the id is not one of ours.
+
+    The id comes back from the client on restore, so it is matched against the
+    shape this module generates rather than pasted into a path.
+    """
+    if not BACKUP_ID_RE.match(str(backup_id or "")):
+        return None
+    return os.path.join(_backup_dir(cid), f"{backup_id}.json")
+
+
+def _save_backup(cid, backup):
+    """Write a snapshot and prune the oldest, returning ``{id, at}``.
+
+    Written to a temp name and renamed: a half-written snapshot that a later
+    restore trusts is worse than no snapshot at all.
+    """
+    d = _backup_dir(cid)
+    stem = time.strftime("%Y%m%d-%H%M%S", time.localtime(backup["at"]))
+    name, n = f"{stem}.json", 0
+    while os.path.exists(os.path.join(d, name)):
+        n += 1
+        name = f"{stem}-{n}.json"
+    path = os.path.join(d, name)
+    tmp = path + ".part"
+    with open(tmp, "w", encoding="utf-8") as fp:
+        json.dump(backup, fp, separators=(",", ":"))
+    os.replace(tmp, path)
+    for old in sorted(f for f in os.listdir(d) if f.endswith(".json"))[:-BACKUP_KEEP]:
+        try:
+            os.remove(os.path.join(d, old))
+        except OSError:
+            pass
+    return {"id": name[:-5], "at": backup["at"]}
+
+
+def _load_backup(cid, backup_id):
+    path = _backup_path(cid, backup_id)
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as fp:
+            return json.load(fp)
+    except (OSError, ValueError) as exc:
+        ps.log.warning("HinksPix %s snapshot %s is unreadable: %s",
+                       cid, backup_id, exc)
+        return None
+
+
+def _list_backups(cid):
+    out = []
+    for name in sorted(os.listdir(_backup_dir(cid)), reverse=True):
+        if not name.endswith(".json"):
+            continue
+        b = _load_backup(cid, name[:-5])
+        if b is None:
+            continue
+        out.append({"id": name[:-5], "at": b.get("at"),
+                    "version": b.get("version"),
+                    "mode": (b.get("decoded") or {}).get("mode"),
+                    "summary": hc.backup_summary(b)})
+    return out
+
+
+def _snapshot(child):
+    """Read the controller and store a snapshot — ``(saved, backup, warnings)``."""
+    read, warnings = _read_device(child, with_e131=True)
+    backup = hc.backup_from_read(probe=read["probe"], data_mode=read["dataMode"],
+                                 board_ports=read["boards"],
+                                 universe_blocks=read["e131"])
+    return _save_backup(child["id"], backup), backup, warnings
+
+
+def _wait_for_device(child, timeout=REBOOT_WAIT_S):
+    """Wait for the controller to answer again after a reboot.
+
+    A reboot takes the device off the network for ~20 s and it answers nothing
+    until it is back. Polling for it is what turns "the requests were sent" into
+    "the controller is up", which is the precondition for reading anything back.
+    """
+    ip = child["ip"]
+    time.sleep(REBOOT_SETTLE_S)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            hb.read_board_info(ip, timeout=REBOOT_POLL_S + 2)
+            return True
+        except hb.HinksPixError:
+            time.sleep(REBOOT_POLL_S)
+    return False
+
+
+def _verify(child, intended):
+    """Read the controller back and diff it against what was intended.
+
+    The universe table is read too: a port table that landed and a universe
+    table that did not is a controller that looks configured and drives the
+    wrong pixels. When the table cannot be read in full it is left out of the
+    comparison and said so, rather than reported as a difference nobody can act
+    on — an unread section is not a mismatch (#945).
+    """
+    try:
+        read, warnings = _read_device(child, with_e131=True)
+    except hb.HinksPixError as exc:
+        return {"ok": False, "unknown": True, "items": [], "counts": {},
+                "text": f"the controller could not be read back: {exc}",
+                "warnings": []}
+
+    rows = []
+    if not warnings:
+        for blk in sorted(read["e131"], key=lambda k: int(k)):
+            rows.extend(read["e131"][blk])
+    else:
+        warnings = list(warnings) + ["the universe table was not compared"]
+    current = hc.decode_device_config(board_info=read["probe"],
+                                      data_mode=read["dataMode"],
+                                      board_ports=read["boards"],
+                                      universe_rows=rows or None)
+    d = hc.diff(current, intended)
+    items = d.get("items") or []
+    compared = [i for i in items if not i.get("unread")]
+    counts = d.get("counts") or {}
+    if not compared:
+        text = "the controller holds what was sent"
+    else:
+        text = (f"the controller differs from what was sent — "
+                f"{counts.get('ports', 0)} port(s), "
+                f"{counts.get('universes', 0)} universe row(s)")
+    return {"ok": not compared, "changed": bool(compared), "unknown": False,
+            "items": items[:40], "counts": counts, "text": text,
+            "warnings": warnings}
+
+
+def _config_worker(cid, child, cmds, intended, kind):
+    """Snapshot, push, reboot, wait, verify — the whole push as one job.
+
+    Nothing is written until the snapshot has been taken; a controller that
+    cannot be read is one that cannot be put back, and overwriting it is the
+    situation this exists to prevent. A failed request stops the sequence
+    (every later request would be written against a device in an unknown state)
+    and is reported with the snapshot id, so the next step is a restore rather
+    than a guess.
+    """
+    ip = child["ip"]
+    backup_id = None
+    try:
+        _set_config_state(cid, phase="backup",
+                          message="Snapshotting the controller before writing")
+        saved, _backup, backup_warnings = _snapshot(child)
+        backup_id = saved["id"]
+        _set_config_state(cid, backupId=backup_id, backupWarnings=backup_warnings)
+
+        done = []
+        for i, req in enumerate(cmds):
+            _set_config_state(cid, phase="upload", step=i + 1,
+                              message=f"{req.note} ({i + 1}/{len(cmds)})")
+            entry = {"index": i, "kind": req.kind, "note": req.note}
+            if req.kind == "read":
+                hb.read_data_mode(ip, blk=req.blk)
+            elif req.kind == "reboot":
+                # Fire-and-forget by design: the controller drops the
+                # connection as it restarts, so waiting on the reply would time
+                # out rather than tell us anything.
+                entry["sends"] = hb.fire_and_forget(ip, req.data)
+            else:
+                hb.command(ip, req.data, path=req.path)
+            entry["ok"] = True
+            done.append(entry)
+            _set_config_state(cid, stepsDone=list(done))
+
+        with ps._lock:
+            hinks = child.setdefault("hinks", {})
+            if kind == "apply":
+                # The device now holds what this orchestrator describes, which
+                # is what the "in sync" badge means.
+                hinks["configHash"] = _config_hash(hinks)
+                hinks["configPushedAt"] = int(time.time())
+            else:
+                # A restore puts back a snapshot that is not this config, so the
+                # badge must stop claiming the two agree.
+                hinks["configHash"] = ""
+                hinks["configPushedAt"] = 0
+            ps._save("children", ps._children)
+
+        _set_config_state(cid, phase="reboot",
+                          message="Waiting for the controller to come back")
+        if _wait_for_device(child):
+            with ps._lock:
+                child["status"] = 1
+                child["seen"] = int(time.time())
+                ps._save("children", ps._children)
+            _set_config_state(cid, phase="verify",
+                              message="Reading the configuration back")
+            verify = _verify(child, intended)
+        else:
+            verify = {"ok": False, "unknown": True, "items": [], "counts": {},
+                      "text": (f"the controller did not answer within "
+                               f"{REBOOT_WAIT_S} s of the reboot, so the "
+                               f"configuration could not be verified"),
+                      "warnings": []}
+
+        record = {"at": int(time.time()), "kind": kind, "ok": bool(verify["ok"]),
+                  "requests": len(cmds), "backupId": backup_id,
+                  "verify": verify["text"]}
+        with ps._lock:
+            hinks = child.setdefault("hinks", {})
+            hinks["lastApply"] = record
+            hinks["lastVerify"] = {"at": record["at"], "ok": verify["ok"],
+                                   "text": verify["text"],
+                                   "counts": verify.get("counts") or {},
+                                   "items": verify.get("items") or []}
+            ps._save("children", ps._children)
+
+        _set_config_state(cid, running=False, ok=bool(verify["ok"]),
+                          phase="done", message=verify["text"], verify=verify,
+                          lastApply=record)
+        ps.log.info("HinksPix %s %s: %d requests, snapshot %s, verify %s", ip,
+                    kind, len(cmds), backup_id,
+                    "ok" if verify["ok"] else "reports differences")
+    except (hb.HinksPixError, OSError, ValueError) as exc:
+        step = (_config_state.get(cid) or {}).get("step")
+        record = {"at": int(time.time()), "kind": kind, "ok": False,
+                  "err": str(exc), "failedAt": step, "backupId": backup_id}
+        with ps._lock:
+            child.setdefault("hinks", {})["lastApply"] = record
+            ps._save("children", ps._children)
+        _set_config_state(cid, running=False, ok=False, phase="failed",
+                          err=str(exc), lastApply=record)
+        ps.log.warning("HinksPix %s %s failed at %s (%s): %s", ip, kind,
+                       f"step {step}" if step else "the snapshot",
+                       "nothing to restore" if backup_id is None else
+                       f"restore snapshot {backup_id}", exc)
+
+
+def _start_config_job(cid, child, cmds, intended, kind):
+    """Kick the worker off — ``(response, status)``."""
+    if _config_running(cid):
+        return jsonify(ok=False, err=f"a configuration {kind} is already "
+                                     f"running"), 409
+    if _deploy_state.get(cid, {}).get("running"):
+        # Both write the controller's own tables and both end with it
+        # rebooting; interleaving them leaves neither in a known state.
+        return jsonify(ok=False, err="a standalone deploy is running — wait for "
+                                     "it to finish"), 409
+    steps = [c.note for c in cmds]
+    with _config_lock:
+        _config_state[cid] = {"running": True, "ok": None, "phase": "start",
+                              "step": 0, "steps": steps, "stepsDone": [],
+                              "err": "", "verify": None, "kind": kind}
+    threading.Thread(target=_config_worker, args=(cid, child, cmds, intended, kind),
+                     daemon=True, name=f"hinkspix-config-{cid}").start()
+    return jsonify(ok=True, started=True, kind=kind, steps=steps), 200
+
+
+@bp.get("/api/hinkspix/<int:cid>/apply")
+def api_hinkspix_apply_status(cid):
+    """Progress of the running (or last) configuration push."""
+    child, err = _child(cid)
+    if err:
+        return err
+    hinks = child.get("hinks") or {}
+    return jsonify(ok=True, state=_config_state.get(cid) or {},
+                   lastApply=hinks.get("lastApply"),
+                   lastVerify=hinks.get("lastVerify"),
+                   inSync=bool(hinks.get("configHash")
+                               and hinks["configHash"] == _config_hash(hinks)),
+                   backups=_list_backups(cid))
 
 
 @bp.post("/api/hinkspix/<int:cid>/apply")
 def api_hinkspix_apply(cid):
-    """Upload the stored config, then reboot the controller.
+    """Upload the stored config, reboot the controller, and verify it landed.
 
-    Synchronous and operator-triggered — never implicit on save. The reboot is
-    part of the sequence, not an option: a config written without it is stored
-    and never loaded, which is indistinguishable from success until the pixels
-    don't move (#943 B8).
+    Returns as soon as the job is running, because the sequence ends in a
+    reboot and the controller is unreachable for part of it — a synchronous
+    route can only sit on the socket and then guess (#945). `GET` on this same
+    path reports progress, including the snapshot the run took and the diff read
+    back afterwards.
 
-    Stops at the first failed request and reports what completed, because every
-    request after a failure would be written against a device that is in an
-    unknown state.
+    ``findings`` gate the start: an error is never passable, and a warning
+    blocks until the request acknowledges it by code. ``wait: true`` runs it to
+    completion and returns the final state in one call — for a script or a test
+    that has no UI to poll with.
     """
     child, err = _child(cid)
     if err:
@@ -450,48 +901,157 @@ def api_hinkspix_apply(cid):
     output_map, err = _build_map_or_error(child)
     if err:
         return err
-    built, err = _build_plan(child, output_map)
+    built, findings, err = _build_plan(child, output_map)
     if err:
         return err
     intended, cmds = built
 
-    hinks = child.get("hinks") or {}
-    ip = child["ip"]
-    done = []
-    for i, req in enumerate(cmds):
-        try:
-            if req.kind == "read":
-                hb.read_data_mode(ip, blk=req.blk)
-                done.append({"index": i, "kind": req.kind, "ok": True,
-                             "note": req.note})
-                continue
-            if req.kind == "reboot":
-                # Fire-and-forget by design: the controller drops the
-                # connection as it restarts, and waiting on the reply would
-                # time out rather than tell us anything.
-                results = hb.fire_and_forget(ip, req.data)
-                done.append({"index": i, "kind": req.kind, "ok": True,
-                             "note": req.note, "sends": results})
-                continue
-            hb.command(ip, req.data, path=req.path)
-            done.append({"index": i, "kind": req.kind, "ok": True,
-                         "note": req.note})
-        except hb.HinksPixError as exc:
-            ps.log.warning("HinksPix %s apply stopped at request %d/%d (%s): %s",
-                           ip, i + 1, len(cmds), req.note, exc)
-            return jsonify(ok=False, err=str(exc), failedAt=i,
-                           failedNote=req.note, completed=done), 502
+    body = request.get_json(silent=True) or {}
+    blocking = _blocking_findings(findings or [], body.get("ack"))
+    if blocking:
+        return jsonify(ok=False, err=blocking[0].text,
+                       findings=[f.to_json() for f in (findings or [])],
+                       blocking=[f.to_json() for f in blocking]), 409
 
-    with ps._lock:
-        hinks["configPushedAt"] = int(time.time())
-        hinks["configHash"] = _config_hash(hinks)
-        ps._save("children", ps._children)
-    ps.log.info("HinksPix %s config applied: %d requests, %d boards, %d universes",
-                ip, len(cmds), len(intended.board_ports),
-                len(intended.used_universes))
-    return jsonify(ok=True, requests=len(cmds), completed=done,
-                   configHash=hinks["configHash"],
-                   rebooted=True)
+    started = _start_config_job(cid, child, cmds, intended, "apply")
+    if not body.get("wait"):
+        return started
+    return _await_config_job(cid, started)
+
+
+@bp.get("/api/hinkspix/<int:cid>/restore")
+def api_hinkspix_restore_preview(cid):
+    """The requests a restore would send, and what it cannot put back.
+
+    A restore's warnings are not optional reading — UnPack and smart-receiver
+    settings have no read CGI, so no snapshot can hold them and a restore resets
+    them. Better said before the button than discovered after it.
+    """
+    child, err = _child(cid)
+    if err:
+        return err
+    raw = str(request.args.get("backupId") or "")
+    backup = _load_backup(cid, raw)
+    if backup is None:
+        return jsonify(err=f"no snapshot {raw}"), 404
+    hinks = child.get("hinks") or {}
+    try:
+        cmds, warnings = hc.restore_commands(
+            backup, mcpu=hinks.get("mcpu"),
+            hardware_v3=bool(hinks.get("hardwareV3")))
+    except hc.ConfigError as exc:
+        return jsonify(ok=False, err=str(exc)), 400
+    return jsonify(ok=True, id=raw, at=backup.get("at"),
+                   summary=hc.backup_summary(backup),
+                   requests=[c.to_json() for c in cmds], warnings=warnings)
+
+
+@bp.post("/api/hinkspix/<int:cid>/restore")
+def api_hinkspix_restore(cid):
+    """Put a snapshot back on the controller, reboot, and verify.
+
+    The same job as an apply with the requests taken from the snapshot instead
+    of from the layout — including the reboot, which a restore needs for exactly
+    the same reason a push does. The run snapshots first as well, so a restore
+    of the wrong snapshot is itself restorable.
+    """
+    child, err = _child(cid)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    raw = str(body.get("backupId") or "")
+    backup = _load_backup(cid, raw)
+    if backup is None:
+        return jsonify(err=f"no snapshot {raw}"), 404
+    hinks = child.get("hinks") or {}
+    try:
+        cmds, _warnings = hc.restore_commands(
+            backup, mcpu=hinks.get("mcpu"),
+            hardware_v3=bool(hinks.get("hardwareV3")))
+    except hc.ConfigError as exc:
+        return jsonify(ok=False, err=str(exc)), 400
+    started = _start_config_job(cid, child, cmds, hc.decode_backup(backup),
+                                "restore")
+    if not body.get("wait"):
+        return started
+    return _await_config_job(cid, started)
+
+
+def _await_config_job(cid, started):
+    """Block until the job finishes and return its final state.
+
+    The SPA polls `GET` so it can show progress; this exists for a script or a
+    test that wants one call and no loop.
+    """
+    if started[1] != 200:
+        return started
+    deadline = time.time() + REBOOT_WAIT_S + 60
+    while time.time() < deadline:
+        state = dict(_config_state.get(cid) or {})
+        if not state.get("running"):
+            return jsonify(ok=bool(state.get("ok")), state=state), 200
+        time.sleep(1)
+    return jsonify(ok=False, err="the configuration job did not finish in time",
+                   state=dict(_config_state.get(cid) or {})), 504
+
+
+# ── Snapshots (#945) ─────────────────────────────────────────────────────────
+
+@bp.post("/api/hinkspix/<int:cid>/backups")
+def api_hinkspix_backup_create(cid):
+    """Snapshot the controller's configuration into this device's list.
+
+    Worth doing before any change of mind, and done automatically before every
+    push. The universe table is read here as well as in the push path because a
+    snapshot that cannot restore a universe map is not a restore point.
+    """
+    child, err = _child(cid)
+    if err:
+        return err
+    try:
+        saved, backup, warnings = _snapshot(child)
+    except hb.HinksPixError as exc:
+        return jsonify(ok=False, err=str(exc)), 502
+    ps.log.info("HinksPix %s snapshot %s: %s", child["ip"], saved["id"],
+                hc.backup_summary(backup))
+    return jsonify(ok=True, id=saved["id"], at=saved["at"],
+                   summary=hc.backup_summary(backup),
+                   decoded=backup.get("decoded"), warnings=warnings)
+
+
+@bp.get("/api/hinkspix/<int:cid>/backups")
+def api_hinkspix_backup_list(cid):
+    """The snapshots held for this device, newest first."""
+    child, err = _child(cid)
+    if err:
+        return err
+    return jsonify(ok=True, backups=_list_backups(cid), keep=BACKUP_KEEP)
+
+
+@bp.get("/api/hinkspix/<int:cid>/backups/<backup_id>")
+def api_hinkspix_backup_get(cid, backup_id):
+    child, err = _child(cid)
+    if err:
+        return err
+    backup = _load_backup(cid, backup_id)
+    if backup is None:
+        return jsonify(err=f"no snapshot {backup_id}"), 404
+    return jsonify(ok=True, id=backup_id, summary=hc.backup_summary(backup),
+                   backup=backup)
+
+
+@bp.delete("/api/hinkspix/<int:cid>/backups/<backup_id>")
+def api_hinkspix_backup_delete(cid, backup_id):
+    child, err = _child(cid)
+    if err:
+        return err
+    path = _backup_path(cid, backup_id)
+    if not path or not os.path.exists(path):
+        return jsonify(err=f"no snapshot {backup_id}"), 404
+    os.remove(path)
+    ps.log.info("HinksPix %s snapshot %s deleted", child["ip"], backup_id)
+    return jsonify(ok=True, deleted=backup_id)
+
 
 
 # ── Fixtures from ports ──────────────────────────────────────────────────────
@@ -551,8 +1111,6 @@ def api_hinkspix_fixtures_from_ports(cid):
 # model IS the feature rather than a workaround.
 
 import hashlib as _hashlib
-import os
-import threading
 
 import hinkspix_files as hf
 import hinkspix_tcp as htcp
@@ -571,12 +1129,6 @@ def _deploy_cfg():
 
 def _save_deploy_cfg(cfg):
     ps._save(DEPLOY_STORE, cfg)
-
-
-def _device_dir(cid):
-    d = os.path.join(str(ps.DATA), "hinkspix", str(cid))
-    os.makedirs(d, exist_ok=True)
-    return d
 
 
 def _set_progress(cid, **kw):
@@ -808,6 +1360,9 @@ def api_hinkspix_deploy(cid):
         return err
     if _deploy_state.get(cid, {}).get("running"):
         return jsonify(err="a deploy is already running"), 409
+    if _config_running(cid):
+        return jsonify(err="a configuration push is running — wait for it to "
+                           "finish"), 409
 
     hinks = child.get("hinks") or {}
     reasons = []

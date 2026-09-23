@@ -532,6 +532,35 @@ def parse_universes(rows):
     return out
 
 
+def _chunk_universe_text(text):
+    """A flat ``"1,1,300,1,1,300,2,2,..."`` body -> row strings of 6 fields."""
+    fields = [f.strip() for f in str(text or "").split(",")]
+    n = len(UNIVERSE_FIELDS)
+    return [",".join(fields[i:i + n])
+            for i in range(0, len(fields) - n + 1, n)]
+
+
+def parse_e131_reply(text):
+    """One ``GetE131Data.cgi`` reply -> row strings, in order.
+
+    Two shapes have been seen: the controller's own saved table as one flat
+    comma string (``1,1,300,1,1,300,2,2,300,...`` — six rows of six fields, the
+    A2D capture of 2026-09-23), and the ``{"CMD":..., "LIST":[{"V": ...}]}``
+    body the other CGI reads use. Both are accepted, and the *rows* come back
+    verbatim either way so a backup can replay exactly what was handed over.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+    if text.startswith("{"):
+        try:
+            data = json.loads(text)
+        except ValueError:
+            return []
+        return [str(r.get("V")) for r in (data.get("LIST") or []) if r]
+    return _chunk_universe_text(text)
+
+
 def parse_serial(data_mode):
     """A ``DATA_MODE`` read reply -> the J3 DMX-out bridge fields.
 

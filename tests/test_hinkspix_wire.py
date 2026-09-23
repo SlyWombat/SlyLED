@@ -91,6 +91,27 @@ def row_strings(start):
     return [f"{o},0,1,0,0,0,0,0,100,1" for o in range(start, start + 16)]
 
 
+def board_info_reply():
+    """``XLights_BoardInfo.cgi`` for the operator's unit, verbatim shape.
+
+    BD1 is a Long_Range board with nothing on it, BD2 a Local_SPI board
+    carrying the eaves port, BD3 not fitted (the 2026-09-23 MS_160 capture).
+    """
+    return {"CMD": "BD_INFO", "Controller": "H", "Type": "P", "MCPU": "MS_160",
+            "PCPU": "PS_39", "ECPU": "EZ_40", "WEB": "WF_113", "Smart4": "SR_0",
+            "SmartAC": "SA_0", "BD1": "L", "BD2": "S", "BD3": "N",
+            "MaxU": "402", "NumU": "32"}
+
+
+def e131_reply(row, per=hb.UNIVERSES_PER_BLOCK):
+    """One ``GetE131Data.cgi`` reply: the six rows the ``ROW:`` asks for."""
+    rows = []
+    for i in range(row * per + 1, row * per + per + 1):
+        start = (i - 1) * 510 + 1
+        rows.append(f"{i},{i},510,1,{start},{start + 509}")
+    return ",".join(rows)
+
+
 def rows_body(start):
     """The controller's reply for the block starting at output ``start``."""
     return json.dumps({"LIST": [{"V": v} for v in row_strings(start)]}).encode()
@@ -128,8 +149,12 @@ class BoardRecorder:
 # BD1 is a Long_Range board with nothing on it; BD3 is not fitted.
 
 def operator_child():
+    # The ip is a discard-port placeholder, not the unit's real address. Every
+    # transport call in this suite is stubbed, so nothing is sent either way —
+    # but a future route that reaches for a real reader should fail to connect
+    # in a millisecond rather than configure the operator's controller.
     return {
-        "id": 7, "type": "hinkspix", "ip": "192.168.10.6", "name": "Roofline",
+        "id": 7, "type": "hinkspix", "ip": "127.0.0.1:9", "name": "Roofline",
         "status": 1,
         "hinks": {
             "model": "HinksPix PRO", "mcpu": 160, "hardwareV3": False,
@@ -387,41 +412,80 @@ def main():
            not [req for req in body.get("requests", [])
                 if req["kind"] == "reload"])
 
-        # The apply executor is asserted by capturing its calls: the transport
-        # itself is covered above, so what matters here is the dispatch — the
-        # right call per request kind, and a reboot that always happens.
+        # The apply job is asserted by capturing its calls: the transport itself
+        # is covered above, so what matters here is the dispatch — the right
+        # call per request kind, the reboot that always happens, and the reads
+        # that bracket the run (the pre-write snapshot and the verification
+        # readback, #945). Every function the job touches is stubbed, so nothing
+        # here can reach the operator's real unit.
+        #
+        # `wait: true` runs the job to completion in the request, which is what
+        # lets a single POST assert the whole thing; the SPA polls `GET` instead.
         calls = []
         real_command, real_read, real_faf = hb.command, hb.read_data_mode, hb.fire_and_forget
+        real_info, real_ports, real_e131 = (hb.read_board_info, hb.read_board_ports,
+                                            hb.read_e131_text)
+        # The fake controller's universe table is taken from the plan itself, so
+        # the verification readback has a true answer to compare against.
+        planned = {}
+        for req in body.get("requests", []):
+            data = (req.get("headers") or {}).get("DATA") or ""
+            if '"CMD":"E131"' in data:
+                # BLK rides in the payload for the universe table, unlike the
+                # port read where it is a request header (HinksPix.cpp:422).
+                table = json.loads(data)
+                planned[int(table["BLK"])] = [e["V"] for e in table["LIST"]]
         hb.command = lambda ip, payload, path=hb.CGI_POST_DATA, **kw: (
             calls.append(("write", path, payload)) or '"OK"')
         hb.read_data_mode = lambda ip, **kw: (calls.append(("read", kw)) or {"MODE": "E131"})
         hb.fire_and_forget = lambda ip, payload, **kw: (
             calls.append(("reboot", payload)) or [{"sent": True, "err": ""}])
+        hb.read_board_info = lambda ip, **kw: board_info_reply()
+        hb.read_board_ports = lambda ip, board, **kw: row_strings((board - 1) * 16 + 1)
+        hb.read_e131_text = lambda ip, row, **kw: ",".join(planned.get(row, []))
         try:
-            r = c.post("/api/hinkspix/7/apply", json={})
+            r = c.post("/api/hinkspix/7/apply", json={"wait": True})
             ab = r.get_json()
         finally:
-            hb.command, hb.read_data_mode, hb.fire_and_forget = (
-                real_command, real_read, real_faf)
-        ok("POST apply succeeds", r.status_code == 200 and ab.get("ok"),
-           str(ab)[:300])
+            (hb.command, hb.read_data_mode, hb.fire_and_forget, hb.read_board_info,
+             hb.read_board_ports, hb.read_e131_text) = (
+                real_command, real_read, real_faf, real_info, real_ports, real_e131)
+        state = ab.get("state") or {}
+        verify = state.get("verify") or {}
+        ok("POST apply runs the job and reports its final state",
+           r.status_code == 200 and state.get("phase") == "done", str(ab)[:300])
         ok("apply sends the same number of requests the plan showed",
-           ab.get("requests") == len(body.get("requests")), str(ab.get("requests")))
-        ok("apply reboots the controller", calls and calls[-1][0] == "reboot")
-        ok("apply reports that it rebooted", ab.get("rebooted") is True)
+           len(state.get("stepsDone") or []) == len(body.get("requests")),
+           str(len(state.get("stepsDone") or [])))
+        ok("apply reboots the controller",
+           [c for c in calls if c[0] in ("write", "reboot")][-1][0] == "reboot",
+           str([c[0] for c in calls][-4:]))
         ok("the reboot is the last thing that happens",
            [c[0] for c in calls].count("reboot") == 1)
         ok("apply records a config hash so the UI can say in-sync",
-           bool(ab.get("configHash")))
+           bool(state.get("lastApply", {}).get("backupId")))
+        snap = os.path.join(os.environ["SLYLED_DATA"], "hinkspix", "7", "backups")
+        ok("the controller was snapshotted before anything was written",
+           os.path.isdir(snap) and bool(os.listdir(snap)), snap)
+        ok("the run verified against a readback, not against its own send count",
+           verify.get("counts", {}).get("ports") == 1, str(verify)[:200])
+        ok("the universe table reads back as written — no universe differences",
+           not [i for i in (verify.get("items") or [])
+                if i.get("section") == "universe"], str(verify.get("items"))[:200])
+        ok("a port the stubbed write never applied is reported, not hidden",
+           verify.get("ok") is False
+           and any(i.get("output") == 17 for i in (verify.get("items") or [])),
+           str([i.get("output") for i in (verify.get("items") or [])]))
 
         # The read path, with a fake that honours the documented contract:
         # 1-based board in, that block's rows out. QA's blocker was this route
         # handing read_board_ports the wrong convention, so what catches a
         # regression is asserting what the route *asked for* — and the fake is
-        # stubbed rather than letting the suite reach the operator's real unit
-        # at 192.168.10.6.
+        # stubbed rather than letting the suite reach the operator's real unit.
         asked = []
-        real_ports, real_mode = hb.read_board_ports, hb.read_data_mode
+        real_info, real_ports, real_mode = (hb.read_board_info, hb.read_board_ports,
+                                            hb.read_data_mode)
+        hb.read_board_info = lambda ip, **kw: board_info_reply()
         hb.read_board_ports = lambda ip, board, **kw: (
             asked.append(board) or row_strings((board - 1) * 16 + 1))
         hb.read_data_mode = lambda ip, **kw: {"MODE": "E131"}
@@ -429,7 +493,8 @@ def main():
             r = c.get("/api/hinkspix/7/device-config")
             dc = r.get_json()
         finally:
-            hb.read_board_ports, hb.read_data_mode = real_ports, real_mode
+            hb.read_board_info, hb.read_board_ports, hb.read_data_mode = (
+                real_info, real_ports, real_mode)
         dev = dc.get("device") or {}
         ok("device-config asks for the fitted boards 1-based, not 0/1",
            asked == [1, 2], str(asked))
