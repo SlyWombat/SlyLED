@@ -1685,6 +1685,10 @@ def run():
         # ── Project file export/import (#290) ─────────────────────
         # Seed data for project round-trip
         c.post('/api/children', json={'ip': '10.0.0.60'})
+        # Seed a fixture too: the #739 disk-persistence guard below asserts the
+        # imported fixtures are non-empty, and without one here it compared []
+        # to [] — passing vacuously on the equality half and failing the >= 1.
+        c.post('/api/fixtures', json={'name': 'ProjFix', 'fixtureType': 'led'})
         c.post('/api/actions', json={'name': 'ProjTest', 'type': 1, 'r': 255, 'g': 0, 'b': 0})
         c.post('/api/settings', json={'name': 'Test Show'})
         c.post('/api/stage', json={'w': 6.0, 'h': 3.0, 'd': 4.0})
