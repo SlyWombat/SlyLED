@@ -436,6 +436,25 @@ and is the open question with the vendor.
 blank in any browser. Normal firmware serves correctly (and genuinely gzips). Any client we
 write should not trust `Content-Encoding` from this device.
 
+## 8b. Bench session, 2026-09-23 — unit recovered, wire protocol audited
+
+The unit is now on **MCPU MS_160** (PCPU PS_39, ECPU EZ_40, WEB WF_113; BD1 = Long_Range,
+BD2 = Local_SPI, BD3 = Not_Present, MaxU 402). `probe()` reports `uploadSupported: true`, so the
+§8a boot deadlock and upload gate no longer apply. All 48 ports are still at factory defaults.
+
+First contact with real hardware showed that §2.1 had the transport wrong. xLights sends **every**
+CGI call as an HTTP **GET** with the payload in request **headers**: `DATA: {json}` for writes,
+`BLK: n` to select the board on reads (`BLK n` = expansion n+1, ports 16n+1..16n+16). An
+idempotent `DATA_MODE` write sent as POST-with-body returns `{"CMD":"POST","ERROR":"ERROR"}`; the
+same write as GET-with-header returns `{"CMD":"POST","OK":"OK"}`. A line-by-line audit against the
+xLights driver found 22 mismatches in total, including 0-based universe rows (the device is 1-based)
+and every port being written with start channel 1. Tracked in **#943** (wire protocol) and **#944**
+(raw TCP); the guided configuration UI, guidance/validation and xLights show-folder import that build
+on it are **#945**, **#946** and **#947**. §2.1 will be rewritten under #943.
+
+The operator's real layout is one 200-pixel WS2811 RGB string (garage eaves) on **port 17**, start
+channel 1, universes 1-2, taken from their xLights show folder (`xlights_rgbeffects.xml`).
+
 ---
 
 ## 9. Test strategy (repo gates)
