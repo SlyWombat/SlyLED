@@ -12,14 +12,18 @@ Every structure here is transcribed from the xLights driver
     Tag_Packet (file chunk)   608 bytes  CMD[0] = 'F'
       char  HINK[18]  "HINK TCP_CMD  \\r\\n\\r\\n"
       uint8 CMD[4]    {'F', 0x5a, 0xa5, 0}
-      u16   TotalSize     28 + DataSize  (only this many bytes go on the wire)
+      u16   TotalSize     28 + (bytes that follow) — the framing the controller uses
       u16   StructType    0 = open/truncate, 1 = append, 2 = close
-      u16   DataSize
+      u16   DataSize      bytes that follow, except 0 on a close packet
       uint8 Data[580]
 
     Tag_File_Data_Close   34 bytes in Data when StructType == 2
       char FN[30]     target filename
       u32  DTTM       FAT date/time word
+
+An upload is: one StructType 0 chunk, then StructType 1 chunks to the end of the
+file, then the close. A file whose length is an exact multiple of 580 gets one
+extra zero-length StructType 1 first — see ``needs_flush_chunk`` (#944 B17b).
 
     Tag_Dow_TimePacket    26 bytes  CMD[0] = 'D'   hr, min, sec, dow
     Tag_CMD_Packet        22 bytes  CMD[0] = mode  'G' master/standalone,
@@ -50,6 +54,10 @@ HEADER_OVERHEAD = 28          # TotalSize = HEADER_OVERHEAD + DataSize
 
 ST_FIRST, ST_APPEND, ST_CLOSE = 0, 1, 2
 
+# The DataSize field the close packet carries. xLights writes 0 there rather
+# than the 34 bytes of body it actually sends — see build_chunk (#944 B17).
+CLOSE_DATA_SIZE_FIELD = 0
+
 MODE_MASTER = b"G"            # standalone, plays from SD
 MODE_REMOTE = b"H"            # remote / slave
 
@@ -64,25 +72,51 @@ class HinksPixError(RuntimeError):
     """Upload rejected, timed out, or the controller replied with an error."""
 
 
-def build_chunk(struct_type, data):
-    """Build one Tag_Packet. Returns exactly ``TotalSize`` bytes."""
+def build_chunk(struct_type, data, data_size=None):
+    """Build one Tag_Packet. Returns exactly ``TotalSize`` bytes.
+
+    ``data_size`` overrides the DataSize *field* without changing the bytes on
+    the wire or TotalSize. Only the close packet needs it, because xLights sets
+    DataSize to 0 there while still writing the 34-byte close body and a
+    TotalSize covering it (``HinksPix.cpp:1708-1717``) — so the controller must
+    frame that packet on TotalSize. Putting 34 in the field (#944 B17) risks the
+    firmware rejecting the close as a malformed type-2 packet.
+    """
     if len(data) > CHUNK_DATA:
         raise ValueError(f"chunk payload {len(data)} exceeds {CHUNK_DATA}")
+    if data_size is None:
+        data_size = len(data)
     total = HEADER_OVERHEAD + len(data)
     pkt = bytearray()
     pkt += HINK_HEADER
     pkt += bytes([ord("F"), 0x5A, 0xA5, 0])
-    pkt += struct.pack("<HHH", total, struct_type, len(data))
+    pkt += struct.pack("<HHH", total, struct_type, data_size)
     pkt += data
     return bytes(pkt)
 
 
 def build_close(filename, dttm):
-    """Build the StructType=2 close packet carrying name + FAT timestamp."""
+    """Build the StructType=2 close packet carrying name + FAT timestamp.
+
+    62 bytes on the wire: a 28-byte header (DataSize field 0, per ``build_chunk``)
+    followed by the 34-byte Tag_File_Data_Close.
+    """
     name = str(filename).encode("ascii", "ignore")[:29]
     payload = name + b"\x00" * (30 - len(name)) + struct.pack("<I", dttm)
     assert len(payload) == CLOSE_DATA_SIZE
-    return build_chunk(ST_CLOSE, payload)
+    return build_chunk(ST_CLOSE, payload, data_size=CLOSE_DATA_SIZE_FIELD)
+
+
+def needs_flush_chunk(total):
+    """True when ``total`` is a non-zero exact multiple of the chunk payload.
+
+    xLights tests the *previous* read's length at the top of its upload loop
+    (``HinksPix.cpp:1706-1743``), so a file that divides evenly by 580 never
+    takes the "we have fully sent the file" branch on the last full chunk — it
+    reads once more, gets 0, and sends a zero-length StructType 1. Without that
+    packet an exact-multiple file may never be finalised (#944 B17b).
+    """
+    return bool(total) and total % CHUNK_DATA == 0
 
 
 def build_time_packet(when):
@@ -181,6 +215,7 @@ class HinksPixTcp:
         total = len(data)
         when = mtime or datetime.now()
         chunks = max(1, (total + CHUNK_DATA - 1) // CHUNK_DATA)
+        flush = needs_flush_chunk(total)
         sock = self._connect()
         try:
             sent = 0
@@ -193,6 +228,12 @@ class HinksPixTcp:
                 if progress_cb and progress_cb(
                         sent, total, f"Uploading {remote_name}") is False:
                     raise HinksPixError(f"{remote_name}: aborted by caller")
+            if flush:
+                # Exact-multiple file: one zero-length append before the close,
+                # so the controller sees the read that returns nothing. See
+                # needs_flush_chunk (#944 B17b).
+                self._send_expect_ack(sock, build_chunk(ST_APPEND, b""),
+                                      f"{remote_name} flush")
             self._send_expect_ack(
                 sock, build_close(remote_name, fat_datetime_word(when)),
                 f"{remote_name} close")

@@ -60,6 +60,7 @@ class FakeHinksPix(threading.Thread):
         self.port = self.sock.getsockname()[1]
         self.files = {}          # remote name -> bytes
         self.closes = []         # (name, dttm)
+        self.chunks = []         # every Tag_Packet seen, as parsed
         self.times = []          # (hr, min, sec, dow)
         self.modes = []          # b'G' / b'H'
         self.fail_after = fail_after
@@ -93,9 +94,15 @@ class FakeHinksPix(threading.Thread):
                         total, stype, dsize = struct.unpack_from("<HHH", buf, 22)
                         if len(buf) < total:
                             break
-                        payload = buf[28:28 + dsize]
+                        # Framing follows TotalSize, not DataSize: the close
+                        # packet declares DataSize 0 while still sending a
+                        # 34-byte body (#944 B17), so the controller cannot be
+                        # keying off the field either.
+                        payload = buf[28:total]
                         buf = buf[total:]
                         self._chunks_seen += 1
+                        self.chunks.append({"type": stype, "dataSize": dsize,
+                                            "total": total, "bytes": len(payload)})
                         if self.fail_after and self._chunks_seen > self.fail_after:
                             conn.sendall(b"|FERR disk full\n")
                             continue
@@ -267,6 +274,52 @@ def main():
         tcp.upload("MONDAY.sched", small)
         ok("a file smaller than one chunk still uploads",
            srv.files.get("MONDAY.sched") == small)
+
+        print("Protocol — close packet and the exact-multiple flush (#944)")
+        closes = [c for c in srv.chunks if c["type"] == ht.ST_CLOSE]
+        ok("a close packet is type 2", closes and closes[-1]["type"] == ht.ST_CLOSE)
+        ok("the close declares DataSize 0, as xLights does (#944 B17)",
+           closes and closes[-1]["dataSize"] == 0, str(closes[-1] if closes else None))
+        ok("...while TotalSize still covers the 34-byte close body",
+           closes and closes[-1]["total"] == 62 and closes[-1]["bytes"] == 34,
+           str(closes[-1] if closes else None))
+        ok("the field and the body disagree, and the body is what lands",
+           closes and closes[-1]["bytes"] == ht.CLOSE_DATA_SIZE)
+        ok("no non-close packet has a DataSize of 0",
+           all(c["dataSize"] == c["bytes"] for c in srv.chunks
+               if c["type"] != ht.ST_CLOSE))
+
+        # 1160 = 2 x 580: an exact multiple, so xLights reads once more, gets
+        # nothing, and sends a zero-length append before the close (#944 B17b).
+        srv.chunks = []
+        exact = bytes(range(256)) * 4 + b"\x00" * 136      # 1160 bytes
+        assert len(exact) == 2 * ht.CHUNK_DATA
+        tcp.upload("EXACT.hseq", exact)
+        types = [c["type"] for c in srv.chunks]
+        ok("an exact-multiple file reassembles byte-identically",
+           srv.files.get("EXACT.hseq") == exact)
+        ok("...as first + append + a zero-length flush + close",
+           types == [ht.ST_FIRST, ht.ST_APPEND, ht.ST_APPEND, ht.ST_CLOSE], str(types))
+        ok("the flush chunk carries no data",
+           srv.chunks[2]["dataSize"] == 0 and srv.chunks[2]["total"] == 28,
+           str(srv.chunks[2]))
+        ok("the flush is the only zero-length append (the close is also 0, by design)",
+           len([c for c in srv.chunks
+                if c["type"] == ht.ST_APPEND and c["dataSize"] == 0]) == 1)
+
+        # A file one byte off the boundary must NOT get the flush.
+        srv.chunks = []
+        tcp.upload("ODD.hseq", exact + b"\x7f")
+        types = [c["type"] for c in srv.chunks]
+        ok("a non-multiple file gets no flush chunk",
+           types == [ht.ST_FIRST, ht.ST_APPEND, ht.ST_APPEND, ht.ST_CLOSE], str(types))
+        ok("and still reassembles byte-identically",
+           srv.files.get("ODD.hseq") == exact + b"\x7f")
+        ok("needs_flush_chunk matches the boundary exactly",
+           (ht.needs_flush_chunk(1160) is True
+            and ht.needs_flush_chunk(1161) is False
+            and ht.needs_flush_chunk(0) is False
+            and ht.needs_flush_chunk(580) is True))
 
         tcp.set_time(datetime.datetime(2026, 9, 18, 20, 5, 30))   # a Friday
         ok("time packet carries h/m/s", srv.times[-1][:3] == (20, 5, 30))

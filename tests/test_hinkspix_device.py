@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "desktop", "sha
 import parent_server  # noqa: E402
 from parent_server import app  # noqa: E402
 import hinkspix_bridge as hb  # noqa: E402
+import hinkspix_config as hc  # noqa: E402
 from pixel_output import PixelOutputMap, UniverseCollision  # noqa: E402
 
 _passed = 0
@@ -54,7 +55,13 @@ def make_child(cid=7, base=100, ports=None, dmx_out=None, ip="192.168.10.6"):
         "sc": 0, "strings": [],
         "hinks": {
             "model": "HinksPix PRO", "hardwareV3": False, "mcpu": 160,
-            "maxU": 402, "uploadSupported": True, "boards": {},
+            "maxU": 402, "uploadSupported": True,
+            # The operator's real unit: BD1 is a long-range differential board,
+            # BD2 a local SPI board (which is where the garage-eaves port 17
+            # lives), BD3 not fitted. An upload writes PCONFIG to BD1 and BD2
+            # only — a Not_Present board gets no rows at all (#943 B7).
+            "boards": {"BD1": "Long_Range", "BD2": "Local_SPI",
+                       "BD3": "Not_Present"},
             "protocol": "e131", "baseUniverse": base,
             "dmxOut": dmx_out or {"enabled": False, "universe": None},
             "ports": ports if ports is not None else [
@@ -160,13 +167,22 @@ def main():
        hb.supports_upload(129, hardware_v3=True) is True)
     ok("unparseable version cannot upload", hb.supports_upload(None) is False)
 
-    print("hinkspix_bridge — universe table rows")
+    print("hinkspix_config — universe table rows (1-based, #943 B5)")
     spans = PixelOutputMap.build(make_child()).spans
-    rows = hb.build_universe_rows(spans, 10)
+    rows = hc.build_universe_rows(spans, 10)
     ok("first row maps universe + absolute channel range",
-       rows[0] == "0,100,300,1,1,300")
-    ok("unused rows up to maxU are zero-length", rows[5] == "5,5,0,1,0,0")
+       rows[0] == "1,100,300,1,1,300", rows[0] if rows else "")
+    ok("second row continues the absolute channel range",
+       rows[1] == "2,101,510,1,301,810", rows[1] if len(rows) > 1 else "")
+    ok("unused rows up to maxU are zero-length", rows[5] == "6,6,0,1,0,0")
     ok("row count reaches maxU", len(rows) == 10)
+
+    print("hinkspix_config — universe blocks are padded to 6")
+    blocks = hc.universe_blocks(rows)
+    ok("MaxU 10 -> 2 blocks of 6", len(blocks) == 2 and
+       all(len(b) == 6 for b in blocks))
+    ok("the tail of the final block is the all-zero row",
+       blocks[1][4:] == [hc.UNIVERSE_ZERO_ROW, hc.UNIVERSE_ZERO_ROW])
 
     with app.test_client() as c:
         print("Device routes — config + validation")
@@ -182,6 +198,14 @@ def main():
         ok("baseUniverse 0 rejected", r.status_code == 400)
         r = c.put("/api/hinkspix/7", json={"protocol": "telepathy"})
         ok("unknown protocol rejected", r.status_code == 400)
+        r = c.put("/api/hinkspix/7", json={"protocol": "ddp"})
+        ok("DDP rejected on PRO V1/V2 hardware (#943 B14)",
+           r.status_code == 400 and "V3" in (r.get_json().get("err") or ""))
+        ok("the protocol list is server-supplied for the picker",
+           c.get("/api/hinkspix/7").get_json().get("protocols")
+           == ["e131", "sacn", "artnet"])
+        r = c.put("/api/hinkspix/7", json={"protocol": "sacn"})
+        ok("sacn accepted", r.status_code == 200)
         r = c.put("/api/hinkspix/7", json={"ports": [{"port": 99, "leds": 10}]})
         ok("port 99 rejected (>48)", r.status_code == 400)
         r = c.put("/api/hinkspix/7", json={"ports": [{"port": 1, "leds": 10},
@@ -257,6 +281,85 @@ def main():
            made and made["fixtureType"] == "led" and made["type"] == "linear")
         ok("created fixture carries stage-mm geometry",
            made and made["strings"][0]["mm"] == int(round(300 * 16.67)))
+
+        print("Firmware gate — raw-TCP routes refuse below the upload floor (#944 B18)")
+        # Below the gate the controller drops the TCP connection, which reaches
+        # the operator as a bare socket error. xLights checks
+        # FirmwareSupportsUpload() before every raw-TCP operation, so the routes
+        # must refuse with the reason — and must refuse *before* dialling out.
+        import hinkspix_tcp as htcp
+
+        calls = []
+        real_op, real_tcp = hb.op_mode_ethernet, htcp.HinksPixTcp
+        hb.op_mode_ethernet = lambda ip, **kw: calls.append(("live", ip)) or True
+
+        class FakeTcp:
+            def __init__(self, ip, *a, **kw):
+                calls.append(("tcp", ip))
+
+            def set_mode(self, mode):
+                calls.append(("set_mode", mode))
+                return True
+
+            def set_time(self, when=None):
+                calls.append(("set_time", when))
+                return True
+
+        htcp.HinksPixTcp = FakeTcp
+        try:
+            old = next(x for x in parent_server._children if x["id"] == 7)
+            real_mcpu, real_raw = old["hinks"]["mcpu"], old["hinks"].get("mcpuRaw")
+            old["hinks"]["mcpu"], old["hinks"]["mcpuRaw"] = 149, "MS_149"
+            old["hinks"]["uploadSupported"] = False
+
+            r = c.post("/api/hinkspix/7/set-clock", json={})
+            body = r.get_json() or {}
+            ok("set-clock is refused below the gate", r.status_code == 409,
+               f"{r.status_code} {str(body)[:120]}")
+            ok("...naming the firmware and the threshold it needs",
+               "MS_149" in (body.get("err") or "")
+               and str(hb.MIN_MCPU_UPLOAD) in (body.get("err") or ""),
+               body.get("err"))
+            ok("...and it carries the numbers for the UI",
+               body.get("mcpu") == 149 and body.get("minMcpu") == hb.MIN_MCPU_UPLOAD)
+
+            r = c.post("/api/hinkspix/7/mode", json={"mode": "standalone"})
+            ok("standalone mode is refused below the gate", r.status_code == 409,
+               f"{r.status_code} {str(r.get_json())[:120]}")
+
+            ok("no connection was attempted for either", calls == [], str(calls))
+
+            # Live mode is the HTTP config path (#943), not a raw-TCP upload, so
+            # it is deliberately outside this gate.
+            r = c.post("/api/hinkspix/7/mode", json={"mode": "live"})
+            ok("live mode is not gated on upload firmware", r.status_code == 200,
+               str(r.get_json())[:120])
+            ok("...and did reach the controller", calls == [("live", "192.168.10.6")],
+               str(calls))
+
+            r = c.post("/api/hinkspix/7/mode", json={"mode": "banana"})
+            ok("an unknown mode is a 400 regardless of firmware",
+               r.status_code == 400)
+
+            r = c.get("/api/hinkspix/7/deploy")
+            ok("the deploy payload advertises the gate to the SPA",
+               (r.get_json() or {}).get("gate", {}).get("ok") is False,
+               str((r.get_json() or {}).get("gate"))[:120])
+
+            # Hardware V3 has a lower floor (129, not 151) — the same MCPU must
+            # pass on V3 hardware.
+            old["hinks"]["hardwareV3"] = True
+            old["hinks"]["mcpu"] = 130
+            r = c.post("/api/hinkspix/7/set-clock", json={})
+            ok("MCPU 130 passes on V3 hardware (floor 129, not 151)",
+               r.status_code == 200, f"{r.status_code} {str(r.get_json())[:120]}")
+            ok("...and reached the controller", ("set_time", None) in calls, str(calls))
+            old["hinks"]["hardwareV3"] = False
+
+            old["hinks"]["mcpu"], old["hinks"]["mcpuRaw"] = real_mcpu, real_raw
+            old["hinks"]["uploadSupported"] = True
+        finally:
+            hb.op_mode_ethernet, htcp.HinksPixTcp = real_op, real_tcp
 
         print("Safety — a HinksPix must never get a performer UDP packet")
         ok("_is_performer(hinkspix) is False", parent_server._is_performer(child) is False)

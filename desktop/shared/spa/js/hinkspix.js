@@ -12,7 +12,8 @@
 //  * Pixel geometry is stage-mm (60 px/m default), never a DMX fraction.
 //    The operator corrects lengths in the fixture editor.
 
-var _hpState = {cid: null, hinks: null, map: null, inSync: false};
+var _hpState = {cid: null, hinks: null, map: null, inSync: false,
+                protocols: null, plan: null, device: null, diff: null};
 
 function hinksConfigure(cid) {
   fetch('/api/hinkspix/' + cid)
@@ -21,6 +22,9 @@ function hinksConfigure(cid) {
       if (!d || !d.ok) { alert('Could not load device: ' + ((d && d.err) || 'unknown')); return; }
       _hpState = {cid: cid, hinks: d.hinks || {}, map: d.map, inSync: !!d.inSync,
                   mapError: d.mapError, engineProtocol: d.engineProtocol,
+                  // Server-supplied so the picker can never offer a mode this
+                  // controller cannot serve (e.g. DDP on PRO V1/V2 — #943 B14).
+                  protocols: d.protocols,
                   protocolMatch: d.protocolMatch !== false};
       _hpRender();
     })
@@ -38,8 +42,8 @@ function _hpRender() {
         + '<input id="hp-base" type="number" min="1" max="63999" value="'
         + (h.baseUniverse || 1) + '" style="width:8em"></div>';
   body += '<div><label style="font-size:.8em;color:#9ab">Input protocol</label><br>'
-        + '<select id="hp-proto">'
-        + ['e131', 'artnet', 'ddp'].map(function (p) {
+        + '<select id="hp-inproto">'
+        + (_hpState.protocols || ['e131', 'sacn', 'artnet']).map(function (p) {
             return '<option value="' + p + '"' + ((h.protocol === p) ? ' selected' : '') + '>'
                  + p.toUpperCase() + '</option>';
           }).join('')
@@ -127,8 +131,8 @@ function _hpRender() {
 
   body += '<div style="margin-top:1em;display:flex;gap:.5em;flex-wrap:wrap">'
     + '<button class="btn btn-on" onclick="hinksSave()">Save</button>'
-    + '<button class="btn" style="background:#dc2626;color:#fff" onclick="hinksPush()">Push to controller</button>'
-    + '<button class="btn" style="background:#335;color:#fff" onclick="hinksReadback()">Read back</button>'
+    + '<button class="btn" style="background:#dc2626;color:#fff" onclick="hinksPush()">Preview &amp; upload…</button>'
+    + '<button class="btn" style="background:#335;color:#fff" onclick="hinksReadback()">Read controller</button>'
     + '<button class="btn" style="background:#446;color:#fff" onclick="hinksFixturesFromPorts()">Create fixtures from ports</button>'
     + '<button class="btn" style="background:#446;color:#fff" onclick="hinksProbe()">Probe</button>'
     + '<button class="btn" style="background:#059669;color:#fff" onclick="hinksStandalone(' + _hpState.cid + ')">Standalone playback →</button>'
@@ -162,7 +166,7 @@ function _hpCollect() {
   });
   return {
     baseUniverse: parseInt(document.getElementById('hp-base').value, 10) || 1,
-    protocol: document.getElementById('hp-proto').value,
+    protocol: document.getElementById('hp-inproto').value,
     dmxOut: {enabled: document.getElementById('hp-dmx-en').checked,
              universe: parseInt(document.getElementById('hp-dmx-uni').value, 10) || null},
     ports: ports
@@ -187,19 +191,75 @@ function hinksSave() {
     }).catch(function (e) { _hpSay(String(e), false); });
 }
 
+// ── Plan / apply (#943) ──────────────────────────────────────────────────────
+// The upload is shown before it happens, as the actual requests rather than a
+// summary of them: the server hands over the method, path and header values it
+// will use, and the button below sends that same sequence. Getting the wire
+// protocol wrong here is invisible from the outside — the controller accepts a
+// bad config and stores it — so the preview is the only place it can be caught.
+
 function hinksPush() {
-  if (!confirm('Push this configuration to the controller?\n\n'
-             + 'This rewrites its port table and universe map.')) return;
-  _hpSay('Pushing…', true);
-  fetch('/api/hinkspix/' + _hpState.cid + '/push-config', {
+  _hpSay('Building plan…', true);
+  fetch('/api/hinkspix/' + _hpState.cid + '/plan')
+    .then(function (r) { return r.json().then(function (d) { return {s: r.status, d: d}; }); })
+    .then(function (x) {
+      if (x.s !== 200) {
+        var why = (x.d.reasons || []).join('; ') || x.d.err || 'could not build a plan';
+        _hpSay('Nothing to upload: ' + why, false);
+        return;
+      }
+      _hpShowPlan(x.d);
+    }).catch(function (e) { _hpSay(String(e), false); });
+}
+
+function _hpShowPlan(plan) {
+  var el = document.getElementById('hp-result');
+  if (!el) return;
+  var reqs = plan.requests || [];
+  var boots = reqs.filter(function (r) { return r.kind === 'reboot'; }).length;
+  var writes = reqs.filter(function (r) { return r.kind === 'write'; }).length;
+  var reads = reqs.filter(function (r) { return r.kind === 'read'; }).length;
+  var rows = reqs.map(function (r, i) {
+    var hl = r.headers || {};
+    var bits = ['BLK: ' + hl.BLK, 'ROW: ' + hl.ROW].filter(function (b) {
+      return b.indexOf('undefined') < 0; });
+    return (i + 1) + '. ' + r.kind.toUpperCase() + ' ' + r.method + ' ' + r.path
+         + (bits.length ? ('  [' + bits.join('] [') + ']') : '')
+         + '\n   ' + (r.note || '')
+         + (hl.DATA ? ('\n   DATA: ' + hl.DATA) : '');
+  }).join('\n');
+  el.innerHTML = '<div style="font-size:.8em">'
+    + '<div style="padding:.5em .7em;border-radius:6px;background:#421;margin-bottom:.5em">'
+    + '<b>' + writes + '</b> write, <b>' + reads + '</b> read, and <b>' + boots
+    + '</b> reboot request to <b>' + plan.protocol + '</b> &middot; '
+    + plan.universesUsed + ' of ' + plan.maxUniverses + ' universes &middot; boards '
+    + ((plan.boards || []).join(', ') || 'none')
+    + '<div style="color:#fa6;margin-top:.3em">The controller reboots at the end — '
+    + 'it drops off the network for a few seconds and the pixels go dark.</div></div>'
+    + '<pre style="white-space:pre-wrap;word-break:break-all;max-height:22em;'
+    + 'overflow:auto;background:#112;padding:.5em;border-radius:4px">'
+    + escapeHtml(rows) + '</pre>'
+    + '<button class="btn" style="background:#dc2626;color:#fff" '
+    + 'onclick="hinksApply()">Upload these ' + reqs.length + ' requests + reboot</button>'
+    + '</div>';
+}
+
+function hinksApply() {
+  if (!confirm('Upload this configuration and reboot the controller?\n\n'
+             + 'The pixels go dark for a few seconds while it restarts.')) return;
+  _hpSay('Uploading…', true);
+  fetch('/api/hinkspix/' + _hpState.cid + '/apply', {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'
   }).then(function (r) { return r.json().then(function (d) { return {s: r.status, d: d}; }); })
     .then(function (x) {
-      _hpSay(x.s === 200 ? ('Pushed: ' + (x.d.steps || []).join(', '))
-                         : ('Push failed: ' + (x.d.err || '') + ' (completed: '
-                            + ((x.d.completed || []).join(', ') || 'nothing') + ')'),
-             x.s === 200);
-      if (x.s === 200) hinksConfigure(_hpState.cid);
+      if (x.s === 200) {
+        _hpSay('Uploaded ' + x.d.requests + ' requests; controller rebooting.', true);
+        hinksConfigure(_hpState.cid);
+        return;
+      }
+      var done = (x.d.completed || []).length;
+      _hpSay('Upload failed after ' + done + ' of the plan (' + (x.d.failedNote || '')
+             + '): ' + (x.d.err || ''), false);
     }).catch(function (e) { _hpSay(String(e), false); });
 }
 
@@ -215,24 +275,70 @@ function hinksProbe() {
 }
 
 function hinksReadback() {
-  _hpSay('Reading…', true);
-  fetch('/api/hinkspix/' + _hpState.cid + '/readback')
-    .then(function (r) { return r.json(); })
-    .then(function (d) {
-      var rb = d.readback || {};
-      var el = document.getElementById('hp-result');
-      if (!el) return;
-      // Rendered raw on purpose: these CGIs emit undocumented comma-separated
-      // text, so parsing it speculatively would invent structure.
-      el.innerHTML = '<div style="font-size:.78em"><b>Device readback</b>'
-        + Object.keys(rb).filter(function (k) { return k !== 'errors'; }).map(function (k) {
-            return '<div style="margin-top:.4em"><span style="color:#9ab">' + k + '</span>'
-                 + '<pre style="white-space:pre-wrap;word-break:break-all;margin:.2em 0;'
-                 + 'background:#112;padding:.4em;border-radius:4px">'
-                 + escapeHtml(String(rb[k] == null ? '(unavailable)' : rb[k]).slice(0, 1200))
-                 + '</pre></div>'; }).join('')
-        + '</div>';
+  _hpSay('Reading the controller…', true);
+  fetch('/api/hinkspix/' + _hpState.cid + '/device-config')
+    .then(function (r) { return r.json().then(function (d) { return {s: r.status, d: d}; }); })
+    .then(function (x) {
+      if (x.s !== 200) { _hpSay(x.d.err || 'read failed', false); return; }
+      _hpState.device = x.d.device;
+      _hpState.diff = x.d.diff;
+      _hpState.diffError = x.d.diffError;
+      _hpShowDevice(x.d);
     }).catch(function (e) { _hpSay(String(e), false); });
+}
+
+function _hpShowDevice(d) {
+  var el = document.getElementById('hp-result');
+  if (!el) return;
+  var dev = d.device || {}, diff = d.diff || {};
+  var out = '<div style="font-size:.8em"><b>On the controller</b> &middot; mode '
+    + escapeHtml(String(dev.mode || '?'))
+    + ' &middot; max universes ' + (dev.maxUniverses || '?') + '';
+
+  // One block per board, so board 2's ports are never shown as board 1's. The
+  // previous readback dumped one blob with no BLK header and so only ever saw
+  // board 0 (#943 B3).
+  Object.keys(dev.boardPorts || {}).sort(function (a, b) { return a - b; }).forEach(function (b) {
+    var rows = dev.boardPorts[b] || [];
+    out += '<div style="margin-top:.6em"><span style="color:#9ab">Board ' + b + '</span>'
+      + '<table style="width:100%;border-collapse:collapse;margin-top:.2em">'
+      + '<tr style="color:#9ab;font-size:.85em">'
+      + '<th style="text-align:left">out</th><th style="text-align:left">proto</th>'
+      + '<th style="text-align:left">start</th><th style="text-align:left">px</th>'
+      + '<th style="text-align:left">end</th><th style="text-align:left">order</th></tr>'
+      + rows.map(function (r) {
+          return '<tr' + (r.used ? ' style="color:#6d6"' : ' style="color:#666"') + '>'
+            + '<td>' + r.output + '</td><td>' + r.protocol + '</td><td>' + r.start
+            + '</td><td>' + r.pixels + '</td><td>' + r.end + '</td>'
+            + '<td>' + r.colorOrder + '</td></tr>';
+        }).join('')
+      + '</table></div>';
+  });
+
+  if (dev.serial) {
+    out += '<div style="margin-top:.6em"><span style="color:#9ab">J3 DMX-512 out</span> '
+      + (dev.serial.dmxActive ? ('on &middot; universe ' + dev.serial.dmxUniverse)
+                              : 'off')
+      + '</div>';
+  }
+
+  if (d.diffError) {
+    out += '<div style="margin-top:.6em;color:#fa6">Diff unavailable: '
+      + escapeHtml(d.diffError) + '</div>';
+  } else {
+    var items = diff.items || [];
+    out += '<div style="margin-top:.6em"><span style="color:'
+      + (diff.changed ? '#fa6' : '#6d6') + '">'
+      + (diff.changed ? (items.length + ' difference(s) from the saved config')
+                      : 'matches the saved config') + '</span>'
+      + (items.length ? '<pre style="white-space:pre-wrap;word-break:break-word;'
+          + 'max-height:18em;overflow:auto;background:#112;padding:.5em;'
+          + 'border-radius:4px;margin-top:.3em">'
+          + escapeHtml(items.map(function (i) { return i.text; }).join('\n'))
+          + '</pre>' : '')
+      + '</div>';
+  }
+  el.innerHTML = out + '</div>';
 }
 
 function hinksFixturesFromPorts() {
@@ -256,7 +362,7 @@ function hinksFixturesFromPorts() {
 // Note the controller cannot express a window crossing midnight; the server
 // rejects one and tells you how to split it.
 
-var _hpDeploy = {config: null, progress: null, poll: null};
+var _hpDeploy = {config: null, progress: null, poll: null, gate: null};
 var _HP_DAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
 
 function hinksStandalone(cid) {
@@ -267,6 +373,7 @@ function hinksStandalone(cid) {
       _hpState.cid = cid;
       _hpDeploy.config = d.config || {};
       _hpDeploy.progress = d.progress || {};
+      _hpDeploy.gate = d.gate || {ok: true};
       _hpRenderStandalone();
     });
 }
@@ -280,6 +387,18 @@ function _hpRenderStandalone() {
   body += '<p style="font-size:.85em;color:#9ab">Sequences are rendered here, uploaded to '
         + 'the controller\'s SD card, and played against its own clock — SlyLED does not '
         + 'need to be running.</p>';
+
+  // Everything on this screen but "Live" is a raw-TCP operation, and the
+  // controller drops the connection below its firmware gate — so the server
+  // refuses these with a 409. Disabling them here shows the reason up front
+  // instead of letting the operator hit a bare socket error.
+  var gate = _hpDeploy.gate || {ok: true};
+  var blocked = gate.ok === false;
+  var off = blocked ? ' disabled' : '';
+  if (blocked) {
+    body += '<div style="margin-bottom:1em;padding:.6em .8em;border-radius:6px;background:#421;'
+          + 'font-size:.85em">' + escapeHtml(gate.err || 'Firmware is too old.') + '</div>';
+  }
 
   body += '<div style="margin-bottom:1em"><label style="font-size:.8em;color:#9ab">Playlist name</label><br>'
         + '<input id="hp-plname" value="' + escapeHtml(cfg.playlistName || 'SHOW')
@@ -340,9 +459,9 @@ function _hpRenderStandalone() {
 
   body += '<div style="display:flex;gap:.5em;flex-wrap:wrap">'
     + '<button class="btn btn-on" onclick="hinksSaveSchedule()">Save schedule</button>'
-    + '<button class="btn" style="background:#dc2626;color:#fff" onclick="hinksDeploy()">Deploy to controller</button>'
-    + '<button class="btn" style="background:#446;color:#fff" onclick="hinksSetClock()">Set clock</button>'
-    + '<button class="btn" style="background:#335;color:#fff" onclick="hinksMode(\'standalone\')">Standalone</button>'
+    + '<button class="btn" style="background:#dc2626;color:#fff" onclick="hinksDeploy()"' + off + '>Deploy to controller</button>'
+    + '<button class="btn" style="background:#446;color:#fff" onclick="hinksSetClock()"' + off + '>Set clock</button>'
+    + '<button class="btn" style="background:#335;color:#fff" onclick="hinksMode(\'standalone\')"' + off + '>Standalone</button>'
     + '<button class="btn" style="background:#335;color:#fff" onclick="hinksMode(\'live\')">Live</button>'
     + '<button class="btn" style="background:#446;color:#fff" onclick="hinksConfigure(' + _hpState.cid + ')">← Ports</button>'
     + '</div><div id="hp-result" style="margin-top:.8em;font-size:.85em"></div>';

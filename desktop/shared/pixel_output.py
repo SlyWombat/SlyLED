@@ -21,16 +21,59 @@ Layout rules (matching the xLights convention the controller expects):
   ``.hseq`` frame, which is why it is computed once here.
 * When the J3 DMX-512 output is enabled it is appended as a trailing 512-channel
   span *after* all pixel data, matching xLights' "DMX after pixels" assertion.
+* A pixel is **not** always three channels. A port whose ``colorOrder`` is
+  ``rgbw``/``wrgb`` drives 4-channel nodes, so its end channel, its share of the
+  packed channel counter, and the number of pixels a universe holds all change
+  (#943 B11). 170 px per universe is the *RGB* figure — it is 510 of 512
+  channels; an RGBW universe holds 128.
 
-Pure module: no Flask, no device I/O, no global state.
+Pure module: no Flask, no device I/O, no global state. It does import the
+protocol's colour-order table from ``hinkspix_bridge`` rather than keeping its
+own, because node width is a property of the controller's colour-order code and
+a second copy of that table is exactly how the two would drift apart.
 """
 
 import math
 
-PIXELS_PER_UNIVERSE = 170      # 510 of 512 channels
+import hinkspix_bridge as hb
+
+PIXELS_PER_UNIVERSE = 170      # RGB nodes in one universe: 510 of 512 channels
 CHANNELS_PER_UNIVERSE = 512
 DMX_OUT_CHANNELS = 512
 MAX_PORTS = 48
+
+
+def channels_per_pixel(color_order):
+    """3 for RGB nodes, 4 for RGBW/WRGB — see ``hinkspix_bridge``."""
+    return hb.channels_per_pixel(color_order)
+
+
+def pixels_per_universe(color_order):
+    """Pixels one universe holds at this node width: 170 RGB, 128 RGBW."""
+    return CHANNELS_PER_UNIVERSE // channels_per_pixel(color_order)
+
+
+def to_wire_frame(rgb, pixels, chpp):
+    """Expand rendered RGB into the byte layout the controller wants.
+
+    ``rgb`` is 3 bytes per pixel (``pixel_renderer`` emits no white channel) and
+    ``chpp`` is 3 or 4. For a 3-channel port this is the identity. For a
+    4-channel port each pixel becomes ``R,G,B,0``: the controller applies
+    ``colorOrder`` itself, exactly as it does for a 3-channel port, so the wire
+    order stays canonical RGB and the white slot is zero rather than invented.
+
+    Open bench question: whether a white-channel node on this hardware wants the
+    white byte last for ``wrgb`` too (permuted by the controller) or first
+    (permuted by us). Sending canonical RGBW and letting the controller permute
+    is the reading that matches the 3-channel path, and is what the #943 QA lane
+    should confirm against a real strip.
+    """
+    if chpp == 3:
+        return rgb[:pixels * 3]
+    out = bytearray(pixels * 4)
+    for i in range(pixels):
+        out[i * 4:i * 4 + 3] = rgb[i * 3:i * 3 + 3]
+    return bytes(out)
 
 
 class UniverseCollision(ValueError):
@@ -48,7 +91,14 @@ class PixelOutputMap:
          "pixels": 170,        # 0 for the DMX-out span
          "channels": 510,
          "absStart": 1,        # 1-based controller-absolute channel
+         "channelsPerPixel": 3,  # 4 for RGBW/WRGB ports — see to_wire_frame
+         "colorOrder": "RGB",
          "kind": "pixel"|"dmx"}
+
+    ``channelsPerPixel`` is authoritative for the wire layout: a fixture's string
+    record has no ``colorOrder`` of its own, so writers read the width off the
+    span rather than re-deriving it. 4-channel ports also fit fewer pixels per
+    universe (128, not 170).
     """
 
     __slots__ = ("child_id", "base_universe", "spans", "port_spans", "dmx_span")
@@ -86,21 +136,25 @@ class PixelOutputMap:
                 raise ValueError(f"port {pnum} out of range 1..{MAX_PORTS}")
 
             this_port = []
+            chpp = channels_per_pixel(port.get("colorOrder"))
+            per_uni = pixels_per_universe(port.get("colorOrder"))
             remaining = pixels
             while remaining > 0:
-                chunk = min(remaining, PIXELS_PER_UNIVERSE)
+                chunk = min(remaining, per_uni)
                 span = {
                     "port": pnum,
                     "universe": universe,
                     "uniChannelStart": 1,
                     "pixels": chunk,
-                    "channels": chunk * 3,
+                    "channels": chunk * chpp,
+                    "channelsPerPixel": chpp,
+                    "colorOrder": port.get("colorOrder"),
                     "absStart": abs_channel,
                     "kind": "pixel",
                 }
                 spans.append(span)
                 this_port.append(span)
-                abs_channel += chunk * 3
+                abs_channel += chunk * chpp
                 universe += 1
                 remaining -= chunk
             port_spans[pnum] = this_port
@@ -195,9 +249,9 @@ class PixelOutputMap:
         }
 
 
-def universes_needed(pixels):
-    """Universes a port of ``pixels`` pixels consumes."""
-    return math.ceil(max(0, int(pixels)) / PIXELS_PER_UNIVERSE)
+def universes_needed(pixels, chpp=3):
+    """Universes a port of ``pixels`` pixels consumes at this node width."""
+    return math.ceil(max(0, int(pixels)) / (CHANNELS_PER_UNIVERSE // chpp))
 
 
 def write_fixture_frame(engine, output_map, fixture, rgb):
@@ -206,6 +260,10 @@ def write_fixture_frame(engine, output_map, fixture, rgb):
     ``rgb`` is the concatenated per-string RGB from
     ``pixel_renderer.render_fixture`` — string order must match
     ``fixture["strings"]``, which is what makes the two modules composable.
+    Each string is expanded to its port's node width first, so an RGBW port
+    advances 4 bytes per pixel here exactly as ``absStart`` assumed. The width
+    comes from the span, not from the fixture record: the span is what the
+    universe layout was actually built with.
     Marks universes dirty; the engine thread transmits them.
     """
     offset = 0
@@ -213,9 +271,9 @@ def write_fixture_frame(engine, output_map, fixture, rgb):
         n = int(string.get("leds") or 0)
         if n <= 0:
             continue
-        need = n * 3
-        chunk = rgb[offset:offset + need]
-        offset += need
+        chpp = int(spans[0]["channelsPerPixel"]) if spans else 3
+        chunk = to_wire_frame(rgb[offset:offset + n * 3], n, chpp)
+        offset += n * 3
         pos = 0
         for span in spans:
             take = span["channels"]

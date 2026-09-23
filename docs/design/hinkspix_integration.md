@@ -34,36 +34,92 @@ No WiFi work — transport is Ethernet only.
 
 ### 2.1 HTTP JSON (port 80, no auth)
 
+> **Corrected under #943.** This section originally documented a POST-with-body transport
+> (`POST /Xlights_PostData.cgi`, `DATA: <json>` in the body) and 0-based universe rows. Both
+> were wrong; §8b records how the bench found out. Every claim below is read off
+> `src-core/controllers/HinksPix.cpp` in the xLights tree and asserted in
+> `tests/test_hinkspix_wire.py`.
+
+**Transport: every call is an HTTP GET with the command in request headers.** There is no POST
+and no body, anywhere. `Content-type: text/plain` always. Writes carry the JSON in a `DATA`
+header; reads select a board with `BLK`; the EasyLights path selects a row with `ROW`. Header
+names are spelled here as they appear in `cgi_headers()` (`hinkspix_bridge.py`) — urllib
+canonicalises them on the wire (`BLK` → `Blk`), which is harmless.
+
+| Header | Value | Used by |
+|--------|-------|---------|
+| `Content-type` | `text/plain` | every request |
+| `DATA` | `{"CMD":…}` | every write |
+| `BLK` | `0`…`4` | board-scoped reads; `BLK n` = BD(n+1), so `BLK: 0` = ports 1-16, `BLK: 1` = ports 17-32 |
+| `ROW` | row index | `/GetInfo.cgi` (EasyLights path) and `/GetE131Data.cgi` — see the caveat below |
+
+- **Success** is the **quoted** `"OK"` (`ret.find("\"OK\"")`), not a loose substring. Replies
+  the MS_160 has to assemble come back **gzipped** (`1f 8b`); `_decompress` gunzips on the magic
+  number and surfaces the raw bytes rather than a decode error when the stream is bogus (#943 B19).
 - **Probe:** `GET /XLights_BoardInfo.cgi` → JSON with `Controller` (`"H"` PRO / `"E"` EasyLights),
   `Type` (`"P"` pixel, `"A"` AC, `"8"` PRO 80 = hardware V3), `MaxU` (max input universes:
   145 pre-v111, 402 v111+, 684 PRO 80), `MCPU`/`PCPU`/`ECPU`/`WEB` version strings,
   `BD1..BD5` expansion board types.
-- **Commands:** `POST /Xlights_PostData.cgi`, body text `DATA: <json>`; success iff response contains `"OK"`.
-  - `{"CMD":"DATA_MODE","MODE":"E131"|"ARTNET"|"DDP"}` (+`DDP_START`,`DDP_CHAN_COUNT` for DDP).
-    xLights first POSTs `BLK: 0` to `/Xlights_Data_Mode.cgi` to read the current mode.
+- **Command sequence** (`hinkspix_config.build_commands`): read mode → `DATA_MODE` → E131 blocks
+  → `BD_INFO` → `PCONFIG` per fitted board → serial `DATA_MODE` → `UnPack` reset → reboot. The
+  dry run (`GET …/plan`) and the upload (`POST …/apply`) are built by that one function, so a
+  preview cannot drift from what the upload sends.
+  - `{"CMD":"DATA_MODE","MODE":"E131"|"ARTNET"|"DDP"}`, plus `DDP_START`/`DDP_CHAN_COUNT` when
+    the mode is DDP. Sent **twice**: this one, and a second 7-key serial `DATA_MODE`
+    (`DMX_*`/`DDP_DMX_*`) describing the J3 DMX-512 bridge, *after* `PCONFIG` (#943 B9).
+    sACN is written as `E131` — the controller has no sACN-specific mode.
   - `{"CMD":"E131","BLK":"<j>","LIST":[{"V":"index,universe,numOfChan,1,hinksStart,hinksEnd"} x6]}`
-    — blocks of 6 input-universe rows; unused rows up to `MaxU` are `"index,index,0,1,0,0"`,
-    beyond that `"0,0,0,0,0,0"`. Followed by `{"CMD":"BD_INFO","NumU":"<n>"}`.
+    — blocks of 6 input-universe rows, **1-based** (`index` 1..`MaxU`); unused rows up to `MaxU`
+    are `"index,index,0,1,0,0"`, beyond it `"0,0,0,0,0,0"`. `hinksStart`/`hinksEnd` are the
+    **controller-absolute** channel range (`end = start + pixels*chpp - 1`), which is what makes
+    each port start where the previous one ended rather than at 1 (#943 B5/B6). Followed by
+    `{"CMD":"BD_INFO","NumU":"<used>"}` — the used count, not `MaxU` (#943 B12).
   - `{"CMD":"PCONFIG","BOARD":"<b>","LIST":[{"V":"output,protocol,startChan,pixels,endChan,direction,colorOrder,nullPixel,brightness,gamma"} x16]}`
-    per 16-port board. Integer codes come from `EncodeColorOrder` / `EncodeStringPortProtocol` /
-    `EncodeBrightness` / `EncodeGamma` in `HinksPix.cpp` — copy the tables at implementation time.
-  - `{"CMD":"DATA_MODE","DMX_ACTIVE":1,"DMX_UNIV":u,"DMX_START":1,"DMX_CHAN_CNT":512,"DDP_DMX_ACTIVE":0,...}`
-    — bridges universe `u` to the J3 DMX-512 output.
+    — a full 16 rows for **every fitted pixel board** (`Local_SPI` / `Long_Range`), at the
+    **controller-absolute port number** (board 2's first row is `17,…`, not `1,…`), and no rows
+    at all for a `Not_Present` board (#943 B6/B7). A *factory* port reads protocol `0` **with** a
+    pixel count, so "unused" keys off `pixels == 0` (#943 B10). Integer codes come from
+    `EncodeColorOrder` / `EncodeStringPortProtocol` / `EncodeBrightness` / `EncodeGamma` in
+    `HinksPix.cpp` — copied into `hinkspix_bridge.py` at implementation time.
   - `{"CMD":"OP_MODE","MODE":"ETHERNET"}` — live-data mode; no response, controller reboots.
-  - **Read-back:** `GET /GetE131Data.cgi`, `/Xlights_Board_Port_Config.cgi`, `/GetInfo.cgi`
-    return comma-separated `key,value,...` text.
+    Sent **twice, 100 ms apart, fire-and-forget, unconditionally after every upload** (#943 B8).
+    A config upload that does not reboot is a config that did not take.
+- **Read-back:** `/Xlights_BoardInfo.cgi`, `/Xlights_Data_Mode.cgi` (`BLK`), and
+  `/Xlights_Board_Port_Config.cgi` (`BLK`) — the last replies JSON `{"LIST":[{"V":…}]}` and
+  **must** carry exactly 16 rows or it is rejected rather than padded
+  (`read_board_ports`). `/GetE131Data.cgi` and `/GetInfo.cgi` return comma-separated text.
+  xLights never reads the universe table back, so `diff` reports that section as *unread*
+  rather than manufacturing `MaxU` phantom differences.
+  **Caveat:** xLights *declares* `GetControllerE131Data` and never calls it, so the exact `ROW`
+  semantics are unverified on hardware. Reading the table is a read-only diagnostic and is never
+  part of the write path, and never used to decide whether a push succeeded.
+- **UnPack reset:** `GET /Xlights_UnPack_Config.cgi` with a **double-braced**
+  `DATA: {{"BLK":"0","NUM":"0","LEFT":"0","LIST":[]}}` — the extra braces are xLights' and are
+  load-bearing. Gated on `MCPU >= 151` (PRO) / `>= 129` (PRO 80 = hardware V3) (#943 B13).
 - **Upload gate:** `FirmwareSupportsUpload()` = `MCPU >= 151` (PRO) or `>= 129` (PRO 80 / hardware V3).
+- **DDP** (#943 B14) carries its channel range on the mode command and **skips** the E131 table
+  and `BD_INFO` entirely; `PCONFIG` is still sent. Not offered for PRO V1/V2 hardware — the API
+  rejects it with a V3 hint, and the picker's protocol list is server-supplied.
 
 ### 2.2 Raw TCP (port 80, faked HTTP header) — `#pragma pack(2)`
 
 | Struct | Layout | Size |
 |---|---|---|
-| `Tag_Packet` (file upload, `CMD[0]='F'`) | `char HINK[18]` = `"HINK TCP_CMD  \r\n\r\n"`, `uint8 CMD[4]` = `{'F',0x5a,0xa5,0}`, `u16 TotalSize`, `u16 StructType`, `u16 DataSize`, `uint8 Data[580]` | 608; on the wire only `TotalSize = 28 + DataSize` bytes are sent |
+| `Tag_Packet` (file upload, `CMD[0]='F'`) | `char HINK[18]` = `"HINK TCP_CMD  \r\n\r\n"`, `uint8 CMD[4]` = `{'F',0x5a,0xa5,0}`, `u16 TotalSize`, `u16 StructType`, `u16 DataSize`, `uint8 Data[580]` | 608; on the wire only `TotalSize` bytes are sent |
 | `StructType` | 0 = first chunk (open temp file, truncate), 1 = append, 2 = close | |
-| `Tag_File_Data_Close` (in `Data` when StructType=2) | `char FN[30]`, `u32 DTTM` (FAT date/time word) | 34 → TotalSize 62 |
+| `Tag_File_Data_Close` (in `Data` when StructType=2) | `char FN[30]`, `u32 DTTM` (FAT date/time word) | 34 → TotalSize 62, but the **DataSize field is 0** (#944 B17) |
 | `Tag_Dow_TimePacket` (`CMD[0]='D'`) | HINK[18], CMD[4], `u8 hr, min, sec, dow` (dow 0 = Sunday, **local** time; no date) | 26 |
 | `Tag_CMD_Packet` (`CMD[0]=mode`) | HINK[18], CMD[4] | 22; `'G'` = master/standalone, `'H'` = remote/slave |
 | SD listing (`GetFileInfoFromSDCard(cmd)`) | header + 4-byte CMD; reply `*NAME.HSEQ,date,time!...` | **no caller in xLights; command letter unknown → bench** |
+
+An upload is one `StructType 0` chunk, then `StructType 1` chunks to the end of the file, then
+the close. **Framing follows `TotalSize`, not `DataSize`** — the close declares `DataSize 0`
+while still sending its 34-byte body, so a reader that trusts the field mis-frames the packet.
+A file whose length is an **exact multiple of 580** gets one extra zero-length `StructType 1`
+before the close: xLights tests the previous read's length at the top of its loop
+(`HinksPix.cpp:1706-1743`), so the last full chunk never takes the "fully sent" branch, it reads
+once more, gets 0, and sends that packet. Without it the file may never be finalised
+(#944 B17b). `needs_flush_chunk()`, `build_close()` and the upload loop implement this.
 
 Every command/chunk is ACKed by a line containing `|FOK` (skip until `'|'`, collect printable
 chars, stop at non-printable / 5 s timeout). One TCP connection per file.
@@ -197,7 +253,10 @@ HinksPix-backed fixtures are ordinary `fixtureType:"led", type:"linear"` fixture
 `pixel_output.PixelOutputMap.build(child)`:
 - Enabled ports in port order. Each port starts on a fresh universe:
   `universe = baseUniverse + running`, channel 1; a port of `leds` pixels spans
-  `ceil(leds/170)` universes (170 px = 510 ch, the xLights convention).
+  `ceil(leds/pixels_per_universe)` universes. One universe is 512 channels, so that is
+  **170 px for RGB and 128 px for RGBW/WRGB** (`channels_per_pixel` is 4 for colour orders
+  6/7 — #943 B11; the two constants live in `hinkspix_bridge` and `pixel_output` imports them
+  rather than keeping a second copy).
   Spans: `(port, universe, uniChannelStart, count_px, absStart)`, where `absStart` is the packed
   controller-absolute channel — exactly the `hinksPixStartChannel` in the `E131` table and the
   frame layout of `.hseq`.
@@ -211,12 +270,19 @@ HinksPix-backed fixtures are ordinary `fixtureType:"led", type:"linear"` fixture
 
 ### 4.4 Device configuration push (explicit, operator-triggered)
 
-`POST /api/hinkspix/<cid>/push-config` runs in order: `DATA_MODE` (from
-`_dmx_settings.protocol`), `E131` blocks + `BD_INFO NumU`, `PCONFIG` per board, DMX-out
-`DATA_MODE` row, then (if requested) `OP_MODE ETHERNET`. Records `configPushedAt`/`configHash`;
-the SPA shows "config differs from device" when the local port-table hash differs.
-`GET /api/hinkspix/<cid>/readback` fetches `GetE131Data.cgi` +
-`Xlights_Board_Port_Config.cgi` for a side-by-side verify view.
+Rewritten under #943 into a preview-then-upload pair, so the operator sees the exact requests
+before anything touches the device:
+
+- `GET /api/hinkspix/<cid>/plan` — dry run. Returns the protocol, `maxUniverses`,
+  `universesUsed`, the `boards` that will receive `PCONFIG`, the full request list (`kind`,
+  `method`, `path`, `headers`) and the intended `DeviceConfig`. Touches nothing.
+- `POST /api/hinkspix/<cid>/apply` — sends that same sequence (`hc.build_commands` builds both,
+  so they cannot drift). Stops at the first failure with `502` + `failedAt`/`failedNote`/
+  `completed`; on success records `configPushedAt`/`configHash` and returns `rebooted: true`.
+- `GET /api/hinkspix/<cid>/device-config` — reads `BoardInfo` (`MaxU`), the current `DATA_MODE`
+  (`BLK 0`) and the port table of every fitted pixel board, then returns `device` and a `diff`
+  against the intended config. The SPA shows "config differs from device" from that diff; an
+  unread section is reported as unread, never as a difference.
 
 ### 4.5 UX surfaces
 
@@ -224,7 +290,7 @@ the SPA shows "config differs from device" when the local port-table hash differ
   buttons Refresh / Configure / Web UI (`http://<ip>/`) / Remove.
 - **Device modal** (new `hinkspix.js`): port table (48 rows: enabled, leds, mm, protocol,
   colour order, null pixels, brightness, gamma), base universe, protocol readout, DMX-out
-  toggle + universe, "Create fixtures from ports", "Push config", "Read back",
+  toggle + universe, "Create fixtures from ports", "Preview & upload…", "Read controller",
   mode indicator (Live / Standalone / unknown), "Set clock".
 - **Add device**: `POST /api/children` already tries PING then WLED; add a HinksPix probe
   (`XLights_BoardInfo.cgi`) in the same fall-through. No mDNS/ArtPoll guarantee → manual IP add
@@ -243,6 +309,11 @@ the SPA shows "config differs from device" when the local port-table hash differ
 - `write_fixture_frame(engine, fixture, rgb_bytes)` →
   `engine.get_universe(u).set_channels(start, slice)` per span (marks dirty; the engine thread
   transmits). One call per fixture per tick.
+- `to_wire_frame(rgb, pixels, chpp)` widens the renderer's packed RGB to the port's channel
+  width — 3 bytes pass through, 4-byte ports get a zero channel inserted per pixel (#943 B11).
+  **One thing the bench must confirm:** whether a `wrgb` port wants `R,G,B,0` (the controller
+  permutes) or `0,R,G,B` (we permute). Sending canonical RGBW and letting the controller apply
+  the colour order is the reading consistent with the 3-channel path — see the docstring.
 
 ### 5.2 Playback integration (`parent_server.py`)
 
@@ -288,13 +359,23 @@ differs from the current protocol.
   `short_name(name, taken)` (uppercase alnum <= 20, unique), `fat_datetime_word(dt)`,
   `validate_schedule(rows)` (mirrors xLights `isValid`).
 - **`hinkspix_tcp.py`** — `HinksPixTcp(ip)`: `upload(name, data, mtime, progress_cb)`
-  (608-byte `Tag_Packet` chunks of <= 580, `|FOK` per chunk, `StructType` 0/1/2),
+  (608-byte `Tag_Packet` chunks of <= 580, `|FOK` per chunk, `StructType` 0/1/2, close packet
+  with `DataSize` 0, zero-length flush chunk for exact-multiple files — §2.2, #944 B17/B17b),
   `set_time(now_local)`, `set_mode('G'|'H')`, `list_files(cmd)`; 5 s per-ACK timeout;
   raises `HinksPixError` with the controller's reply text.
-- **`hinkspix_bridge.py`** — HTTP side (§2.1): `probe`, `push_data_mode`,
-  `push_input_universes`, `push_port_config`, `push_dmx_out`, `op_mode_ethernet`, `readback`.
-- **`orch_hinkspix.py`** — Blueprint: device CRUD/probe/push/readback, deploy job, schedule CRUD,
-  mode switch, inventory.
+- **`hinkspix_bridge.py`** — transport and encoders (§2.1): `cgi_headers`, `command`,
+  `fire_and_forget`, `op_mode_ethernet`, `probe`, `read_board_info`, `read_data_mode`,
+  `read_board_ports`, `read_e131_text`, `read_info_row`, the `parse_*` row decoders, and the
+  encode/support tables (`encode_protocol`, `encode_color_order`, `channels_per_pixel`,
+  `encode_brightness`, `encode_gamma`, `encode_direction`, `supports_upload`, `supports_unpack`).
+- **`hinkspix_config.py`** — the pure config layer (§2.1's command sequence): `PortRow`,
+  `UniverseRow`, `SerialRow`, `DeviceConfig`, `intended_config`, `universe_table` /
+  `build_universe_rows` / `universe_blocks`, `build_commands` → `[CgiRequest]`,
+  `decode_device_config`, `diff`, `present_boards` / `pixel_boards`,
+  `input_protocols_supported`. No Flask, no sockets, no global state — so the plan can be
+  asserted without standing up the app.
+- **`orch_hinkspix.py`** — Blueprint: device CRUD/probe, `plan`/`apply`/`device-config`,
+  deploy job, schedule CRUD, mode switch, inventory.
 
 ### 6.2 Data — `data/hinkspix_deploy.json`
 
@@ -330,6 +411,25 @@ controller only receives its own channels.
 `POST /api/hinkspix/<cid>/mode` `{"mode":"live"|"standalone"}`: live → `OP_MODE ETHERNET`
 (reboots; poll until probe succeeds); standalone → `set_mode('G')`.
 `POST .../set-clock` on demand and automatically before every deploy.
+
+**Firmware gate (#944 B18).** Every raw-TCP operation — `set-clock`, standalone `mode`, deploy,
+and each of the uploads above — is refused with **409** and the reason when
+`FirmwareSupportsUpload()` fails: MCPU **>= 151**, or **>= 129** on hardware V3. xLights checks
+the same predicate before each of these (`HinksPixExportDialog.cpp:471/505/520/546/655/685`),
+because below it the controller drops the connection rather than answering — which reaches the
+operator as a bare socket error naming nothing. `_upload_gate()` in `orch_hinkspix.py` is the
+single implementation; `GET .../deploy` carries the same verdict as a `gate` object so the
+standalone view can disable its TCP buttons with the reason shown instead of failing on click.
+`mode: "live"` is deliberately **outside** the gate: it is the HTTP config path (§2.1
+`OP_MODE ETHERNET`), not a TCP upload, and xLights has no analogue — so a controller that cannot
+be managed over TCP can still be returned to live mode.
+
+> **On "#944 says MS_152".** The issue title and its test note name an MS_152 threshold, but
+> `152` appears nowhere in `HinksPix.cpp`, `HinksPix.h` or `HinksPixExportDialog.cpp`; the only
+> upload-floor constants in the reference are `V2UPLOADFIRMEWARE = 151` and
+> `V3UPLOADFIRMEWARE = 129` (checked 2026-09-23 against `master`). The gate is implemented on
+> `hb.supports_upload()`, i.e. 151 / 129. If MS_152 came from a field observation rather than the
+> source, it is a different claim and needs a bench capture to pin down.
 
 ### 6.4 Operator UX — "8pm-11pm daily"
 
@@ -450,7 +550,8 @@ same write as GET-with-header returns `{"CMD":"POST","OK":"OK"}`. A line-by-line
 xLights driver found 22 mismatches in total, including 0-based universe rows (the device is 1-based)
 and every port being written with start channel 1. Tracked in **#943** (wire protocol) and **#944**
 (raw TCP); the guided configuration UI, guidance/validation and xLights show-folder import that build
-on it are **#945**, **#946** and **#947**. §2.1 will be rewritten under #943.
+on it are **#945**, **#946** and **#947**. §2.1 has been rewritten under #943 to match what the
+bench found.
 
 The operator's real layout is one 200-pixel WS2811 RGB string (garage eaves) on **port 17**, start
 channel 1, universes 1-2, taken from their xLights show folder (`xlights_rgbeffects.xml`).
@@ -466,11 +567,11 @@ Offline first, all under the `unit` job in `.github/workflows/python-tests.yml`
 |---|---|
 | `tests/test_pixel_renderer.py` | corpus golden vectors; determinism; every action type; `active_segment` rule vs `_dmx_playback_loop`; n=1 edge cases; `EFFECT_SPEC_VERSION` equality parsed from `pixel_renderer.js` |
 | `tests/test_pixel_renderer_parity.py` | Node runs `spa/js/pixel_renderer.js` on the same corpus (pattern: `test_fixture_shortcuts.py`; skips without node) |
-| `tests/test_hinkspix_wire.py` | static: `struct.calcsize` = 608/34/26/22, 18-byte header literal, `TotalSize = 28 + DataSize`, FAT word round-trip, `.hseq` header bytes at every documented offset, `.ply`/`.sched` exact text, schedule validation, short-name rules |
-| `tests/test_hinkspix_tcp.py` | in-process fake HinksPix TCP server (parses chunks, reassembles files, replies `\|FOK`, injects failure/timeouts); asserts reassembled bytes, close-packet name/DTTM, time-packet fields, mode packet; errors surfaced |
-| `tests/test_hinkspix_device.py` | Flask: add device with mocked probe; port-table CRUD + collision 400s; fixtures-from-ports; strings `port` validation; universeRoutes upsert; `_is_performer` guards (no RUNNER_GO/LOAD_STEP/PING to hinkspix); sweep marks offline via HTTP probe |
+| `tests/test_hinkspix_offline.py` | static: `struct.calcsize` = 608/34/26/22, 18-byte header literal, `TotalSize = 28 + DataSize`, FAT word round-trip, `.hseq` header bytes at every documented offset, `.ply`/`.sched` exact text, schedule validation, short-name rules. **Also the in-process fake TCP controller** (parses chunks, reassembles files, replies `\|FOK`, injects failure/timeouts): reassembled bytes, close-packet name/DTTM and its `DataSize 0` field, the exact-multiple flush chunk, time-packet fields, mode packet, errors surfaced |
+| `tests/test_hinkspix_wire.py` | HTTP wire protocol (#943): GET + headers, quoted `"OK"`, `BLK` board select, gzip replies, the 1-based universe table, per-port start channels, full-board `PCONFIG`, `UnPack` gating, reboot-last, DDP. **Light self-check only** — it asserts the request shape and the command sequence. Standing up a gated in-process `http.server` fake, replaying golden MS_160 captures, and wiring the hinkspix suites into this job are deferred to the QA lane |
+| `tests/test_hinkspix_device.py` | Flask: add device with mocked probe; port-table CRUD + collision 400s; fixtures-from-ports; strings `port` validation; universeRoutes upsert; `_is_performer` guards (no RUNNER_GO/LOAD_STEP/PING to hinkspix); sweep marks offline via HTTP probe; the #944 firmware gate on `set-clock`/`mode` (asserted by capturing that no connection is attempted) |
 | `tests/test_hinkspix_output.py` | show start with a baked timeline → after one loop tick `peek_universe(u).get_data()` holds renderer output at the right offsets; LED-only show no longer idles; blackout on stop; master-brightness scaling on sACN pixel universes |
-| `tests/test_hinkspix_hseq.py` | deploy render: size = 336 + frames x channels; spot-check frames equal `render_fixture`; DMX-out trailing span; channel map identical to the live map |
+| *not yet covered — QA lane* | deploy render (`render_hseq_frames`): size = 336 + frames x channels; frames equal `render_fixture`; DMX-out trailing span; hseq channel map identical to the live map. No suite asserts this today |
 | `tests/test_dmx_engines.py` (extend) | sACN send-time master scaling; `all_intensity` fast path |
 | `tests/regression/run_all.py` | unchanged; add a hinkspix fixture to `test_full_show.py` under `SLYLED_LIVE_RIG` only |
 

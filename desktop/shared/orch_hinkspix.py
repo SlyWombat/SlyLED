@@ -25,7 +25,8 @@ ps = orch_state.ps
 assert ps is not None, "orch_state.bind() must run before importing orch_hinkspix"
 
 import hinkspix_bridge as hb
-from pixel_output import PixelOutputMap, UniverseCollision
+import hinkspix_config as hc
+from pixel_output import PixelOutputMap, UniverseCollision, to_wire_frame
 
 bp = Blueprint("hinkspix", __name__)
 
@@ -43,13 +44,61 @@ def _child(cid):
     return c, None
 
 
+def _upload_gate(child):
+    """Refuse a raw-TCP operation on firmware too old to accept one.
+
+    ``FirmwareSupportsUpload`` (``HinksPix.cpp:1902``) is MCPU >= 151, or >= 129
+    on hardware V3, and xLights checks it before *every* raw-TCP operation —
+    time, master/remote mode, file upload, schedule upload
+    (``HinksPixExportDialog.cpp:471/505/520/546/655/685``). Below the gate the
+    controller drops the connection instead of answering, which reaches the
+    operator as a bare socket error with no hint of the real cause (#944 B18).
+
+    Returns a ``(response, 409)`` pair when the device cannot be managed over the
+    network, else None.
+    """
+    hinks = child.get("hinks") or {}
+    mcpu = hinks.get("mcpu")
+    hardware_v3 = bool(hinks.get("hardwareV3"))
+    if hb.supports_upload(mcpu, hardware_v3):
+        return None
+    minimum = hb.MIN_MCPU_UPLOAD_V3 if hardware_v3 else hb.MIN_MCPU_UPLOAD
+    shown = hinks.get("mcpuRaw") or (f"MS_{mcpu}" if mcpu is not None else "unknown")
+    # xLights' own wording is "'%s' CPU Firmware is too old (v%d) Update to a
+    # Newer Version."; naming the threshold saves a support round-trip.
+    return jsonify(
+        ok=False,
+        err=(f"'{child.get('ip')}' CPU firmware is too old ({shown}) — "
+             f"MS_{minimum} or newer is required for network upload"),
+        mcpu=mcpu, mcpuRaw=shown, minMcpu=minimum, hardwareV3=hardware_v3,
+    ), 409
+
+
+def _gate_payload(child):
+    """The same gate as a JSON body for a read-only route (never a response)."""
+    gated = _upload_gate(child)
+    if gated is None:
+        return {"ok": True}
+    body = gated[0].get_json()
+    return {"ok": False, "err": body.get("err"), "mcpu": body.get("mcpu"),
+            "minMcpu": body.get("minMcpu")}
+
+
 def _config_hash(hinks):
     """Stable hash of everything that must be pushed to the controller, so the
-    UI can say "config differs from device" without a readback round-trip."""
+    UI can say "config differs from device" without a readback round-trip.
+
+    The fitted boards are part of it: which boards get a PCONFIG, and therefore
+    which ports exist at all, comes from the probe rather than from the port
+    table. A re-probe that reports a different board layout changes what an
+    upload would write even though no port row was edited (#943 B7).
+    """
     payload = {
         "baseUniverse": hinks.get("baseUniverse"),
         "protocol": hinks.get("protocol"),
         "dmxOut": hinks.get("dmxOut"),
+        "boards": {str(k): v for k, v in sorted(
+            (hinks.get("boards") or {}).items())},
         "ports": sorted(
             [{k: p.get(k) for k in ("port", "leds", "protocol", "colorOrder",
                                     "direction", "nullPixels", "brightness",
@@ -125,6 +174,11 @@ def api_hinkspix_get(cid):
             "engineProtocol": engine_proto, "protocolMatch": bool(proto_match),
             "hinks": hinks, "configHash": _config_hash(hinks),
             "pushedHash": hinks.get("configHash", ""),
+            # The SPA builds its protocol picker from this rather than a
+            # hard-coded list, so an option the controller cannot serve is
+            # never offered (#943 B14).
+            "protocols": list(hc.input_protocols_supported(
+                bool(hinks.get("hardwareV3")))),
             "inSync": bool(hinks.get("configHash")
                            and hinks["configHash"] == _config_hash(hinks))}
     try:
@@ -159,8 +213,14 @@ def api_hinkspix_put(cid):
 
     if "protocol" in body:
         proto = str(body["protocol"]).lower()
-        if proto not in ("e131", "sacn", "artnet", "ddp"):
-            return jsonify(err="protocol must be e131/sacn/artnet/ddp"), 400
+        supported = hc.input_protocols_supported(bool(hinks.get("hardwareV3")))
+        if proto not in supported:
+            # DDP is a mode the firmware accepts but this controller's
+            # definition never offers (#943 B14) — writing it produces a config
+            # that is stored, accepted, and inert.
+            return jsonify(err=f"protocol must be one of "
+                               f"{'/'.join(supported)}"
+                               f"{' (DDP needs hardware V3)' if proto == 'ddp' else ''}"), 400
         hinks["protocol"] = proto
 
     if "dmxOut" in body:
@@ -264,67 +324,174 @@ def api_hinkspix_probe(cid):
     return jsonify(ok=True, info=info)
 
 
-@bp.post("/api/hinkspix/<int:cid>/push-config")
-def api_hinkspix_push(cid):
-    """Push the stored config to the controller.
+@bp.get("/api/hinkspix/<int:cid>/device-config")
+def api_hinkspix_device_config(cid):
+    """Read what the controller currently holds, in SlyLED's own shape.
 
-    Explicit and operator-triggered — never implicit on save. A push reboots
-    the controller when `opMode` is requested, and silently reconfiguring live
-    hardware from a UI edit would be the wrong default.
+    Three reads: BoardInfo (MaxU and the fitted boards), the input mode, and
+    16 PCONFIG rows per fitted pixel board. The universe table is **not** read
+    — xLights never reads it either (`GetControllerE131Data` has no callers) and
+    it would be one request per row; `diff` says so rather than reporting every
+    row as a difference.
+
+    Also returns the diff against the stored config, so one call answers "is
+    what I have on screen what the device has?".
     """
     child, err = _child(cid)
     if err:
         return err
-    body = request.get_json(silent=True) or {}
     hinks = child.get("hinks") or {}
+    ip = child["ip"]
+    try:
+        raw_ports = {}
+        for board in hc.pixel_boards(child):
+            raw_ports[board] = hb.read_board_ports(ip, board)
+        current = hc.decode_device_config(
+            board_info={"MaxU": hinks.get("maxU")},
+            data_mode=hb.read_data_mode(ip, blk=0),
+            board_ports=raw_ports)
+    except hb.HinksPixError as exc:
+        return jsonify(ok=False, err=str(exc)), 502
+
+    body = {"ok": True, "id": cid, "device": current.to_json()}
+    output_map, merr = _build_map_or_error(child)
+    if merr or not hinks.get("maxU"):
+        body["diff"] = None
+        body["diffError"] = (merr[0].get_json().get("err") if merr
+                             else "the controller's universe limit is not known")
+    else:
+        try:
+            intended = hc.intended_config(child, output_map,
+                                          max_universes=hinks.get("maxU"))
+            body["diff"] = hc.diff(current, intended)
+        except hc.ConfigError as exc:
+            body["diff"] = None
+            body["diffError"] = str(exc)
+    return jsonify(body)
+
+
+def _plan_preconditions(child, output_map):
+    """Reasons the stored config cannot be uploaded yet, or []."""
+    hinks = child.get("hinks") or {}
+    reasons = []
+    if not hinks.get("maxU"):
+        reasons.append("the controller has not been probed — its universe "
+                       "limit and fitted boards are unknown")
+    if not hc.pixel_boards(child):
+        reasons.append("no expansion boards are known — probe the controller")
+    max_u = int(hinks.get("maxU") or 0)
+    if max_u and len(output_map.universes) > max_u:
+        reasons.append(f"layout needs {len(output_map.universes)} universes "
+                       f"but the controller supports {max_u}")
+    return reasons
+
+
+def _build_plan(child, output_map):
+    """``(plan, None)`` or ``(None, error_response)``."""
+    hinks = child.get("hinks") or {}
+    reasons = _plan_preconditions(child, output_map)
+    if reasons:
+        return None, (jsonify(ok=False, err="; ".join(reasons),
+                              reasons=reasons), 409)
+    try:
+        intended = hc.intended_config(child, output_map,
+                                      max_universes=hinks.get("maxU"))
+        cmds = hc.build_commands(intended, mcpu=hinks.get("mcpu"),
+                                 hardware_v3=bool(hinks.get("hardwareV3")))
+    except hc.ConfigError as exc:
+        return None, (jsonify(ok=False, err=str(exc)), 400)
+    return (intended, cmds), None
+
+
+@bp.get("/api/hinkspix/<int:cid>/plan")
+def api_hinkspix_plan(cid):
+    """The exact requests an upload would send — dry run, nothing touches the
+    device.
+
+    Every entry carries the real method, path and header values, so the
+    preview the operator approves is the same sequence `apply` executes rather
+    than a description of it. Also returns the diff against the device when it
+    has been read recently enough to be worth comparing.
+    """
+    child, err = _child(cid)
+    if err:
+        return err
     output_map, err = _build_map_or_error(child)
     if err:
         return err
+    built, err = _build_plan(child, output_map)
+    if err:
+        return err
+    intended, cmds = built
+    return jsonify(ok=True, id=cid, protocol=intended.mode,
+                   maxUniverses=intended.max_universes,
+                   universesUsed=len(intended.used_universes),
+                   boards=sorted(intended.board_ports),
+                   requests=[c.to_json() for c in cmds],
+                   intended=intended.to_json())
 
-    max_u = int(hinks.get("maxU") or 0)
-    if max_u and len(output_map.universes) > max_u:
-        return jsonify(err=f"layout needs {len(output_map.universes)} universes "
-                           f"but the controller supports {max_u}"), 400
 
-    steps = []
-    try:
-        hb.push_data_mode(child["ip"], hinks.get("protocol", "e131"),
-                          hinks.get("dmxOut"))
-        steps.append("data_mode")
-        hb.push_input_universes(child["ip"], output_map.spans,
-                                max_u or len(output_map.spans))
-        steps.append("universes")
-        ports = hinks.get("ports") or []
-        for board in range(0, (MAX_PORTS + 15) // 16):
-            chunk = [p for p in ports
-                     if board * 16 < int(p["port"]) <= (board + 1) * 16]
-            if chunk:
-                hb.push_port_config(child["ip"], board, chunk)
-                steps.append(f"pconfig{board}")
-        if body.get("opMode") == "ethernet":
-            hb.op_mode_ethernet(child["ip"])
-            steps.append("op_mode_ethernet")
-    except hb.HinksPixError as exc:
-        return jsonify(ok=False, err=str(exc), completed=steps), 502
+@bp.post("/api/hinkspix/<int:cid>/apply")
+def api_hinkspix_apply(cid):
+    """Upload the stored config, then reboot the controller.
+
+    Synchronous and operator-triggered — never implicit on save. The reboot is
+    part of the sequence, not an option: a config written without it is stored
+    and never loaded, which is indistinguishable from success until the pixels
+    don't move (#943 B8).
+
+    Stops at the first failed request and reports what completed, because every
+    request after a failure would be written against a device that is in an
+    unknown state.
+    """
+    child, err = _child(cid)
+    if err:
+        return err
+    output_map, err = _build_map_or_error(child)
+    if err:
+        return err
+    built, err = _build_plan(child, output_map)
+    if err:
+        return err
+    intended, cmds = built
+
+    hinks = child.get("hinks") or {}
+    ip = child["ip"]
+    done = []
+    for i, req in enumerate(cmds):
+        try:
+            if req.kind == "read":
+                hb.read_data_mode(ip, blk=req.blk)
+                done.append({"index": i, "kind": req.kind, "ok": True,
+                             "note": req.note})
+                continue
+            if req.kind == "reboot":
+                # Fire-and-forget by design: the controller drops the
+                # connection as it restarts, and waiting on the reply would
+                # time out rather than tell us anything.
+                results = hb.fire_and_forget(ip, req.data)
+                done.append({"index": i, "kind": req.kind, "ok": True,
+                             "note": req.note, "sends": results})
+                continue
+            hb.command(ip, req.data, path=req.path)
+            done.append({"index": i, "kind": req.kind, "ok": True,
+                         "note": req.note})
+        except hb.HinksPixError as exc:
+            ps.log.warning("HinksPix %s apply stopped at request %d/%d (%s): %s",
+                           ip, i + 1, len(cmds), req.note, exc)
+            return jsonify(ok=False, err=str(exc), failedAt=i,
+                           failedNote=req.note, completed=done), 502
 
     with ps._lock:
         hinks["configPushedAt"] = int(time.time())
         hinks["configHash"] = _config_hash(hinks)
         ps._save("children", ps._children)
-    return jsonify(ok=True, steps=steps, configHash=hinks["configHash"])
-
-
-@bp.get("/api/hinkspix/<int:cid>/readback")
-def api_hinkspix_readback(cid):
-    """Read the controller's own view of its config for a side-by-side verify.
-
-    Returned raw: these CGIs emit comma-separated text whose key set is not
-    documented, so the SPA renders it rather than parsing speculatively.
-    """
-    child, err = _child(cid)
-    if err:
-        return err
-    return jsonify(ok=True, readback=hb.readback(child["ip"]))
+    ps.log.info("HinksPix %s config applied: %d requests, %d boards, %d universes",
+                ip, len(cmds), len(intended.board_ports),
+                len(intended.used_universes))
+    return jsonify(ok=True, requests=len(cmds), completed=done,
+                   configHash=hinks["configHash"],
+                   rebooted=True)
 
 
 # ── Fixtures from ports ──────────────────────────────────────────────────────
@@ -456,7 +623,11 @@ def render_hseq_frames(child, output_map, timeline_id, duration_s, step_ms=STEP_
                 n = int(string.get("leds") or 0)
                 if n <= 0:
                     continue
-                chunk = rgb[pos:pos + n * 3]
+                # Same expansion the live path does, from the same span the
+                # layout was built with — an RGBW port must advance 4 bytes per
+                # pixel in the .hseq exactly as it does in a universe.
+                chpp = int(spans[0]["channelsPerPixel"]) if spans else 3
+                chunk = to_wire_frame(rgb[pos:pos + n * 3], n, chpp)
                 pos += n * 3
                 cpos = 0
                 for span in spans:
@@ -579,12 +750,17 @@ def _deploy_worker(cid, child, cfg):
 
 @bp.get("/api/hinkspix/<int:cid>/deploy")
 def api_hinkspix_deploy_get(cid):
-    """Deploy config + last-deploy manifest + live progress."""
+    """Deploy config + last-deploy manifest + live progress.
+
+    ``gate`` lets the standalone view disable its TCP buttons with the same
+    wording the routes return, rather than letting them fail as a socket error.
+    """
     child, err = _child(cid)
     if err:
         return err
     cfg = _deploy_cfg().get(str(cid)) or {}
-    return jsonify(ok=True, config=cfg, progress=_deploy_state.get(cid, {}))
+    return jsonify(ok=True, config=cfg, progress=_deploy_state.get(cid, {}),
+                   gate=_gate_payload(child))
 
 
 @bp.put("/api/hinkspix/<int:cid>/deploy")
@@ -638,8 +814,10 @@ def api_hinkspix_deploy(cid):
     if child.get("status") != 1:
         reasons.append("controller is offline")
     if not hinks.get("uploadSupported"):
+        minimum = (hb.MIN_MCPU_UPLOAD_V3 if hinks.get("hardwareV3")
+                   else hb.MIN_MCPU_UPLOAD)
         reasons.append(f"firmware MCPU {hinks.get('mcpu')} is below the "
-                       f"{hb.MIN_MCPU_UPLOAD} required for network upload — "
+                       f"{minimum} required for network upload — "
                        f"update via SD card first")
     if hinks.get("configHash") != _config_hash(hinks):
         reasons.append("port config has not been pushed to the controller")
@@ -668,13 +846,20 @@ def api_hinkspix_mode(cid):
     if err:
         return err
     mode = str((request.get_json(silent=True) or {}).get("mode", "")).lower()
+    if mode not in ("live", "standalone"):
+        return jsonify(err="mode must be 'live' or 'standalone'"), 400
+    if mode == "standalone":
+        # Standalone is a raw-TCP mode packet. Live is the HTTP config path
+        # (#943 OP_MODE ETHERNET) and has no firmware floor of its own, so it
+        # stays reachable from a controller that cannot be managed over TCP.
+        gate = _upload_gate(child)
+        if gate:
+            return gate
     try:
         if mode == "live":
             hb.op_mode_ethernet(child["ip"])
         elif mode == "standalone":
             htcp.HinksPixTcp(child["ip"]).set_mode(htcp.MODE_MASTER)
-        else:
-            return jsonify(err="mode must be 'live' or 'standalone'"), 400
     except (hb.HinksPixError, htcp.HinksPixError) as exc:
         return jsonify(ok=False, err=str(exc)), 502
     return jsonify(ok=True, mode=mode)
@@ -691,6 +876,9 @@ def api_hinkspix_set_clock(cid):
     child, err = _child(cid)
     if err:
         return err
+    gate = _upload_gate(child)
+    if gate:
+        return gate
     try:
         htcp.HinksPixTcp(child["ip"]).set_time()
     except htcp.HinksPixError as exc:
