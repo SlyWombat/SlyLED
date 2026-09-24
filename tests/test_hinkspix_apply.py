@@ -151,6 +151,10 @@ class FakeHinksPix:
         self.requests = []           # (path, headers) for every request
         self.posts = 0
         self.fail = set()            # POST commands answered without "OK"
+        self.fail_once = set()       # ...the first time only, then the device
+                                     # stops refusing (a hiccup, not a wedge) —
+                                     # which is what lets a run that stopped
+                                     # part-way be seen to be recoverable
         self.fail_paths = set()      # CGI paths answered as an error object
         self.down_until = 0.0
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
@@ -236,6 +240,9 @@ class FakeHinksPix:
         except ValueError:
             raise _Reject("payload was not JSON")
         name = cmd.get("CMD")
+        if name in self.fail_once:
+            self.fail_once.discard(name)
+            return b'"FAILED"'                 # this one, and only this one
         if name in self.fail:
             return b'"FAILED"'                 # a refusal that is not a drop
         self.log.append(name)
@@ -326,7 +333,33 @@ def restore_now(c, backup_id, cid=CID):
     return r, r.get_json()
 
 
+def fresh_store():
+    """Start from an empty orchestrator store, whatever the data dir holds.
+
+    `parent_server` loads `children` and `fixtures` at import, so a second run
+    in the same SLYLED_DATA opens on the previous run's controllers — whose fake
+    HTTP servers are long gone, so the run addresses nothing and every device
+    read fails. The snapshots persist too, and a leftover one changes what
+    "newest first" lists. The documented invocation is
+    `SLYLED_DATA=$(mktemp -d)`, but a suite that only works in a fresh directory
+    goes red the moment a runner reuses one, and the failure looks like a
+    product bug rather than stale scratch.
+
+    The snapshot wipe is scoped to the two child ids this file drives, and names
+    its files through the module's own path helper: this never touches anything
+    it did not create.
+    """
+    parent_server._children[:] = []
+    parent_server._fixtures[:] = []
+    for cid in (CID, 99):
+        for b in oh._list_backups(cid):
+            path = oh._backup_path(cid, b["id"])
+            if path:
+                os.remove(path)
+
+
 def main():
+    fresh_store()
     print("snapshot — the device's own rows, verbatim (#945)")
     with app.test_client() as c, controller() as (dev, child):
         r = c.post(f"/api/hinkspix/{CID}/backups")
@@ -448,6 +481,78 @@ def main():
         last = c.get(f"/api/hinkspix/{CID}/apply").get_json().get("lastApply") or {}
         ok("the failure is recorded on the child, not only in the job state",
            last.get("ok") is False and last.get("backupId"), str(last))
+        ok("the run is reported as left part-way, not as a clean refusal",
+           state.get("partial") is True and state.get("accepted"),
+           f"partial={state.get('partial')} accepted={state.get('accepted')}")
+        ok("...with how much of the sequence had landed, out of how much",
+           0 < state["accepted"] < state.get("requests", 0),
+           f"{state.get('accepted')} of {state.get('requests')}")
+        ok("...and the universe table the push did write was put back",
+           dev.table == dev._factory_table(), str(dev.table[:1]))
+        ok("...while the port rows it never reached are the pre-push ones",
+           dev.ports[1] == factory_rows(1), str(dev.ports[1][:1]))
+        # A device that refuses *every* PCONFIG cannot be put back either, so
+        # the recovery gets as far as the same write and stops. That is the
+        # case the wizard still has to hand the operator a button for.
+        rec = state.get("restore") or {}
+        ok("the snapshot was replayed without waiting to be asked",
+           rec.get("backupId") == state.get("backupId") and rec.get("text"),
+           str(rec)[:200])
+        ok("...and when that replay fails the snapshot is still named to go back to",
+           rec.get("ok") is False and state.get("restoreBackupId"),
+           str(state.get("restoreBackupId")))
+
+    print("apply — a push that stopped part-way is put back on its own (#945 F1)")
+    with app.test_client() as c, controller() as (dev, child):
+        dev.fail_once = {"PCONFIG"}       # the controller hiccups on a port write
+        r, ab = apply_now(c)
+        state = ab.get("state") or {}
+        rec = state.get("restore") or {}
+        ok("the push is reported as having landed part-way",
+           state.get("ok") is False and state.get("partial") is True,
+           f"partial={state.get('partial')} ok={state.get('ok')}")
+        ok("the snapshot taken before the write was replayed by itself",
+           rec.get("ok") is True and rec.get("verify", {}).get("ok") is True,
+           str(rec)[:300])
+        ok("the controller's port rows are the pre-push ones again",
+           dev.ports[1] == factory_rows(1) and dev.ports[2] == factory_rows(17),
+           str(dev.ports[1][:1]))
+        ok("...and its universe table too, row for row",
+           dev.table == dev._factory_table(), str(dev.table[:1]))
+        ok("the failure that caused it is still what is reported",
+           "PCONFIG" in (state.get("err") or ""), str(state.get("err"))[:120])
+        ok("the failure is reported where the push stopped, not where the "
+           "recovery did",
+           state.get("step") == (state.get("lastApply") or {}).get("failedAt"),
+           f"step={state.get('step')} recorded at "
+           f"{(state.get('lastApply') or {}).get('failedAt')}")
+        ok("the recovery says what it did, in the operator's terms",
+           "back on the controller" in (rec.get("text") or ""), str(rec.get("text")))
+        ok("the run is not claimed to have succeeded",
+           (state.get("lastApply") or {}).get("ok") is False
+           and (state.get("lastApply") or {}).get("restore", {}).get("ok") is True,
+           str(state.get("lastApply"))[:200])
+        st = c.get(f"/api/hinkspix/{CID}/apply").get_json()
+        ok("the badge stops claiming the device holds this config",
+           st.get("inSync") is False, str(st.get("inSync")))
+        ok("the record on the child carries the recovery, not just the job state",
+           ((st.get("lastApply") or {}).get("restore") or {}).get("ok") is True,
+           str(st.get("lastApply"))[:200])
+
+    print("apply — a push refused before its first write has nothing to undo")
+    with app.test_client() as c, controller() as (dev, child):
+        dev.fail = {"DATA_MODE"}          # the very first write is refused
+        r, ab = apply_now(c)
+        state = ab.get("state") or {}
+        ok("a failure before any write is not called part-way",
+           state.get("partial") is False, str(state.get("partial")))
+        ok("no recovery is attempted, so the controller is not rebooted for nothing",
+           state.get("restore") is None and state.get("restoreBackupId") is None
+           and "OP_MODE" not in dev.log, str(state.get("restore")))
+        ok("...and the device holds exactly what it held before",
+           dev.ports[1] == factory_rows(1) and dev.table == dev._factory_table())
+        ok("the snapshot is still named, so an operator can go back deliberately",
+           bool(state.get("backupId")), str(state.get("backupId")))
 
     print("restore — putting a snapshot back (#945)")
     with app.test_client() as c, controller() as (dev, child):
@@ -524,6 +629,38 @@ def main():
                r.status_code == 200
                and (ab.get("state") or {}).get("phase") == "done",
                str(ab)[:200])
+        finally:
+            hc.validate = real_validate
+
+        # The two levels on either side of a warning (#945 F2, F3).
+        hc.validate = lambda *a, **kw: [
+            hc.Finding("error", "empty_config",
+                       "Every port is disabled, and the controller refuses to "
+                       "be told about no universes.")]
+        try:
+            r, gated = apply_now(c, ack=["empty_config"])
+            ok("an error blocks the push even when its code is acknowledged",
+               r.status_code == 409 and gated.get("ok") is False,
+               str(gated)[:200])
+        finally:
+            hc.validate = real_validate
+
+        hc.validate = lambda *a, **kw: [
+            hc.Finding("info", "reboot_required",
+                       "Applying reboots the controller.")]
+        try:
+            # An info-level finding is a statement about every push, not a
+            # decision — as a warning it is a box to tick every time, which is
+            # how an acknowledgement gate turns into a click-through.
+            r, ab = apply_now(c, ack=[])
+            ok("an informational finding never blocks, acked or not",
+               r.status_code == 200
+               and (ab.get("state") or {}).get("phase") == "done",
+               str(ab)[:200])
+            plan = c.get(f"/api/hinkspix/{CID}/plan").get_json()
+            ok("...and it is still reported, so the operator is still told",
+               [f["code"] for f in (plan.get("findings") or [])]
+               == ["reboot_required"], str(plan.get("findings"))[:200])
         finally:
             hc.validate = real_validate
 

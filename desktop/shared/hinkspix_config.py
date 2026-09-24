@@ -1351,11 +1351,22 @@ def defaults_from_fixtures(child, fixtures, caps=None):
 class Finding:
     """One statement about a configuration, in the operator's own words.
 
-    ``level`` is ``"error"`` — Apply is refused — or ``"warn"``, which needs an
-    acknowledgement. ``code`` is a stable slug: tests key on it and the SPA
-    groups by it, so the wording of ``text`` can change without breaking
-    anything. ``port`` is set when the finding is about one port, so the editor
-    can mark that row rather than printing a list.
+    ``level`` is one of three, and the difference is what Apply does with it:
+
+    - ``"error"`` — Apply is refused, and there is no acknowledgement that gets
+      past it. Reserved for configs the controller itself will not take, so the
+      gate cannot be talked around.
+    - ``"warn"`` — Apply is refused until the request acknowledges this code.
+      For a decision that is the operator's to make, once, having read it.
+    - ``"info"`` — never blocks. For something that is true of every push (a
+      reboot) rather than a decision: as a warning it becomes a box to tick on
+      every push, which is how an acknowledgement gate degrades into a
+      click-through (#945 F3).
+
+    ``code`` is a stable slug: tests key on it and the SPA groups by it, so the
+    wording of ``text`` can change without breaking anything. ``port`` is set
+    when the finding is about one port, so the editor can mark that row rather
+    than printing a list.
     """
 
     __slots__ = ("level", "code", "port", "text")
@@ -1444,10 +1455,18 @@ def validate(child, intended=None, probe=None, fixtures=None,
             f"accepts {'/'.join(p.upper() for p in offered)}."))
 
     if not any(used(p) for p in ports):
+        # An **error**, not the warning #946 listed. A bench run on the MS_160
+        # unit settled it: with no ports in use `build_commands` ends the
+        # sequence with `{"CMD":"BD_INFO","NumU":"0"}` and the controller
+        # answers ERROR, so this config can never be applied. Acknowledging a
+        # warning would only get the operator past the gate and into a push that
+        # writes the (empty) universe table and then dies — the half-written
+        # device this whole section exists to prevent (#945 F2).
         out.append(Finding(
-            "warn", "empty_config",
-            "Every port is disabled, so this upload blanks the output. The "
-            "controller will hold a configuration that drives nothing."))
+            "error", "empty_config",
+            "Every port is disabled, so this configuration uses no universes "
+            "and the controller refuses to be told about none. Enable at least "
+            "one port with pixels on it before applying."))
 
     # ── Per-port ─────────────────────────────────────────────────────────────
     chpp_of = {}
@@ -1609,8 +1628,13 @@ def validate(child, intended=None, probe=None, fixtures=None,
                 f"until these agree."))
 
     if intended is not None:
+        # **info**, not the warning #946 listed: this is a statement about what
+        # a push costs, and it is true of every push, so as a warning it was a
+        # box the operator ticked on each one — which is how an acknowledgement
+        # gate turns into a click-through (#945 F3). It is said before the
+        # button in the wizard's confirm step, where it is still read.
         out.append(Finding(
-            "warn", "reboot_required",
+            "info", "reboot_required",
             "Applying reboots the controller. The pixels go dark for up to "
             "90 seconds while it comes back on the new configuration."))
     return out

@@ -444,9 +444,24 @@ def main():
     section("Accept — bodies that are not proposals")
     r = c.post("/api/hinkspix/7/import/xlights/accept", json={})
     ok("no proposal at all is a 400",
-       r.status_code == 400 and "proposal must be" in r.get_json()["err"])
+       r.status_code == 400
+       and "proposal" in r.get_json()["err"]
+       and "verbatim" in r.get_json()["err"],
+       r.get_json())
     r = c.post("/api/hinkspix/7/import/xlights/accept", json={"proposal": {}})
     ok("a proposal with no hinks block is a 400", r.status_code == 400)
+    # The preview response is self-describing, so posting it back unwrapped is
+    # a caller doing the obvious thing rather than a caller making a mistake.
+    # Two nesting levels and one right answer is a trap with no purpose (#947 QA).
+    fresh_child()
+    r = c.post("/api/hinkspix/7/import/xlights/accept",
+               json=dict(preview, createFixtures=True))
+    ok("the preview response itself is an acceptable body",
+       r.status_code == 200 and 17 in port_rows(r.get_json()["hinks"]),
+       r.get_json())
+    ok("...and it is written exactly as the wrapped form writes it",
+       r.get_json()["created"] and len(parent_server._fixtures) == 1,
+       str(r.get_json().get("created")))
     was = copy.deepcopy(parent_server._children[0]["hinks"])
     r = c.post("/api/hinkspix/7/import/xlights/accept",
                json={"proposal": {"hinks": {"ports": []}}})

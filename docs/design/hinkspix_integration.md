@@ -342,10 +342,27 @@ rather than recreating them. This is a documented limitation of the controller, 
 `restore_commands`' warnings before the operator confirms — not hidden. E131 blocks the read
 missed are named the same way and left as they are, never blanked.
 
-**A failed push is never resumed.** The sequence stops at the failed request (every later
-request would be written against a device in an unknown state) and reports `failedAt` plus the
-snapshot id. The way forward is `POST /restore`, not a retry — the wizard's failure panel
-carries the Restore button.
+**A failed push is never resumed.** The sequence stops at the failed request — every later
+request would be written against a device in an unknown state — and reports `failedAt` plus the
+snapshot id. It is not retried from where it stopped: a retry against an unknown device is the
+half-written state this whole step exists to prevent.
+
+**A push that stopped part-way is put back on its own.** `accepted` is the number of requests
+the controller acknowledged before the failure and `partial` says whether one of them was a
+*write* — a request that landed may have been a read, which changes nothing, and the recovery
+reboots the controller, so only a write justifies that. When `partial` is true, `_recover_partial`
+replays the snapshot through the same `_run_commands` loop the push used, then waits for the
+device and verifies, and the outcome lands in the failure record as `restore` (`ok`, `text`,
+`verify`). The job state then reports the *push's* failing step, not the recovery's last one, so
+"stopped at step 71" stays true. A recovery that cannot be completed does not raise — it is
+already inside another failure's handler — and leaves the snapshot id for
+`POST /restore`; the wizard shows the button only in that case, and after a failure that wrote
+nothing (`partial: false`) it shows neither a button nor a claim of damage. A failed *restore* is
+deliberately not recovered: that run's snapshot is the state the operator was trying to leave.
+
+Bench finding (#945 F1, MS_160, 2026-09-23): an apply was accepted for all 67 E131 blocks and
+then failed on `BD_INFO`, leaving the unit holding one config's universe table and another's
+port table, with nothing offered to undo it. Every element of this section is that report.
 
 **Restore is a job too**, and it snapshots first, so a restore is itself undoable. Its preview
 (`GET /restore?backupId=…`) reports the summary, the request count and the warnings the
@@ -361,12 +378,32 @@ sent", with the differing rows listed. A device that never comes back reports
 since the last successful push. It is not a claim about the device. A restore clears it
 deliberately — a restored device holds a state this orchestrator does not describe.
 
-**Findings.** Every `error` blocks the push outright; every `warn` blocks until the request
-names its code in `ack`. The gate is enforced server-side (`_blocking_findings` → `409`), and
-the SPA renders the same list from `GET /plan` so the two can never disagree about what is
-refused. `code` is a stable slug (`text` may be reworded freely) and `port` marks the row the
-finding is about, so #946's per-port guidance can key on both. The split is in place here; the
-guidance table itself — per-port channel caps, board-type rules, fixture binding — is #946.
+**Findings.** Three levels, and the difference is what Apply does with each:
+
+| level | Apply | for |
+|---|---|---|
+| `error` | refused, and no acknowledgement gets past it | configs the controller itself will not take |
+| `warn` | refused until the request names the code in `ack` | a decision that is the operator's to make, once |
+| `info` | never blocks | something true of every push (the reboot) |
+
+The gate is enforced server-side (`_blocking_findings` → `409`), and the SPA mirrors it from
+`GET /plan` so the two can never disagree about what is refused. `code` is a stable slug (`text`
+may be reworded freely) and `port` marks the row the finding is about, so #946's per-port
+guidance can key on both.
+
+Two of the levels were settled by the bench run rather than by taste (#945 F2/F3):
+
+- **`empty_config` is an `error`.** #946 listed it as a warning. With every port disabled
+  `build_commands` ends the sequence with `{"CMD":"BD_INFO","NumU":"0"}`, the controller answers
+  `ERROR`, and by then it has already had its universe table wiped — so there is no configuration
+  to accept here, only one to refuse. A tick box in front of a request that cannot succeed is
+  worse than a refusal: it makes the operator complicit in it.
+- **`reboot_required` is `info`.** As a warning it was a box ticked on every push, which is how an
+  acknowledgement gate degrades into a click-through. Nothing about it is a decision.
+
+`empty_config` is also why the universe count and the port table must agree: `NumU` is
+`len(used universes)`, and DMX-out lives outside the universe table, so "no port in use" and
+"`NumU` 0" are the same statement.
 
 **Poll lifetime.** `_hwPollTick` stops when the wizard is no longer the visible modal
 (`_hwOpen()` tests visibility *and* presence, because `closeModal()` only sets
@@ -584,7 +621,7 @@ refused row the operator can see — never as a plausible-looking port table.
 | Route | Body | Does |
 |---|---|---|
 | `POST /api/hinkspix/import/xlights` | `{showFolder, cid?, controller?}` — read by the orchestrator, so a Windows path and its `/mnt/…` twin both work — or a multipart form with the two XML files | reads, resolves, proposes. **Stores nothing, opens no socket to the unit** |
-| `POST /api/hinkspix/<cid>/import/xlights/accept` | `{proposal, createFixtures}` | writes the port table, then a fixture per accepted model |
+| `POST /api/hinkspix/<cid>/import/xlights/accept` | `{proposal, createFixtures}` — or the preview response itself, unwrapped — | writes the port table, then a fixture per accepted model |
 
 The preview returns the proposal (`controller`, `universes`, `hinks`, `fixtures`, `models`,
 `warnings`), plus three things the editor draws: `source` (what was read), `diff` — `added` /
@@ -596,6 +633,12 @@ not be applied by default (the operator would have to find the one bad row by ha
 never un-accept a row. Ports beyond the target model's output count are warnings here and errors at
 the accept, which is the same ordering as a hand-typed edit: the editor lets you type anything, and
 saving is what checks it.
+
+**Either nesting is accepted.** `_proposal_body` takes `{proposal, createFixtures}` and the preview
+response posted back verbatim, because the preview is self-describing — it carries `hinks` and
+`models` itself. Two nesting levels with one right answer is a trap with no purpose, and the most
+obvious call a caller can make (hand back what you were given) is the one it would have punished
+(#947 QA).
 
 **An import is held to the editor's own rules.** `_apply_config_body` is the PUT's body extracted
 into one function; the accept calls *it*, so base-universe range, protocol list, DMX-out,
@@ -906,11 +949,11 @@ Offline first, all under the `unit` job in `.github/workflows/python-tests.yml`
 | `tests/test_pixel_renderer_parity.py` | Node runs `spa/js/pixel_renderer.js` on the same corpus (pattern: `test_fixture_shortcuts.py`; skips without node) |
 | `tests/test_hinkspix_offline.py` | static: `struct.calcsize` = 608/34/26/22, 18-byte header literal, `TotalSize = 28 + DataSize`, FAT word round-trip, `.hseq` header bytes at every documented offset, `.ply`/`.sched` exact text, schedule validation, short-name rules. **Also the in-process fake TCP controller** (parses chunks, reassembles files, replies `\|FOK`, injects failure/timeouts): reassembled bytes, close-packet name/DTTM and its `DataSize 0` field, the exact-multiple flush chunk, time-packet fields, mode packet, errors surfaced |
 | `tests/test_hinkspix_wire.py` | HTTP wire protocol (#943): GET + headers, quoted `"OK"`, `BLK` board select, gzip replies, the 1-based universe table, per-port start channels, full-board `PCONFIG`, `UnPack` gating, reboot-last, DDP. **Light self-check only** — it asserts the request shape and the command sequence. Standing up a gated in-process `http.server` fake, replaying golden MS_160 captures, and wiring the hinkspix suites into this job are deferred to the QA lane |
-| `tests/test_hinkspix_apply.py` | (#945) the push lifecycle against a **stateful in-process fake** that stores what it is told: the snapshot before the first write and the two invariants that matter — nothing is written to a controller that cannot be read, and a failed request stops the sequence, leaves the reboot unsent and names the snapshot to restore. Plus restore round-trip (rows and table back, `inSync` cleared), restore refusals, the findings gate + `ack`, one-job-at-a-time, and `BACKUP_KEEP` retention per device |
-| `tests/test_hinkspix_config_spa.py` | (#945) Playwright against **stubbed `fetch`** — the panel only: the five-step flow, the editor opening *on top of* the wizard and `closeModal()` returning to it, the acknowledgement gate, the apply poll stopping when the job ends and when the modal closes. Every recorded request must be an orchestrator path: a wizard that reached the controller from the browser would be a second, unverified configuration path |
+| `tests/test_hinkspix_apply.py` | (#945) the push lifecycle against a **stateful in-process fake** that stores what it is told: the snapshot before the first write and the two invariants that matter — nothing is written to a controller that cannot be read, and a failed request stops the sequence, leaves the reboot unsent and names the snapshot to restore. Plus **the failure's own arithmetic**: `partial`/`accepted`/`requests`, the automatic replay of the snapshot after a failure that landed writes (and that a recovery which cannot complete is reported rather than raised, with the snapshot left for `POST /restore`), no recovery at all after a failure that wrote nothing, and the reported step staying the push's. Plus restore round-trip (rows and table back, `inSync` cleared), restore refusals, the findings gate — an error is refused even when its code is acknowledged, an info never blocks and is still reported — one-job-at-a-time, and `BACKUP_KEEP` retention per device |
+| `tests/test_hinkspix_config_spa.py` | (#945) Playwright against **stubbed `fetch`** — the panel only: the five-step flow, the editor opening *on top of* the wizard and `closeModal()` returning to it, the three finding levels as the operator sees them (an error is `Blocked`, a note has no box and does not disable the push), the end state of a push that stopped part-way (the numbers, the recovery's own words, no Restore button when nothing is left to repair, and the button when the recovery failed), the apply poll stopping when the job ends and when the modal closes. Every recorded request must be an orchestrator path: a wizard that reached the controller from the browser would be a second, unverified configuration path |
 | `tests/test_hinkspix_smart.py` | (#946) the caps table and `caps_key` for every witness (Controller E / Type 8 / MaxU 65-402-684 / V3 / un-probed); port → board/bank/sub-port; five `calculate_smart_receivers` cases pinned to `HinksPix.cpp:860-918` (per-sub-port slots, a chain on one output, the 16-port group of four, the 16AC's `/3` start pixel, a non-Long_Range board skipped); the `SCONFIG` payload and its place between `BD_INFO` and `PCONFIG`, with no request at all for an empty bank; a five-board PRO V3 at port 80; every `validate` code and its level; the PUT/GET contract (`caps`, caps-filtered protocols, `startNulls` + its `nullPixels` alias, receiver id/type accept-reject, the model's port ceiling) and `defaults-from-fixtures` storing nothing. The bridge's device entry points are replaced with ones that raise for the whole file, so the suite cannot reach a controller |
 | `tests/test_hinkspix_xlights_import.py` | (#947) the pure importer against the operator's real show folder (`tests/fixtures/xlights_home_eves/`): the `BaudRate`-is-the-universe quirk, non-contiguous and mixed-width universe blocks, `FullxLightsControl` off, every `StartChannel` form with a cycle guard, the per-output rule (`parm1 × parm2`, one string per output) for every `DisplayAs`, `StringType` → channels per node, a `parm3` outside `{0,1}`, the unknown-protocol fallback, and the two derived-not-captured shapes (Custom header, chain offsets) failing closed. No socket is opened — the module has none to open |
-| `tests/test_hinkspix_xlights_routes.py` | (#947) the two routes through Flask with **the wire shut** (both transports patched to raise for the whole file): path spellings incl. a Windows path, its WSL twin and a pasted *file* path; uploads; the multi-controller chooser; the targeted preview and its diff/notes; the accept happy path, the idempotent re-accept, an unticked row, a port already bound, `createFixtures` off, and five refusals that leave the stored config byte-identical to the editor's own — the parity that makes an import safe. Plus a monkeypatched mid-write failure: config, fixtures and routes all rolled back |
+| `tests/test_hinkspix_xlights_routes.py` | (#947) the two routes through Flask with **the wire shut** (both transports patched to raise for the whole file): path spellings incl. a Windows path, its WSL twin and a pasted *file* path; uploads; the multi-controller chooser; the targeted preview and its diff/notes; the accept happy path, the preview response posted back **unwrapped**, the idempotent re-accept, an unticked row, a port already bound, `createFixtures` off, and five refusals that leave the stored config byte-identical to the editor's own — the parity that makes an import safe. Plus a monkeypatched mid-write failure: config, fixtures and routes all rolled back |
 | `tests/test_hinkspix_xlights_spa.py` | (#947) Playwright against **stubbed `fetch`** — the panel only, with the canned bodies produced by calling the real routes in-process rather than written by hand: the modal over the port table, the folder box and its upload fallback, the controller chooser, the proposal rendered as a diff, the tick state that travels back as `accepted`, the result screen, and re-reading after an apply. Every recorded request must be an orchestrator path, never the unit's address |
 | `tests/test_hinkspix_device.py` | Flask: add device with mocked probe; port-table CRUD + collision 400s; fixtures-from-ports; strings `port` validation; universeRoutes upsert; `_is_performer` guards (no RUNNER_GO/LOAD_STEP/PING to hinkspix); sweep marks offline via HTTP probe; the #944 firmware gate on `set-clock`/`mode` (asserted by capturing that no connection is attempted) |
 | `tests/test_hinkspix_output.py` | show start with a baked timeline → after one loop tick `peek_universe(u).get_data()` holds renderer output at the right offsets; LED-only show no longer idles; blackout on stop; master-brightness scaling on sACN pixel universes |
@@ -927,11 +970,24 @@ playback; confirm items 1-5 and 7 of §8 and record results in `docs/live-test-s
 ## 10. Implementation issues (dependency-ordered, complete PRs)
 
 **Status as of 2026-09-23: #938, #939, #940, #941, #943, #944, #945, #946 and #947 are
-implemented.** The 2026-09-23 bench session (§8b) found the wire protocol broken in
+implemented**, and the bench QA of #945-#947 on the MS_160 unit is folded back in: the
+happy path ran 18/18 on the real controller, and its three findings are in code — a push
+that stopped part-way now replays its snapshot by itself (§4.6), `empty_config` is an
+`error` rather than a warning to click past, and `reboot_required` is a note (§4.6). The
+2026-09-23 bench session (§8b) found the wire protocol broken in
 several places, so #943-#947 were filed and worked in order — the write path first
 (#943, #944, #945), then guidance (#946) and import (§4.8). What remains for the QA lane is
 the harness work §9 defers: the shared gated `http.server` fake, replaying golden MS_160
 captures, and wiring the hinkspix suites into `python-tests.yml`.
+
+One thing that wiring needs and now has: the three suites that keep state in the data dir
+(`test_hinkspix_device`, `test_hinkspix_smart`, `test_hinkspix_apply`) start by clearing the
+orchestrator store. `parent_server` loads `children`/`fixtures` from `SLYLED_DATA` at import, so
+a *second* run in the same directory opened on the previous run's controllers — whose fake
+servers are gone — and failed in ways that read like product bugs (a device that cannot be read,
+a port that refuses to bind, an empty `created` list). They were only ever run with
+`SLYLED_DATA=$(mktemp -d)`; a runner that reuses a directory would have made the job red for a
+reason that has nothing to do with the code under test.
 Deviations from this plan, and why, are recorded in each commit message. The
 notable ones: the 64-segment bake cap moved from #938 to #939 (bake_timeline had
 no `children` parameter), and the standalone scheduling UI lives in the HinksPix

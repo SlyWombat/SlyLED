@@ -22,9 +22,13 @@
 //  * Every push snapshots the controller first, and if the snapshot cannot be
 //    taken nothing is written at all. A controller that cannot be read is one
 //    that cannot be put back.
-//  * A failed push stops where it failed and names the snapshot to restore. It
-//    is never resumed or retried: a half-written controller has no description
-//    to reason from, so the way forward is putting back a known state.
+//  * A failed push stops where it failed, is never resumed or retried, and
+//    names the snapshot to put back — a half-written controller has no
+//    description to reason from, so the way forward is a known state. When it
+//    stopped *after* the controller had accepted writes, the server puts that
+//    snapshot back on its own and this step reports what the recovery did; what
+//    it was left holding, and by which request, is in the failure block either
+//    way.
 //  * "In sync" means the stored config has not changed since the last push. It
 //    is not a claim about the device, and a restore clears it — restoring a
 //    snapshot puts the device into a state this orchestrator does not describe.
@@ -35,11 +39,13 @@ var _hw = {cid: null, step: 1, device: null, plan: null, job: null,
 var _HW_STEPS = ['Read', 'Edit', 'Review', 'Apply', 'Verify'];
 
 var _HW_PHASE = {start: 'Starting', backup: 'Snapshotting the controller',
-                 upload: 'Writing', reboot: 'Waiting for the controller to reboot',
+                 upload: 'Writing', recover: 'Putting the snapshot back',
+                 reboot: 'Waiting for the controller to reboot',
                  verify: 'Reading the configuration back', done: 'Done',
                  failed: 'Failed'};
 
-// Where each phase sits on the progress bar. `upload` is interpolated by step.
+// Where each phase sits on the progress bar. Any phase not listed here — and
+// that is `upload` and `recover` — is interpolated by step instead.
 var _HW_PHASE_PCT = {start: 3, backup: 10, reboot: 72, verify: 90, done: 100,
                      failed: 100};
 
@@ -133,7 +139,10 @@ function _hwSyncBadge() {
   var sync = _hw.job.inSync;
   var last = _hw.job.lastApply;
   var text = sync ? 'configuration in sync' : 'configuration differs from the device';
-  if (last && !last.ok) text = 'last push failed';
+  if (last && !last.ok) {
+    text = last.partial ? 'last push failed part-way' : 'last push failed';
+    if (last.partial && (last.restore || {}).ok) text += ' (snapshot restored)';
+  }
   return '<span style="align-self:center;margin-left:auto;padding:.2em .6em;'
     + 'border-radius:10px;background:' + (sync ? '#065f46' : '#7c2d12') + ';'
     + 'color:#fff;font-size:.85em">' + text + '</span>';
@@ -352,13 +361,18 @@ function _hwRequestLine(r, i) {
 function _hwFindings(findings) {
   var h = '<div style="font-size:.95em">';
   findings.forEach(function (f) {
-    var bad = f.level === 'error';
+    // Three levels, and only two of them ask anything of the operator: an
+    // error cannot be passed at all, a warning needs a tick, and an info is
+    // something true of every push (the reboot) that would otherwise become a
+    // box ticked without reading (#945 F3).
+    var bad = f.level === 'error', info = f.level === 'info';
     h += '<div style="margin:.3em 0;padding:.4em .6em;border-radius:6px;background:'
-      + (bad ? '#511' : '#421') + '">'
-      + '<b>' + (bad ? 'Blocked' : 'Needs acknowledgement') + '</b>'
+      + (bad ? '#511' : (info ? '#123' : '#421')) + '">'
+      + '<b>' + (bad ? 'Blocked' : (info ? 'Note' : 'Needs acknowledgement'))
+      + '</b>'
       + (f.port != null ? (' &middot; port ' + f.port) : '')
       + ' &mdash; ' + escapeHtml(f.text);
-    if (!bad) {
+    if (!bad && !info) {
       h += '<label style="display:block;margin-top:.3em"><input type="checkbox" '
         + (_hw.ack[f.code] ? 'checked' : '') + ' onchange="_hwAck(\''
         + escapeHtml(f.code) + '\',this.checked)"> I have read this</label>';
@@ -371,7 +385,10 @@ function _hwFindings(findings) {
 function _hwBlocking() {
   var findings = (_hw.plan && _hw.plan.findings) || [];
   return findings.filter(function (f) {
-    return f.level === 'error' || !_hw.ack[f.code];
+    // Mirrors `_blocking_findings` on the server: an error is never passable
+    // and a warning blocks until ticked. Anything else — info — never blocks.
+    return f.level === 'error'
+      || (f.level === 'warn' && !_hw.ack[f.code]);
   });
 }
 
@@ -515,15 +532,44 @@ function _hwApplyStep() {
   }
 
   if (st.phase === 'failed') {
+    // What the controller was left holding, in the two cases that could not be
+    // more different: a push that stopped before its first write left the
+    // device exactly as it was, and one that stopped at step 40 of 68 left it
+    // holding half of each config (#945 F1).
+    var accepted = st.accepted || 0, total = st.requests || 0;
+    var recover = st.restore;
+    // `partial` is the server's own verdict on whether a *write* landed — a
+    // request that was accepted before the failure may have been a read, and
+    // saying "left part-way" about one of those would be a false alarm.
+    var partial = st.partial === undefined ? accepted > 0 : !!st.partial;
     h += '<div style="margin-top:.8em;padding:.6em .8em;border-radius:6px;background:#511">'
       + 'The push stopped: ' + escapeHtml(st.err || 'unknown error')
       + (st.step ? (' (step ' + st.step + ')') : '')
-      + '<div style="color:#fa6;margin-top:.3em">The controller was left part-way. '
-      + 'It is not retried automatically — put the snapshot back instead.</div>'
-      + (st.backupId ? ('<button class="btn" style="background:#654;color:#fff;'
-          + 'margin-top:.4em" onclick="_hwRestore(\'' + escapeHtml(st.backupId)
-          + '\')">Restore ' + escapeHtml(st.backupId) + '</button>') : '')
-      + '</div>';
+      + (partial
+          ? ('<div style="color:#fa6;margin-top:.3em">' + accepted + ' of '
+             + total + ' request(s) had been accepted, so the controller was '
+             + 'left part-way.</div>')
+          : ('<div style="color:#9ab;margin-top:.3em">Nothing had been written '
+             + 'yet — the controller still holds what it held before.</div>'));
+    if (recover) {
+      h += '<div style="margin-top:.3em;color:' + (recover.ok ? '#6d6' : '#fa6') + '">'
+        + escapeHtml(String(recover.text || ''))
+        + (recover.ok ? '' : ' — the first step lists the snapshots to go back to.')
+        + '</div>';
+    } else if (partial && st.backupId) {
+      h += '<div style="color:#fa6;margin-top:.3em">The snapshot was not put '
+        + 'back automatically.</div>';
+    }
+    // Only offered where there is something to undo. A push refused before its
+    // first write needs no repair, and a Restore button beside "nothing had
+    // been written" reads as though it does — the snapshot list below is there
+    // for the operator who wants to put it back anyway.
+    if ((partial || recover) && (!recover || !recover.ok) && st.backupId) {
+      h += '<button class="btn" style="background:#654;color:#fff;margin-top:.4em" '
+        + 'onclick="_hwRestore(\'' + escapeHtml(st.backupId) + '\')">Restore '
+        + escapeHtml(st.backupId) + '</button>';
+    }
+    h += '</div>';
   }
 
   h += '<div style="margin-top:1em"><button class="btn" style="background:#335;color:#fff" '
@@ -574,6 +620,18 @@ function _hwVerifyStep() {
       + escapeHtml(_hwWhen(last.at)) + ' &middot; '
       + (last.ok ? 'reported success' : 'reported failure')
       + (last.requests ? (' &middot; ' + last.requests + ' requests') : '')
+      // A run that stopped part-way is not the same end state as one that was
+      // refused before writing, and what happened to the snapshot is the part
+      // of it an operator reading this screen needs. A run that failed clean
+      // says nothing extra here.
+      + (last.ok || !last.partial ? ''
+          : (last.restore
+              ? (last.restore.ok
+                  ? ' &middot; ' + (last.accepted || 0) + ' accepted, then the '
+                    + 'snapshot was put back'
+                  : ' &middot; ' + (last.accepted || 0) + ' accepted, and the '
+                    + 'snapshot could <b>not</b> be put back')
+              : ' &middot; ' + (last.accepted || 0) + ' accepted, left part-way'))
       + (last.backupId ? (' &middot; snapshot ' + escapeHtml(last.backupId)) : '')
       + '</div>';
   }

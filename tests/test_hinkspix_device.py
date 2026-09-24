@@ -73,7 +73,22 @@ def make_child(cid=7, base=100, ports=None, dmx_out=None, ip="192.168.10.6"):
     }
 
 
+def fresh_store():
+    """Start from an empty orchestrator store, whatever the data dir holds.
+
+    `parent_server` loads `children` and `fixtures` at import, so a second run
+    in the same SLYLED_DATA opens on the previous run's controllers and
+    fixtures — a port already bound to a fixture is reported as *skipped*, not
+    created, and the run then reads an empty `created` list. The documented
+    invocation is `SLYLED_DATA=$(mktemp -d)`, but a suite that only works in a
+    fresh directory goes red the moment a runner reuses one.
+    """
+    parent_server._children[:] = []
+    parent_server._fixtures[:] = []
+
+
 def main():
+    fresh_store()
     print("PixelOutputMap — universe layout")
     m = PixelOutputMap.build(make_child())
     ok("port 1 (100px) takes one universe at baseUniverse",

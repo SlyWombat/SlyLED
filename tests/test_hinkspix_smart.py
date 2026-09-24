@@ -491,8 +491,21 @@ def test_findings():
        and not hasattr(hb, "MIN_MCPU_SMART"))
 
     c = make_child(ports=[port(1, enabled=False, leds=0)])
-    ok("a config that enables nothing warns rather than blocks",
-       levels(c) == [("empty_config", "warn")], str(levels(c)))
+    # #946 called this a warning, so it had to be ticked past on every push.
+    # The bench run settled it: with no port in use the sequence ends in
+    # {"CMD":"BD_INFO","NumU":"0"}, the controller answers ERROR, and by then it
+    # has already had its universe table wiped. There is no configuration to
+    # accept here, only one to refuse.
+    ok("a config that enables nothing is an error, not an acknowledgement",
+       levels(c) == [("empty_config", "error")], str(levels(c)))
+    ok("...and the finding says why it is an error rather than a nudge",
+       "refuses" in " ".join(f.text for f in hc.validate(c)
+                             if f.code == "empty_config"),
+       str([f.text for f in hc.validate(c) if f.code == "empty_config"]))
+    ok("...and it is raised the moment one port comes back",
+       "empty_config" not in codes(make_child(ports=[port(1, enabled=False,
+                                                          leds=0),
+                                                     port(2)])))
 
     section("...and the ones that need the fixtures bound to the controller")
     fix = [{"id": 1, "name": "Eaves", "childId": CID,
@@ -528,9 +541,14 @@ def test_findings():
     section("...and what applying costs, said before it happens")
     c = make_child()
     intended = hc.intended_config(c, PixelOutputMap.build(c), max_universes=402)
-    ok("with a plan in hand, the reboot is stated as a warning",
-       ("reboot_required", "warn") in levels(c, intended=intended),
+    # The reboot is a fact about applying, not a decision the operator makes.
+    # #946 made it a warning, so every push carried a box to tick — which is
+    # how an acknowledgement gate turns into a click-through. It is a note.
+    ok("with a plan in hand, the reboot is stated as a note",
+       ("reboot_required", "info") in levels(c, intended=intended),
        str(levels(c, intended=intended)))
+    ok("...and it is not asked for before there is a plan to apply",
+       "reboot_required" not in codes(c), str(codes(c)))
     ok("...and nothing in that list blocks the push",
        not [f for f in hc.validate(c, intended=intended) if f.level == "error"],
        str(levels(c, intended=intended)))
@@ -758,7 +776,22 @@ def test_fixture_port_validation():
     parent_server._children.remove(child)
 
 
+def fresh_store():
+    """Start from an empty orchestrator store, whatever the data dir holds.
+
+    `parent_server` loads `children` and `fixtures` at import, so a second run
+    in the same SLYLED_DATA opens on the previous run's controllers and fixture
+    bindings — and a port that already carries the fixture this suite is about
+    to bind is simply already bound, so the refusal it asserts never happens.
+    The documented invocation is `SLYLED_DATA=$(mktemp -d)`; clearing the store
+    is what keeps a reused directory from turning that into a red suite.
+    """
+    parent_server._children[:] = []
+    parent_server._fixtures[:] = []
+
+
 def main():
+    fresh_store()
     test_caps_table()
     test_caps_key()
     test_board_decomposition()

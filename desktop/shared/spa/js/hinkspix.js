@@ -359,28 +359,35 @@ function _hpSay(msg, good) {
   if (el) el.innerHTML = '<span style="color:' + (good ? '#6d6' : '#f88') + '">' + escapeHtml(msg) + '</span>';
 }
 
-// The findings the saved config raises, in the operator's words. Same two
-// levels the push wizard uses: an error is a configuration a push would refuse,
-// a warning is a decision they are allowed to make — and both are shown here,
-// at the moment the table is saved, rather than only when they push (#946).
+// One finding, in the operator's words. Three levels, the same three the push
+// wizard draws: an error is a configuration a push would refuse, a warning is a
+// decision the operator is allowed to make, and a note is something true of every
+// push (the reboot) that is not a fault to fix (#945 F3). One renderer for the
+// two places findings appear — the saved table and the import result — so the
+// levels cannot be drawn one way in one and another way in the other.
+function _hpFindingHtml(f, size) {
+  var bad = f.level === 'error', info = f.level === 'info';
+  return '<div style="margin:.3em 0;padding:.4em .6em;border-radius:4px;background:'
+    + (bad ? '#511' : (info ? '#123' : '#421'))
+    + (size ? (';font-size:' + size) : '') + '">'
+    + '<b>' + (bad ? 'Cannot push' : (info ? 'Note' : 'Check')) + '</b> — '
+    + escapeHtml(String(f.text))
+    + (f.port ? ' <span style="color:#9ab">(port ' + f.port + ')</span>' : '')
+    + '</div>';
+}
+
+// The findings the saved config raises. Shown here, at the moment the table is
+// saved, rather than only when they push (#946).
 function _hpFindings(list) {
   var el = document.getElementById('hp-findings');
   if (!el) return;
   list = list || [];
   if (!list.length) { el.innerHTML = ''; return; }
-  var order = {error: 0, warn: 1};
+  var order = {error: 0, warn: 1, info: 2};
   list = list.slice().sort(function (a, b) {
-    return (order[a.level] || 2) - (order[b.level] || 2);
+    return (order[a.level] || 3) - (order[b.level] || 3);
   });
-  el.innerHTML = list.map(function (f) {
-    var bad = f.level === 'error';
-    return '<div style="margin:.3em 0;padding:.4em .6em;border-radius:4px;background:'
-         + (bad ? '#511' : '#421') + '">'
-         + '<b>' + (bad ? 'Cannot push' : 'Check') + '</b> — '
-         + escapeHtml(f.text)
-         + (f.port ? ' <span style="color:#9ab">(port ' + f.port + ')</span>' : '')
-         + '</div>';
-  }).join('');
+  el.innerHTML = list.map(function (f) { return _hpFindingHtml(f); }).join('');
   // Mark the rows the findings are about, so a 48-row table says which ones.
   document.querySelectorAll('.hp-row-bad').forEach(function (tr) {
     tr.classList.remove('hp-row-bad');
@@ -794,12 +801,7 @@ function _hxiRender() {
             + escapeHtml(String(n)) + '</div>';
     });
     (r.findings || []).forEach(function (f) {
-      body += '<div style="margin:.3em 0;padding:.4em .6em;border-radius:4px;background:'
-            + (f.level === 'error' ? '#511' : '#421') + ';font-size:.85em">'
-            + '<b>' + (f.level === 'error' ? 'Cannot push' : 'Check') + '</b> — '
-            + escapeHtml(String(f.text))
-            + (f.port ? (' <span style="color:#9ab">(port ' + f.port + ')</span>') : '')
-            + '</div>';
+      body += _hpFindingHtml(f, '.85em');
     });
     body += '<div style="margin-top:1em"><button class="btn btn-on" '
           + 'onclick="hinksXlightsDone()">Back to the port table</button></div>';

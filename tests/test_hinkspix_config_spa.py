@@ -137,6 +137,9 @@ STUB_JS = """
   };
   window._planFindings = null;
   window._jobRunning = false;
+  // A job state the test writes out whole, for the end states the two canned
+  // ones above cannot reach (a push that stopped part-way, #945 F1).
+  window._jobState = null;
   window.fetch = function (url, opts) {
     var u = String(url);
     window._fetches.push(u + ' ' + ((opts && opts.method) || 'GET'));
@@ -160,7 +163,9 @@ STUB_JS = """
     } else if (u.indexOf('/apply') >= 0 || u.indexOf('/restore') >= 0
                || u.indexOf('/backups') >= 0) {
       body = JSON.parse(JSON.stringify(window._canned['apply']));
-      if (window._jobRunning) {
+      if (window._jobState) {
+        body.state = JSON.parse(JSON.stringify(window._jobState));
+      } else if (window._jobRunning) {
         body.state = {running: true, phase: 'upload', step: 2, kind: 'apply',
                       steps: ['a', 'b', 'c'], stepsDone: [{}],
                       message: 'board 1: write 16 output rows (2/3)',
@@ -200,6 +205,17 @@ def start_server():
 def body_text(page):
     el = page.query_selector("#modal-body")
     return el.inner_text() if el else ""
+
+
+def flat(text):
+    """The panel's words as one line.
+
+    The wizard breaks its state across lines, and an assertion is about what it
+    says rather than where it wraps — matching raw inner text makes every
+    sentence a whitespace-dependent assertion, which is how a suite starts
+    passing for the wrong reason.
+    """
+    return " ".join(text.split())
 
 
 def main():
@@ -321,6 +337,45 @@ def main():
                          "'#hpw-root button[disabled]')")
            and page.evaluate("() => !!_hw.ack['empty_config']"))
 
+        # The two levels either side of a warning (#945 F2, F3): an error is
+        # refused outright, a note is not a gate at all. The gate is a mirror of
+        # the server's, so the panel has to draw all three the same way round.
+        page.evaluate("""() => { window._planFindings = [
+            {level: 'info', code: 'reboot_required', port: null,
+             text: 'Applying reboots the controller.'}]; }""")
+        page.evaluate("() => _hwPlan()")
+        time.sleep(0.6)
+        text = body_text(page)
+        ok("an informational finding is drawn as a Note",
+           "Note" in text and "Applying reboots the controller" in text,
+           text[:200].replace("\n", " | "))
+        ok("...with no box to tick and the push left live",
+           not page.evaluate("() => !!document.querySelector("
+                             "'#hpw-root input[type=checkbox]')")
+           and page.evaluate("() => !document.querySelector("
+                             "'#hpw-root button[disabled]')"),
+           text[:200].replace("\n", " | "))
+
+        page.evaluate("""() => { window._planFindings = [
+            {level: 'error', code: 'empty_config', port: null,
+             text: 'Every port is disabled, and the controller refuses to be '
+                   + 'told about no universes.'}]; }""")
+        page.evaluate("() => _hwPlan()")
+        time.sleep(0.6)
+        text = body_text(page)
+        ok("an error-level finding is drawn as Blocked",
+           "Blocked" in text, text[:200].replace("\n", " | "))
+        ok("...and cannot be ticked past, however many boxes are ticked",
+           not page.evaluate("() => !!document.querySelector("
+                             "'#hpw-root input[type=checkbox]')")
+           and page.evaluate("() => !!document.querySelector("
+                             "'#hpw-root button[disabled]')"),
+           text[:200].replace("\n", " | "))
+
+        page.evaluate("() => { window._planFindings = null; _hw.ack = {}; }")
+        page.evaluate("() => _hwPlan()")
+        time.sleep(0.6)
+
         section("Apply is a job, and the poll is visible and bounded")
         page.evaluate("() => { window._jobRunning = true; _hwUpload(); }")
         time.sleep(1.4)
@@ -340,6 +395,106 @@ def main():
         text = body_text(page)
         ok("...and the wizard advances to the verification",
            "holds what was sent" in text, text[:200].replace("\n", " | "))
+
+        section("A push that stopped part-way says what was done about it (#945 F1)")
+        # From here the job state is written out whole: the interesting end
+        # states are the ones a *failed* push leaves, and neither canned body
+        # above reaches them.
+        page.evaluate(f"() => hinksConfig({CID}, 4)")
+        time.sleep(0.4)
+        # The record and the job state are written together because the server
+        # writes them together: the same `lastApply` record goes on the child
+        # (which is what the badge reads) and into the job state.
+        page.evaluate("""() => {
+            var rec = {at: 1780000000, kind: 'apply', ok: false, requests: 75,
+                       backupId: '20260923-170000', failedAt: 71,
+                       err: 'PCONFIG rejected: FAILED', partial: true,
+                       accepted: 70,
+                       restore: {ok: true, backupId: '20260923-170000',
+                                 text: 'snapshot 20260923-170000 is back on '
+                                       + 'the controller'}};
+            window._rec = rec;
+            window._canned['apply'].lastApply = rec;
+            window._jobState = {
+              running: false, ok: false, phase: 'failed', step: 71,
+              kind: 'apply',
+              steps: ['read the current input mode',
+                      'set the input mode to E131',
+                      'board 1: write 16 output rows'],
+              stepsDone: ['read the current input mode',
+                          'set the input mode to E131'],
+              message: 'the controller refused PCONFIG',
+              err: rec.err, backupId: rec.backupId, partial: rec.partial,
+              accepted: rec.accepted, requests: rec.requests,
+              restoreBackupId: rec.backupId, restore: rec.restore};
+        }""")
+        page.evaluate("() => _hwPollStart()")
+        time.sleep(1.3)
+        text = flat(body_text(page))
+        ok("how much had landed is stated in numbers, not implied",
+           "70 of 75 request(s) had been accepted, so the controller was left "
+           "part-way" in text, text[:400])
+        ok("...the failure is still reported where the push stopped",
+           "PCONFIG rejected: FAILED" in text and "(step 71)" in text, text[:300])
+        ok("...and what was done about it, in the server's own words",
+           "is back on the controller" in text, text[:400])
+        ok("with the snapshot named, so the operator can see which one",
+           "20260923-170000" in text, text[:400])
+        ok("nothing left to repair, so no Restore button is put up",
+           not page.evaluate("""() => Array.prototype.some.call(
+                 document.querySelectorAll('#hpw-root button'),
+                 function (b) { return (b.textContent || '').indexOf('Restore') === 0; })"""),
+           text[:200])
+        ok("the badge says part-way, and that it was put back",
+           "last push failed part-way (snapshot restored)" in text, text[:200])
+
+        page.evaluate("""() => {
+            var rec = window._rec;
+            rec.restore = {ok: false, backupId: '20260923-170000',
+                           text: 'putting snapshot 20260923-170000 back '
+                                 + 'failed: PCONFIG rejected: FAILED'};
+            window._jobState.restore = rec.restore;
+        }""")
+        page.evaluate("() => _hwPollStart()")
+        time.sleep(1.3)
+        text = flat(body_text(page))
+        ok("a recovery that could not be done says so, and where to go",
+           "putting snapshot 20260923-170000 back failed" in text
+           and "the first step lists the snapshots to go back to" in text,
+           text[:400])
+        ok("...and the one-click way back is offered",
+           page.evaluate("""() => Array.prototype.some.call(
+                 document.querySelectorAll('#hpw-root button'),
+                 function (b) { return (b.textContent || '').indexOf('Restore 2026') === 0; })"""),
+           text[:200])
+        ok("the badge does not claim a restore that did not happen",
+           "last push failed part-way" in text
+           and "snapshot restored" not in text, text[:200])
+
+        page.evaluate("""() => {
+            window._rec.restore = undefined;
+            window._rec.partial = false;
+            window._rec.accepted = 1;
+            window._jobState.restore = undefined;
+            window._jobState.partial = false;
+            window._jobState.accepted = 1;
+        }""")
+        page.evaluate("() => _hwPollStart()")
+        time.sleep(1.3)
+        text = flat(body_text(page))
+        ok("a failure before any write is not called part-way",
+           "Nothing had been written yet" in text
+           and "left part-way" not in text, text[:400])
+        ok("...and no repair is offered for damage that never happened",
+           not page.evaluate("""() => Array.prototype.some.call(
+                 document.querySelectorAll('#hpw-root button'),
+                 function (b) { return (b.textContent || '').indexOf('Restore') === 0; })"""),
+           text[:200])
+        ok("every request that section made was still to the orchestrator",
+           all(c.startswith("/api/hinkspix/") for c in
+               page.evaluate("() => window._fetches")),
+           str(page.evaluate("() => window._fetches"))[:200])
+        page.evaluate("() => { window._jobState = null; }")
 
         section("Verify reads back, and a restore is previewed first")
         page.evaluate(f"() => hinksConfig({CID}, 5)")

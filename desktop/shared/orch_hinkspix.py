@@ -638,11 +638,16 @@ def _blocking_findings(findings, ack):
 
     An error is never passable. A warning is a decision the operator is allowed
     to make — but only after being shown it, so it blocks until the request
-    names it by code. Anything else is a warning nobody reads (#945).
+    names it by code. An *info* finding is neither, and never blocks: it is
+    something true of every push rather than a decision, and gating on it would
+    make a box to tick on every push (#945 F3). The previous version blocked
+    every unacknowledged finding whatever its level, which is a gate that
+    trains the operator to tick without reading.
     """
     acked = {str(c) for c in (ack if isinstance(ack, list) else [])}
     return [f for f in findings
-            if f.level == "error" or f.code not in acked]
+            if f.level == "error"
+            or (f.level == "warn" and f.code not in acked)]
 
 
 def _build_plan(child, output_map):
@@ -884,18 +889,128 @@ def _verify(child, intended):
             "warnings": warnings}
 
 
+def _run_commands(cid, ip, cmds, phase="upload", progress=None):
+    """Send a command sequence, recording progress; returns the accepted entries.
+
+    Split out of `_config_worker` because the recovery of a failed push replays
+    a snapshot through exactly this loop — one implementation of "walk the
+    sequence, stop at the first thing that throws, remember how far it got" is
+    what makes the two paths comparable.
+
+    The accepted entries are the ones the controller acknowledged: an entry is
+    added only after its request returned, so their number is how much of the
+    sequence landed. That number is what tells a failure that wrote nothing from
+    one that left the device part-way (#945 F1).
+
+    A list the caller passes as ``progress`` is filled in as the run goes, and
+    is *the* record of it: the sequence stops by raising, so a caller that has
+    to know how far it got cannot read a return value that never comes. That is
+    why the worker keeps its own list rather than reading the return — a caller
+    that only reads the return reports "nothing was written" however much
+    landed, which is precisely the confusion #945 F1 is about.
+    """
+    done = [] if progress is None else progress
+    for i, req in enumerate(cmds):
+        _set_config_state(cid, phase=phase, step=i + 1,
+                          message=f"{req.note} ({i + 1}/{len(cmds)})")
+        entry = {"index": i, "kind": req.kind, "note": req.note}
+        if req.kind == "read":
+            hb.read_data_mode(ip, blk=req.blk)
+        elif req.kind == "reboot":
+            # Fire-and-forget by design: the controller drops the connection as
+            # it restarts, so waiting on the reply would time out rather than
+            # tell us anything.
+            entry["sends"] = hb.fire_and_forget(ip, req.data)
+        else:
+            hb.command(ip, req.data, path=req.path)
+        entry["ok"] = True
+        done.append(entry)
+        _set_config_state(cid, stepsDone=list(done))
+    return done
+
+
+def _recover_partial(cid, child, backup_id):
+    """Put back the snapshot a failed push took — ``{ok, text, ...}``.
+
+    Called when a push died after the controller had accepted a *write*: the
+    device is holding part of a config and part of the one before it,
+    which is worse than either. The snapshot taken moments earlier is the state
+    it held before the first write, so replaying it is the way back, and it is
+    taken automatically rather than left to a button the operator has to find
+    (#945 F1).
+
+    Deliberately **not** attempted after a failed *restore*: that run's snapshot
+    is the state the operator was already trying to get away from, so replaying
+    it would put them back where they started. A failure there is reported and
+    the snapshot list is theirs to choose from.
+
+    Nothing here raises: this runs inside another failure's handler, and a
+    recovery that cannot be attempted must still leave a report behind.
+    """
+    backup = _load_backup(cid, backup_id)
+    if backup is None:
+        return {"ok": False, "backupId": backup_id,
+                "text": f"snapshot {backup_id} could not be read back"}
+    hinks = child.get("hinks") or {}
+    try:
+        cmds, warnings = hc.restore_commands(
+            backup, mcpu=hinks.get("mcpu"),
+            hardware_v3=bool(hinks.get("hardwareV3")))
+    except hc.ConfigError as exc:
+        return {"ok": False, "backupId": backup_id,
+                "text": f"snapshot {backup_id} cannot be replayed: {exc}"}
+
+    # The sequence on screen becomes the recovery's own, so the step list the
+    # wizard draws ticks off against the requests actually being sent rather
+    # than against the failed push's.
+    _set_config_state(cid, phase="recover", step=0, stepsDone=[],
+                      steps=[c.note for c in cmds],
+                      message="Putting back the snapshot taken before this push")
+    try:
+        _run_commands(cid, child["ip"], cmds, phase="recover")
+    except (hb.HinksPixError, OSError, ValueError) as exc:
+        return {"ok": False, "backupId": backup_id, "warnings": warnings,
+                "text": f"putting snapshot {backup_id} back failed: {exc}"}
+
+    # The device now holds the snapshot, which is not the config this
+    # orchestrator describes — the same bookkeeping a deliberate restore does.
+    with ps._lock:
+        h = child.setdefault("hinks", {})
+        h["configHash"] = ""
+        h["configPushedAt"] = 0
+        ps._save("children", ps._children)
+
+    _set_config_state(cid, phase="reboot",
+                      message="Waiting for the controller to come back")
+    if not _wait_for_device(child):
+        return {"ok": False, "backupId": backup_id, "warnings": warnings,
+                "text": (f"snapshot {backup_id} was written but the controller "
+                         f"did not answer within {REBOOT_WAIT_S} s")}
+    verify = _verify(child, hc.decode_backup(backup))
+    return {"ok": bool(verify["ok"]), "backupId": backup_id, "warnings": warnings,
+            "verify": verify,
+            "text": (f"snapshot {backup_id} is back on the controller"
+                     if verify["ok"] else
+                     f"snapshot {backup_id} was written but the readback "
+                     f"differs: {verify['text']}")}
+
+
 def _config_worker(cid, child, cmds, intended, kind):
     """Snapshot, push, reboot, wait, verify — the whole push as one job.
 
     Nothing is written until the snapshot has been taken; a controller that
     cannot be read is one that cannot be put back, and overwriting it is the
     situation this exists to prevent. A failed request stops the sequence
-    (every later request would be written against a device in an unknown state)
-    and is reported with the snapshot id, so the next step is a restore rather
-    than a guess.
+    (every later request would be written against a device in an unknown state),
+    and if it stopped *after* the controller had accepted writes, the snapshot
+    taken before them is put back automatically (`_recover_partial`) — a push
+    that half-landed leaves a device holding neither config (#945 F1).
     """
     ip = child["ip"]
     backup_id = None
+    # Owned here, not returned: the run stops by raising, and the handler below
+    # has to know how much of the sequence landed before it did (#945 F1).
+    done = []
     try:
         _set_config_state(cid, phase="backup",
                           message="Snapshotting the controller before writing")
@@ -903,23 +1018,7 @@ def _config_worker(cid, child, cmds, intended, kind):
         backup_id = saved["id"]
         _set_config_state(cid, backupId=backup_id, backupWarnings=backup_warnings)
 
-        done = []
-        for i, req in enumerate(cmds):
-            _set_config_state(cid, phase="upload", step=i + 1,
-                              message=f"{req.note} ({i + 1}/{len(cmds)})")
-            entry = {"index": i, "kind": req.kind, "note": req.note}
-            if req.kind == "read":
-                hb.read_data_mode(ip, blk=req.blk)
-            elif req.kind == "reboot":
-                # Fire-and-forget by design: the controller drops the
-                # connection as it restarts, so waiting on the reply would time
-                # out rather than tell us anything.
-                entry["sends"] = hb.fire_and_forget(ip, req.data)
-            else:
-                hb.command(ip, req.data, path=req.path)
-            entry["ok"] = True
-            done.append(entry)
-            _set_config_state(cid, stepsDone=list(done))
+        _run_commands(cid, ip, cmds, progress=done)
 
         with ps._lock:
             hinks = child.setdefault("hinks", {})
@@ -972,17 +1071,44 @@ def _config_worker(cid, child, cmds, intended, kind):
                     "ok" if verify["ok"] else "reports differences")
     except (hb.HinksPixError, OSError, ValueError) as exc:
         step = (_config_state.get(cid) or {}).get("step")
+        # How much of the sequence landed before it stopped. "Failed at the
+        # snapshot" is a device that still holds what it held a moment ago;
+        # "failed at step 40 of 68" is a device part-way between two configs.
+        # Anything reading this job — the wizard, a script, a test — needs to
+        # tell those apart without guessing (#945 F1).
+        accepted = len(done)
+        # A landed *read* changes nothing on the device, so it is not what makes
+        # a failure "part-way" — and the recovery reboots the controller, which
+        # is 90 seconds of the operator's pixels going dark. Only a write that
+        # landed justifies that.
+        partial = any(e.get("kind") == "write" for e in done)
         record = {"at": int(time.time()), "kind": kind, "ok": False,
-                  "err": str(exc), "failedAt": step, "backupId": backup_id}
+                  "err": str(exc), "failedAt": step, "backupId": backup_id,
+                  "partial": partial, "accepted": accepted,
+                  "requests": len(cmds)}
+        restore = None
+        if partial and kind == "apply" and backup_id:
+            restore = _recover_partial(cid, child, backup_id)
+            record["restore"] = restore
         with ps._lock:
             child.setdefault("hinks", {})["lastApply"] = record
             ps._save("children", ps._children)
+        # `step` goes back to where the *push* stopped: the recovery's own
+        # sequence is what `steps`/`stepsDone` now describe, and without this
+        # the failure would be reported at the recovery's last step instead of
+        # the one that actually failed.
         _set_config_state(cid, running=False, ok=False, phase="failed",
-                          err=str(exc), lastApply=record)
-        ps.log.warning("HinksPix %s %s failed at %s (%s): %s", ip, kind,
-                       f"step {step}" if step else "the snapshot",
-                       "nothing to restore" if backup_id is None else
-                       f"restore snapshot {backup_id}", exc)
+                          err=str(exc), step=step, lastApply=record,
+                          partial=partial, accepted=accepted,
+                          requests=len(cmds), restore=restore,
+                          restoreBackupId=backup_id if partial else None)
+        ps.log.warning("HinksPix %s %s failed at %s after %d/%d request(s) (%s): %s",
+                       ip, kind, f"step {step}" if step else "the snapshot",
+                       accepted, len(cmds),
+                       "nothing was written" if not partial else
+                       ("the snapshot was put back" if (restore or {}).get("ok")
+                        else f"snapshot {backup_id} still needs restoring"),
+                       exc)
 
 
 def _start_config_job(cid, child, cmds, intended, kind):
@@ -1514,11 +1640,30 @@ def api_hinkspix_import_xlights():
     return jsonify(ok=True, **proposal)
 
 
+def _proposal_body(body):
+    """The proposal out of an accept body, in either shape it arrives in.
+
+    ``{proposal: <preview>, createFixtures: bool}`` is the documented form. The
+    preview response *itself* is accepted too: it is self-describing (it carries
+    `hinks` and `models`), so a caller that posts back what the preview handed
+    it verbatim has done nothing wrong, and making it guess which of two nesting
+    levels to use is a trap with no purpose (#947 QA). Returns ``None`` when
+    neither shape carries a port table, so the route can say so.
+    """
+    if not isinstance(body, dict):
+        return None
+    for cand in (body.get("proposal"), body):
+        if isinstance(cand, dict) and isinstance(cand.get("hinks"), dict):
+            return cand
+    return None
+
+
 @bp.post("/api/hinkspix/<int:cid>/import/xlights/accept")
 def api_hinkspix_import_accept(cid):
     """Apply an xLights proposal: the port table, then a fixture per model.
 
-    Body is ``{proposal, createFixtures}``, where ``proposal`` is what the
+    Body is ``{proposal, createFixtures}`` — or the preview response itself,
+    which is the same thing unwrapped — where ``proposal`` is what the
     preview returned — the editor may have unticked rows in it, and an unticked
     model's outputs are dropped. Unticking narrows what is written; it never
     widens it, because a row the preview rejected was rejected for a reason the
@@ -1538,10 +1683,12 @@ def api_hinkspix_import_accept(cid):
     if err:
         return err
     body = request.get_json(silent=True) or {}
-    prop = body.get("proposal")
-    if not isinstance(prop, dict) or not isinstance(prop.get("hinks"), dict):
-        return jsonify(err="proposal must be the object "
-                           "/api/hinkspix/import/xlights returned"), 400
+    prop = _proposal_body(body)
+    if prop is None:
+        return jsonify(err="the body must be the object "
+                           "/api/hinkspix/import/xlights returned — either as "
+                           "`proposal` or verbatim, since it carries `hinks` "
+                           "and `models` itself"), 400
 
     hinks_before = copy.deepcopy(child.get("hinks") or {})
     fixtures_before = list(ps._fixtures)
