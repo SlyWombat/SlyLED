@@ -4,11 +4,13 @@
 #
 #  1. "unit" — every PR + push to main. Fast, no browser: the flask
 #     test-client suites, the aim/ IK gates, the wire-parity suites,
-#     and the docs validators. ~5 min.
+#     the HinksPix controller suites, and the docs validators. ~5 min.
 #
 #  2. "regression" — weekly cron (+ manual dispatch). Installs
 #     Playwright chromium and runs tests/regression/run_all.py (the
-#     stage-setup → layout → bake → 3D-runtime end-to-end flow). NOT
+#     stage-setup → layout → bake → 3D-runtime end-to-end flow), plus
+#     the HinksPix SPA suites (they render the served SPA in a real
+#     browser, so they need the chromium this job installs). NOT
 #     --live-rig: those suites need a calibrated physical mover + two
 #     camera nodes and self-skip when SLYLED_LIVE_RIG is unset.
 #
@@ -114,6 +116,26 @@ jobs:
             SLYLED_DATA=$(mktemp -d) python3 -X utf8 "$t"
           done
 
+      - name: HinksPix suites (tests/test_hinkspix_*.py)
+        # The controller suites run against in-process fakes on
+        # 127.0.0.1 — no hardware, no network, nothing reached. Each
+        # gets its own data dir for the same reason as the core
+        # suites; they are also re-runnable in a shared one since #945
+        # (fresh_store()), but the fresh dir is what CI has always
+        # done and costs nothing.
+        #
+        # *_spa.py is skipped here: those two render the served SPA in
+        # a real browser (unguarded playwright import), so they run in
+        # the regression job where chromium is installed.
+        run: |
+          for f in tests/test_hinkspix_*.py; do
+            case "$f" in
+              *_spa.py) continue ;;
+            esac
+            echo "== $f"
+            SLYLED_DATA=$(mktemp -d) python3 -X utf8 "$f"
+          done
+
       - name: Aim gates (tests/aim/)
         run: |
           python3 -X utf8 tests/aim/test_sphere.py
@@ -214,6 +236,17 @@ jobs:
           sudo apt-get update -q && sudo apt-get install -y -q git-restore-mtime
           git restore-mtime
           python3 tools/docs/validate_screenshots.py
+
+      - name: HinksPix SPA suites (tests/test_hinkspix_*_spa.py)
+        # The browser half of the HinksPix set. Both stub the
+        # orchestrator's fetch and drive the real served SPA, so they
+        # belong with chromium rather than in the unit job; the other
+        # eight suites run there per-PR instead.
+        run: |
+          for f in tests/test_hinkspix_*_spa.py; do
+            echo "== $f"
+            SLYLED_DATA=$(mktemp -d) python3 -X utf8 "$f"
+          done
 
       - name: Regression suite (stage setup → layout → bake → 3D runtime)
         # run_all.py spawns one parent_server per suite and the

@@ -940,15 +940,19 @@ channel 1, universes 1-2, taken from their xLights show folder (`xlights_rgbeffe
 
 ## 9. Test strategy (repo gates)
 
-Offline first, all under the `unit` job in `.github/workflows/python-tests.yml`
-(`SLYLED_DATA` isolation via `tests/conftest.py`):
+Offline first, and wired into `.github/workflows/python-tests.yml` (2026-09-23). The split is
+by what each suite needs to run: the eight controller suites go per-PR in the `unit` job, each
+with its own `SLYLED_DATA=$(mktemp -d)` like the core suites beside them (`tests/conftest.py`
+also isolates direct script runs); the two `*_spa.py` suites go weekly in the `regression` job,
+which is the one that installs chromium — they import playwright unguarded, so the unit job
+would fail on them rather than skip them:
 
 | Suite | Covers |
 |---|---|
 | `tests/test_pixel_renderer.py` | corpus golden vectors; determinism; every action type; `active_segment` rule vs `_dmx_playback_loop`; n=1 edge cases; `EFFECT_SPEC_VERSION` equality parsed from `pixel_renderer.js` |
 | `tests/test_pixel_renderer_parity.py` | Node runs `spa/js/pixel_renderer.js` on the same corpus (pattern: `test_fixture_shortcuts.py`; skips without node) |
 | `tests/test_hinkspix_offline.py` | static: `struct.calcsize` = 608/34/26/22, 18-byte header literal, `TotalSize = 28 + DataSize`, FAT word round-trip, `.hseq` header bytes at every documented offset, `.ply`/`.sched` exact text, schedule validation, short-name rules. **Also the in-process fake TCP controller** (parses chunks, reassembles files, replies `\|FOK`, injects failure/timeouts): reassembled bytes, close-packet name/DTTM and its `DataSize 0` field, the exact-multiple flush chunk, time-packet fields, mode packet, errors surfaced |
-| `tests/test_hinkspix_wire.py` | HTTP wire protocol (#943): GET + headers, quoted `"OK"`, `BLK` board select, gzip replies, the 1-based universe table, per-port start channels, full-board `PCONFIG`, `UnPack` gating, reboot-last, DDP. **Light self-check only** — it asserts the request shape and the command sequence. Standing up a gated in-process `http.server` fake, replaying golden MS_160 captures, and wiring the hinkspix suites into this job are deferred to the QA lane |
+| `tests/test_hinkspix_wire.py` | HTTP wire protocol (#943): GET + headers, quoted `"OK"`, `BLK` board select, gzip replies, the 1-based universe table, per-port start channels, full-board `PCONFIG`, `UnPack` gating, reboot-last, DDP. **Light self-check only** — it asserts the request shape and the command sequence. Standing up a gated in-process `http.server` fake and replaying golden MS_160 captures are deferred to the QA lane |
 | `tests/test_hinkspix_apply.py` | (#945) the push lifecycle against a **stateful in-process fake** that stores what it is told: the snapshot before the first write and the two invariants that matter — nothing is written to a controller that cannot be read, and a failed request stops the sequence, leaves the reboot unsent and names the snapshot to restore. Plus **the failure's own arithmetic**: `partial`/`accepted`/`requests`, the automatic replay of the snapshot after a failure that landed writes (and that a recovery which cannot complete is reported rather than raised, with the snapshot left for `POST /restore`), no recovery at all after a failure that wrote nothing, and the reported step staying the push's. Plus restore round-trip (rows and table back, `inSync` cleared), restore refusals, the findings gate — an error is refused even when its code is acknowledged, an info never blocks and is still reported — one-job-at-a-time, and `BACKUP_KEEP` retention per device |
 | `tests/test_hinkspix_config_spa.py` | (#945) Playwright against **stubbed `fetch`** — the panel only: the five-step flow, the editor opening *on top of* the wizard and `closeModal()` returning to it, the three finding levels as the operator sees them (an error is `Blocked`, a note has no box and does not disable the push), the end state of a push that stopped part-way (the numbers, the recovery's own words, no Restore button when nothing is left to repair, and the button when the recovery failed), the apply poll stopping when the job ends and when the modal closes. Every recorded request must be an orchestrator path: a wizard that reached the controller from the browser would be a second, unverified configuration path |
 | `tests/test_hinkspix_smart.py` | (#946) the caps table and `caps_key` for every witness (Controller E / Type 8 / MaxU 65-402-684 / V3 / un-probed); port → board/bank/sub-port; five `calculate_smart_receivers` cases pinned to `HinksPix.cpp:860-918` (per-sub-port slots, a chain on one output, the 16-port group of four, the 16AC's `/3` start pixel, a non-Long_Range board skipped); the `SCONFIG` payload and its place between `BD_INFO` and `PCONFIG`, with no request at all for an empty bank; a five-board PRO V3 at port 80; every `validate` code and its level; the PUT/GET contract (`caps`, caps-filtered protocols, `startNulls` + its `nullPixels` alias, receiver id/type accept-reject, the model's port ceiling) and `defaults-from-fixtures` storing nothing. The bridge's device entry points are replaced with ones that raise for the whole file, so the suite cannot reach a controller |
@@ -976,9 +980,11 @@ that stopped part-way now replays its snapshot by itself (§4.6), `empty_config`
 `error` rather than a warning to click past, and `reboot_required` is a note (§4.6). The
 2026-09-23 bench session (§8b) found the wire protocol broken in
 several places, so #943-#947 were filed and worked in order — the write path first
-(#943, #944, #945), then guidance (#946) and import (§4.8). What remains for the QA lane is
-the harness work §9 defers: the shared gated `http.server` fake, replaying golden MS_160
-captures, and wiring the hinkspix suites into `python-tests.yml`.
+(#943, #944, #945), then guidance (#946) and import (§4.8). The third item that
+paragraph used to list — wiring the hinkspix suites into `python-tests.yml` — is done: the eight
+controller suites run per-PR in `unit` and the two browser suites weekly in `regression`. What
+remains for the QA lane is the harness work §9 defers: the shared gated `http.server` fake and
+replaying golden MS_160 captures.
 
 One thing that wiring needs and now has: the three suites that keep state in the data dir
 (`test_hinkspix_device`, `test_hinkspix_smart`, `test_hinkspix_apply`) start by clearing the
