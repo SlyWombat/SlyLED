@@ -46,6 +46,7 @@ from spatial_engine import (catmull_rom_sample, resolve_fixture,
                             compute_pan_tilt)
 from bake_engine import (bake_timeline, pack_lsq_zip, segments_to_load_steps,
                          BakeProgress)
+import app_dirs
 from dmx_profiles import ProfileLibrary
 import dmx_profiles
 # #899 — fixture-type registry: POST/PUT fixture validation, per-type
@@ -176,16 +177,12 @@ else:
     DOCS_ROOT = BASE.parent.parent / "docs"
     DOCS_HELP = DOCS_ROOT / "help"
 
-# Persist data under %APPDATA%\SlyLED on Windows; fall back to BASE/data
-# elsewhere. SLYLED_DATA overrides both — tests and the screenshot tools
-# set it to a throwaway directory so importing this module (and its
-# `app.test_client()` writes) can never clobber a live operator project.
-if os.environ.get("SLYLED_DATA"):
-    DATA = Path(os.environ["SLYLED_DATA"])
-elif os.name == "nt" and os.environ.get("APPDATA"):
-    DATA = Path(os.environ["APPDATA"]) / "SlyLED" / "data"
-else:
-    DATA = BASE / "data"
+# Persistence dir — per-OS rules live in app_dirs.data_dir() (#948):
+# SLYLED_DATA wins (tests and the screenshot tools point it at a throwaway
+# directory so importing this module can never clobber a live operator
+# project); then %APPDATA%\SlyLED\data on Windows; then the per-user
+# app-data dir for frozen builds; else BASE/data for a source checkout.
+DATA = app_dirs.data_dir(BASE)
 DATA.mkdir(parents=True, exist_ok=True)
 
 #  "  "  Persistence  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
@@ -17730,14 +17727,10 @@ else:
 # installer no longer bundles the .bin files — only registry.json ships —
 # so the first flash of a given board will fetch the binary from the
 # matching GitHub release asset and park it here for later reuse.
-if getattr(sys, "frozen", False) and os.name == "nt" and os.environ.get("APPDATA"):
-    _FW_CACHE_DIR = Path(os.environ["APPDATA"]) / "SlyLED" / "firmware"
-elif getattr(sys, "frozen", False):
-    _FW_CACHE_DIR = Path.home() / ".slyled" / "firmware"
-else:
-    # Dev / source checkout: re-use the project firmware tree so locally
-    # built binaries are picked up without a download round-trip.
-    _FW_CACHE_DIR = _FW_DIR
+# Frozen: <user data root>/firmware (%APPDATA%\SlyLED\firmware on Windows).
+# Source checkout: the project firmware tree, so locally built binaries are
+# picked up without a download round-trip.
+_FW_CACHE_DIR = app_dirs.firmware_cache_dir(_FW_DIR)
 _FW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # B1 phase 1 — firmware management + OTA update routes/helpers extracted to

@@ -2,7 +2,7 @@
 ZoeDepth runtime (#598).
 
 Keeps torch / transformers OUT of the main SlyLED.exe bundle. Installs
-a standalone Python venv under %LOCALAPPDATA%\\SlyLED\\runtimes\\depth\\
+a standalone Python venv under <app_dirs.runtime_dir()>/depth/
 that the orchestrator spawns as a subprocess when a calibration scan
 needs metric depth. The main process only ever talks to it over
 127.0.0.1 HTTP.
@@ -37,6 +37,8 @@ import time
 import urllib.request
 import urllib.error
 
+import app_dirs
+
 log = logging.getLogger(__name__)
 
 # On Windows the orchestrator exe is built with PyInstaller --windowed
@@ -53,11 +55,10 @@ else:
 # ── Layout ──────────────────────────────────────────────────────────────
 
 def _runtime_root() -> str:
-    """Return %LOCALAPPDATA%\\SlyLED\\runtimes on Windows, ~/.local/share/SlyLED/runtimes elsewhere."""
-    if sys.platform == "win32":
-        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~\\AppData\\Local")
-        return os.path.join(base, "SlyLED", "runtimes")
-    return os.path.join(os.path.expanduser("~"), ".local", "share", "SlyLED", "runtimes")
+    """%LOCALAPPDATA%\\SlyLED\\runtimes on Windows, ~/Library/Application
+    Support/SlyLED/runtimes on macOS, $XDG_DATA_HOME/SlyLED/runtimes on
+    Linux (#948 — see app_dirs)."""
+    return str(app_dirs.runtime_dir())
 
 
 def paths() -> dict:
