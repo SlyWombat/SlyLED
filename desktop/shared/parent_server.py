@@ -47,6 +47,7 @@ from spatial_engine import (catmull_rom_sample, resolve_fixture,
 from bake_engine import (bake_timeline, pack_lsq_zip, segments_to_load_steps,
                          BakeProgress)
 import app_dirs
+import net_ifaces
 from dmx_profiles import ProfileLibrary
 import dmx_profiles
 # #899 — fixture-type registry: POST/PUT fixture validation, per-type
@@ -868,82 +869,34 @@ def _send(ip, pkt):
         pass
 
 def _local_broadcasts():
-    """Return subnet-directed broadcast addresses for all non-loopback interfaces."""
-    bcs = []
-    for prefix in _local_subnet_prefixes():
-        bc = prefix + ".255"
-        if bc not in bcs:
-            bcs.append(bc)
-    return bcs
+    """Subnet-directed broadcast addresses for all non-loopback interfaces,
+    computed from each interface's real netmask (net_ifaces, #948)."""
+    return net_ifaces.subnet_broadcasts()
 
 def _local_subnet_prefixes():
-    """Return /24 subnet prefixes (e.g. '192.168.10') for all non-loopback interfaces.
-
-    Primary method parses `ip -4 addr show` so WSL2 mirrored-mode hosts (where
-    the Linux hostname only resolves to one of several mirrored NICs) still
-    see every physical subnet. Falls back to getaddrinfo then _get_local_ip()
-    on platforms without the `ip` command.
-    """
-    prefixes = []
-    seen = set()
-
-    # Method 1: parse `ip -4 addr show` — enumerates every attached interface,
-    # which is the only reliable way to catch all mirrored NICs under WSL2.
-    try:
-        import subprocess, re
-        out = subprocess.check_output(["ip", "-4", "addr", "show"],
-                                      text=True, timeout=3)
-        for m in re.finditer(r"inet (\d+\.\d+\.\d+)\.\d+/\d+", out):
-            prefix = m.group(1)
-            if prefix in seen:
-                continue
-            if prefix.startswith("127.") or prefix.startswith("169.254."):
-                continue
-            # Skip the WSL2 NAT bridge (172.x) when real mirrored adapters are
-            # also present — the NAT bridge has no path to external LAN devices.
-            if prefix.startswith("172.") and prefixes:
-                continue
-            prefixes.append(prefix)
-            seen.add(prefix)
-    except Exception:
-        pass
-
-    # Method 2: socket.getaddrinfo — works on Windows/macOS hosts without `ip`.
-    if not prefixes:
-        try:
-            for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-                ip = info[4][0]
-                if ip.startswith("127.") or ip.startswith("169.254."):
-                    continue
-                prefix = ip.rsplit(".", 1)[0]
-                if prefix not in seen:
-                    prefixes.append(prefix)
-                    seen.add(prefix)
-        except Exception:
-            pass
-
-    # Method 3: _get_local_ip() last resort — single primary-interface prefix.
-    if not prefixes:
-        try:
-            prefix = _get_local_ip().rsplit(".", 1)[0]
-            if prefix:
-                prefixes.append(prefix)
-        except Exception:
-            pass
-    return prefixes
+    """/24 prefixes (e.g. '192.168.10') containing each non-loopback
+    interface address — the unit the camera-node sweep probes. Enumeration
+    order and filtering live in net_ifaces.ipv4_interfaces() (#948)."""
+    return net_ifaces.scan_prefixes()
 
 def _send_recv(ip, pkt, timeout=1.5, maxb=256):
     """Send UDP packet and wait for reply from the specified IP only.
-    Binds to UDP_PORT (with SO_REUSEADDR) so the child replies to the
+    Binds to UDP_PORT (SO_REUSEADDR, + SO_REUSEPORT on macOS/BSD — see
+    net_ifaces.allow_port_sharing) so the child replies to the
     firewall-allowed port 4210.  Falls back to an ephemeral port if 4210
-    is momentarily busy.  Discards packets from other sources.
+    is momentarily busy; the outcome is recorded in _udp_status (#948).
+    Discards packets from other sources.
     """
     for bind_port in (UDP_PORT, 0):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                net_ifaces.allow_port_sharing(s)
                 s.settimeout(timeout)
                 s.bind(("", bind_port))
+                with _udp_status_lock:
+                    _udp_status["sendRecvPort"] = bind_port or "ephemeral"
+                    if not bind_port:
+                        _udp_status["sendRecvEphemeral"] += 1
                 s.sendto(pkt, (ip, UDP_PORT))
                 deadline = time.time() + timeout
                 while True:
@@ -1523,6 +1476,12 @@ _udp_status = {
     # on /api/status instead of silently dropped:
     "mmwUnbound": 0,     # datagrams whose sender resolved to no radar fixture
     "mmwMalformed": 0,   # structurally invalid MMW_TARGETS payloads
+    # #948 — port-sharing outcome on 4210. `reusePort`: the listener set
+    # SO_REUSEPORT (macOS/BSD). `sendRecvPort`: what the last _send_recv
+    # bound — 4210, or "ephemeral" when the second bind was refused.
+    "reusePort": False,
+    "sendRecvPort": None,
+    "sendRecvEphemeral": 0,
 }
 _udp_status_lock = threading.Lock()
 _udp_listener_thread = None
@@ -1553,10 +1512,11 @@ def _try_bind_udp(port, max_attempts=5):
             _udp_status["attempts"] = attempt
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            reuse_port = net_ifaces.allow_port_sharing(s)
             s.bind(("", port))
             s.settimeout(1.0)
             with _udp_status_lock:
+                _udp_status["reusePort"] = reuse_port
                 _udp_status["ok"] = True
                 _udp_status["lastError"] = None
                 _udp_status["boundAt"] = time.time()
@@ -13898,7 +13858,7 @@ def _artnet_oneshot_poll():
             return
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        net_ifaces.allow_port_sharing(sock)
         # Bind to ARTNET_PORT (6454) so ArtPollReply packets land here.
         # Bridges always target 6454 per spec, not the sender's ephemeral
         # port. Fall back to ephemeral if 6454 is held by some other app
@@ -14372,38 +14332,12 @@ if _settings.get("autoStartShow"):
 
 @app.get("/api/dmx/interfaces")
 def api_dmx_interfaces():
-    """List local network interfaces with their IPv4 addresses."""
+    """List local network interfaces with their IPv4 addresses (#948: every
+    NIC via net_ifaces, not just what the hostname resolves to)."""
     result = [{"name": "All Interfaces", "ip": "0.0.0.0"}]
-    try:
-        # Cross-platform: use socket.getaddrinfo on the hostname
-        import socket as _sock
-        hostname = _sock.gethostname()
-        for info in _sock.getaddrinfo(hostname, None, _sock.AF_INET):
-            ip = info[4][0]
-            if ip and ip != "127.0.0.1" and not any(r["ip"] == ip for r in result):
-                result.append({"name": hostname, "ip": ip})
-        # Also try netifaces if available (gives interface names)
-        try:
-            import netifaces
-            for iface in netifaces.interfaces():
-                addrs = netifaces.ifaddresses(iface)
-                for addr_info in addrs.get(netifaces.AF_INET, []):
-                    ip = addr_info.get("addr", "")
-                    if ip and ip != "127.0.0.1" and not any(r["ip"] == ip for r in result):
-                        result.append({"name": iface, "ip": ip})
-        except ImportError:
-            pass
-    except Exception:
-        pass
-    # Fallback: probe default route
-    if len(result) == 1:
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            result.append({"name": "default", "ip": s.getsockname()[0]})
-            s.close()
-        except Exception:
-            pass
+    for e in net_ifaces.ipv4_interfaces():
+        result.append({"name": e["name"], "ip": e["ip"],
+                       "netmask": e["netmask"], "broadcast": e["broadcast"]})
     return jsonify(result)
 
 @app.get("/api/dmx/settings")

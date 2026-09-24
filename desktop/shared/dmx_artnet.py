@@ -19,36 +19,20 @@ import time
 import uuid
 
 from dmx_universe import DMXUniverse
+import net_ifaces
 
 
 def _all_local_broadcast_addrs():
-    """Return subnet broadcast addresses for every non-loopback IPv4 interface.
+    """Return subnet broadcast addresses for every non-loopback IPv4 interface,
+    plus the limited broadcast 255.255.255.255 last.
 
-    On Linux (incl. WSL2 mirrored mode), sending to 255.255.255.255 on a
-    0.0.0.0-bound socket only reaches the default-route interface. Enumerating
-    every adapter's subnet broadcast ensures Art-Net ArtPoll discovery and
-    ArtDMX frames reach nodes on all physical NICs.
+    Sending to 255.255.255.255 on a 0.0.0.0-bound socket only reaches the
+    default-route interface (Linux incl. WSL2 mirrored mode, and macOS).
+    Enumerating every adapter's subnet broadcast (net_ifaces, #948) ensures
+    Art-Net ArtPoll discovery and ArtDMX frames reach nodes on all NICs.
     """
-    import re, subprocess, ipaddress
-    broadcasts = []
-    seen = set()
-    try:
-        out = subprocess.check_output(["ip", "-4", "addr", "show"],
-                                      text=True, timeout=2)
-        for m in re.finditer(r"inet (\d+\.\d+\.\d+\.\d+)/(\d+)\s", out):
-            ip_str, prefix_len = m.group(1), int(m.group(2))
-            if ip_str.startswith("127.") or ip_str.startswith("169.254."):
-                continue
-            iface = ipaddress.IPv4Interface(f"{ip_str}/{prefix_len}")
-            bc = str(iface.network.broadcast_address)
-            if bc not in seen:
-                broadcasts.append(bc)
-                seen.add(bc)
-    except Exception:
-        pass
-    # Always keep the limited broadcast as a final fallback — on Windows/macOS
-    # (where `ip` is missing) this is the only address we know about.
-    if "255.255.255.255" not in seen:
+    broadcasts = net_ifaces.subnet_broadcasts()
+    if "255.255.255.255" not in broadcasts:
         broadcasts.append("255.255.255.255")
     return broadcasts
 
