@@ -4,7 +4,8 @@
 #
 #  1. "unit" — every PR + push to main. Fast, no browser: the flask
 #     test-client suites, the aim/ IK gates, the wire-parity suites,
-#     the HinksPix controller suites, and the docs validators. ~5 min.
+#     the renderer gates, the HinksPix controller suites, and the docs
+#     validators. ~5 min.
 #
 #  2. "regression" — weekly cron (+ manual dispatch). Installs
 #     Playwright chromium and runs tests/regression/run_all.py (the
@@ -114,6 +115,23 @@ jobs:
                    tests/test_b2_serving.py; do
             echo "== $t"
             SLYLED_DATA=$(mktemp -d) python3 -X utf8 "$t"
+          done
+
+      - name: Renderer gates (tests/test_pixel_renderer*.py)
+        # The Python renderer and its byte-identical twin in the SPA.
+        # test_pixel_renderer_parity.py runs spa/js/pixel_renderer.js
+        # under node and compares 3024 cases pixel by pixel — it is the
+        # only thing enforcing that the two renderers agree, and it
+        # was in no workflow until now.
+        #
+        # Verified it is a real gate before wiring it: a forced mismatch
+        # exits 1, and with node off PATH it prints [SKIP] and exits 0
+        # rather than a false red. ubuntu-latest ships node, so the
+        # parity half actually runs here.
+        run: |
+          for f in tests/test_pixel_renderer.py tests/test_pixel_renderer_parity.py; do
+            echo "== $f"
+            SLYLED_DATA=$(mktemp -d) python3 -X utf8 "$f"
           done
 
       - name: HinksPix suites (tests/test_hinkspix_*.py)

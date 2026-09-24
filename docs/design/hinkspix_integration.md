@@ -945,7 +945,16 @@ by what each suite needs to run: the eight controller suites go per-PR in the `u
 with its own `SLYLED_DATA=$(mktemp -d)` like the core suites beside them (`tests/conftest.py`
 also isolates direct script runs); the two `*_spa.py` suites go weekly in the `regression` job,
 which is the one that installs chromium — they import playwright unguarded, so the unit job
-would fail on them rather than skip them:
+would fail on them rather than skip them.
+
+The same commit wired the two renderer gates in §9's first two rows, which had been in **no**
+workflow: `test_pixel_renderer_parity.py` is the only thing enforcing that the Python renderer
+and `spa/js/pixel_renderer.js` agree, and 3024 cases had never run in CI. Both were checked to
+be real gates before being trusted — a forced mismatch exits 1, and with node off `PATH` the
+parity half prints `[SKIP]` and exits 0 rather than a false red. `test_dmx_engines.py` is still
+in no workflow; its `(extend)` row below is a plan, not a running gate.
+
+The table:
 
 | Suite | Covers |
 |---|---|
