@@ -76,9 +76,13 @@ class FakeHinks:
         self.data_mode = json.loads((CAPTURE / "data_mode_blk0.json").read_text())
         self.ports = {b: json.loads((CAPTURE / f"port_config_blk{b}.json").read_text())["LIST"]
                       for b in range(3)}
-        self.e131 = {}
+        # Factory table as captured: 32 universes x 300 ch, then filler rows.
+        rows = [f"{i},{i},300,1,{300 * (i - 1) + 1},{300 * i}" if i <= 32
+                else f"{i},{i},0,1,0,0" for i in range(1, 403)]
+        self.e131 = {b: [{"V": r} for r in rows[b * 6:b * 6 + 6]] for b in range(67)}
         self.log = []            # (method, path, headers-dict, body-bytes)
         self.reject_cmd = None   # CMD name to answer ERROR for
+        self.reject_once = False
         self.lock = threading.Lock()
 
     def writes(self):
@@ -132,6 +136,10 @@ def make_handler(fake):
             if path == "/Xlights_Board_Port_Config.cgi":
                 b = int(blk) if blk and blk.isdigit() else 0
                 return self._reply({"CMD": "PCONFIG", "BOARD": str(b), "LIST": fake.ports.get(b, [])})
+            if path == "/GetE131Data.cgi":
+                row = self.headers.get("ROW")
+                b = int(row) if row and row.isdigit() else 0
+                return self._reply(",".join(x["V"] for x in fake.e131.get(b, [])))
             if path == "/Xlights_UnPack_Config.cgi":
                 return self._reply({"CMD": "POST", "OK": "OK"} if data else {"CMD": "POST", "ERROR": "ERROR"})
             if path == "/Xlights_PostData.cgi":
@@ -143,6 +151,8 @@ def make_handler(fake):
                     return self._error()
                 name = cmd.get("CMD")
                 if name == fake.reject_cmd:
+                    if fake.reject_once:
+                        fake.reject_cmd = None
                     return self._error()
                 if name == "OP_MODE":
                     self.close_connection = True
@@ -408,6 +418,59 @@ def offline(c):
     ok("no reboot sent after a failure",
        not any("OP_MODE" in (e[2].get("DATA") or "") for e in fake.log))
     fake.reject_cmd = None
+
+    print("\n== F1: partial push is auto-restored from the pre-push snapshot")
+    fake.reject_cmd = None
+    ok_apply = do_apply(c, cid)                      # known-good state first
+    import copy
+    good_ports = copy.deepcopy(fake.ports)
+    good_e131 = copy.deepcopy(fake.e131)
+    ok("known-good apply before the F1 test", (ok_apply.get_json() or {}).get("ok") is True)
+    # change the layout so the next push differs, then make PCONFIG fail
+    c.put(f"/api/hinkspix/{cid}", json={"ports": [dict(EAVES_PORT, brightness=50)],
+                                         "baseUniverse": 5})
+    fake.reject_cmd, fake.reject_once = "PCONFIG", True
+    fake.log.clear()
+    r = do_apply(c, cid)
+    fake.reject_cmd, fake.reject_once = None, False
+    res = r.get_json() or {}
+    st = res.get("state") or {}
+    print(f"  partial-failure state: {json.dumps({k: st.get(k) for k in ('ok','phase','partial','accepted','restore','restoreBackupId','err')})[:500]}")
+    ok("F1: failure after accepted writes reports partial=true", st.get("partial") is True
+       or (st.get("lastApply") or {}).get("partial") is True, list(st)[:15])
+    ok("F1: failure record names the restore snapshot", bool(st.get("restoreBackupId")
+       or (st.get("restore") or {}).get("backupId") if isinstance(st.get("restore"), dict) else st.get("restoreBackupId")),
+       st.get("restore"))
+    ok("F1: E131 table restored to the pre-push state", fake.e131 == good_e131,
+       [ (b, fake.e131.get(b, [{}])[0].get("V"), good_e131.get(b, [{}])[0].get("V"))
+         for b in range(3) if fake.e131.get(b) != good_e131.get(b)][:3])
+    ok("F1: port rows equal the pre-push state", fake.ports == good_ports)
+    ok("F1: controller rebooted after the recovery", sum("OP_MODE" in (e[2].get("DATA") or "") for e in fake.log) >= 1)
+    print("\n== F1b: failure before the first write touches nothing")
+    fake.log.clear()
+    fake.reject_cmd, fake.reject_once = "DATA_MODE", True
+    r = do_apply(c, cid)
+    fake.reject_cmd, fake.reject_once = None, False
+    print("  F1b writes on the wire: " + str([json.loads(e[2]["DATA"]).get("CMD") if e[2]["DATA"].startswith("{\"") else "UNPACK" for e in fake.log if e[2].get("DATA")][:12]))
+    st = (r.get_json() or {}).get("state") or {}
+    ok("F1b: no reboot and no E131/PCONFIG after an immediate failure",
+       [json.loads(e[2]["DATA"]).get("CMD") for e in fake.log
+        if (e[2].get("DATA") or "").startswith('{"')] == ["DATA_MODE"])
+    ok("F1b: partial is false", not st.get("partial"), st.get("partial"))
+    c.put(f"/api/hinkspix/{cid}", json={"ports": [EAVES_PORT], "baseUniverse": 1})
+
+    print("\n== F2/F3: finding levels")
+    plan = c.get(f"/api/hinkspix/{cid}/plan").get_json() or {}
+    lv = {f.get("code"): f.get("level") for f in plan.get("findings", [])}
+    ok("F3: reboot_required is info", lv.get("reboot_required") == "info", lv)
+    add_child(ip, 9434)
+    parent_server._children[-1]["hinks"].update({k: v for k, v in h.items() if k != "ports"})
+    parent_server._children[-1]["hinks"]["ports"] = []
+    fake.log.clear()
+    r = c.post("/api/hinkspix/9434/apply", json={"wait": True, "ack": ["empty_config", "reboot_required", "engine_protocol_mismatch"]})
+    ok("F2: empty config refused even when empty_config is acknowledged (409)", r.status_code == 409, (r.status_code, r.data[:200]))
+    ok("F2: nothing written for the refused empty config", not any(e[2].get("DATA") for e in fake.log))
+    parent_server._children[:] = [x for x in parent_server._children if x.get("id") != 9434]
 
     print("\n== failure handling: unreachable controller")
     add_child("127.0.0.1:9", 9432)
