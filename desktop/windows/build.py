@@ -55,6 +55,10 @@ else:
 SPA    = SHARED / "spa"
 ICO    = (HERE / ".." / ".." / "images" / "slyled.ico").resolve()
 FWDIR  = (HERE / ".." / ".." / "firmware").resolve()
+# #948 — PyInstaller's --add-data separator is os.pathsep: ';' on Windows,
+# ':' on macOS/Linux.
+SEP    = os.pathsep
+IS_WIN = sys.platform == "win32"
 
 # Embed Windows VERSIONINFO into SlyLED.exe so its file properties
 # show File version / Product version matching the release plus the
@@ -111,38 +115,38 @@ args = [
     "--distpath", str(HERE / "dist"),
     "--workpath", str(HERE / "build"),
     "--specpath", str(HERE),
-    "--icon", str(ICO),
-    "--version-file", str(_VERSION_FILE),
-    "--add-data", f"{SPA};spa",
+    "--add-data", f"{SPA}{SEP}spa",
     # Bundle local modules alongside the exe so they're importable
-    "--add-data", f"{SHARED / 'parent_server.py'};.",
-    "--add-data", f"{SHARED / 'firmware_manager.py'};.",
-    "--add-data", f"{SHARED / 'spatial_engine.py'};.",
-    "--add-data", f"{SHARED / 'bake_engine.py'};.",
-    "--add-data", f"{SHARED / 'wled_bridge.py'};.",
-    "--add-data", f"{SHARED / 'dmx_profiles.py'};.",
-    "--add-data", f"{SHARED / 'dmx_artnet.py'};.",
-    "--add-data", f"{SHARED / 'dmx_sacn.py'};.",
-    "--add-data", f"{SHARED / 'show_generator.py'};.",
-    "--add-data", f"{SHARED / 'community_client.py'};.",
-    "--add-data", f"{SHARED / 'mover_control.py'};.",
-    "--add-data", f"{SHARED / 'space_mapper.py'};.",
-    "--add-data", f"{SHARED / 'surface_analyzer.py'};.",
+    "--add-data", f"{SHARED / 'parent_server.py'}{SEP}.",
+    "--add-data", f"{SHARED / 'app_dirs.py'}{SEP}.",      # #948
+    "--add-data", f"{SHARED / 'net_ifaces.py'}{SEP}.",    # #948
+    "--add-data", f"{SHARED / 'firmware_manager.py'}{SEP}.",
+    "--add-data", f"{SHARED / 'spatial_engine.py'}{SEP}.",
+    "--add-data", f"{SHARED / 'bake_engine.py'}{SEP}.",
+    "--add-data", f"{SHARED / 'wled_bridge.py'}{SEP}.",
+    "--add-data", f"{SHARED / 'dmx_profiles.py'}{SEP}.",
+    "--add-data", f"{SHARED / 'dmx_artnet.py'}{SEP}.",
+    "--add-data", f"{SHARED / 'dmx_sacn.py'}{SEP}.",
+    "--add-data", f"{SHARED / 'show_generator.py'}{SEP}.",
+    "--add-data", f"{SHARED / 'community_client.py'}{SEP}.",
+    "--add-data", f"{SHARED / 'mover_control.py'}{SEP}.",
+    "--add-data", f"{SHARED / 'space_mapper.py'}{SEP}.",
+    "--add-data", f"{SHARED / 'surface_analyzer.py'}{SEP}.",
     # #784 PR-7 — `mover_calibrator.py`, `coverage_math.py`,
     # `parametric_mover.py`, `sphere_model.py`, `structured_light.py`
     # deleted. The canonical aim path is the `aim/` package below.
-    "--add-data", f"{SHARED / 'aim'};aim",
-    "--add-data", f"{SHARED / 'remote_orientation.py'};.",
-    "--add-data", f"{SHARED / 'dmx_universe.py'};.",
-    "--add-data", f"{SHARED / 'depth_runtime.py'};.",
-    "--add-data", f"{SHARED / 'depth_runner.py'};.",
-    "--add-data", f"{SHARED / 'camera_settings.py'};.",   # #623
-    "--add-data", f"{SHARED / 'ollama_runtime.py'};.",    # #623
+    "--add-data", f"{SHARED / 'aim'}{SEP}aim",
+    "--add-data", f"{SHARED / 'remote_orientation.py'}{SEP}.",
+    "--add-data", f"{SHARED / 'dmx_universe.py'}{SEP}.",
+    "--add-data", f"{SHARED / 'depth_runtime.py'}{SEP}.",
+    "--add-data", f"{SHARED / 'depth_runner.py'}{SEP}.",
+    "--add-data", f"{SHARED / 'camera_settings.py'}{SEP}.",   # #623
+    "--add-data", f"{SHARED / 'ollama_runtime.py'}{SEP}.",    # #623
     # B1 blueprint split - parent_server's extracted Blueprint modules
-    "--add-data", f"{SHARED / 'orch_state.py'};.",
-    "--add-data", f"{SHARED / 'orch_firmware.py'};.",
-    "--add-data", f"{SHARED / 'orch_camera_deploy.py'};.",
-    "--add-data", f"{SHARED / 'orch_project.py'};.",
+    "--add-data", f"{SHARED / 'orch_state.py'}{SEP}.",
+    "--add-data", f"{SHARED / 'orch_firmware.py'}{SEP}.",
+    "--add-data", f"{SHARED / 'orch_camera_deploy.py'}{SEP}.",
+    "--add-data", f"{SHARED / 'orch_project.py'}{SEP}.",
     "--hidden-import=pystray",
     "--hidden-import=paramiko",
     "--hidden-import=numpy",
@@ -156,7 +160,7 @@ args = [
     # "_sounddevice_data not found". Same shape as cv2 (also bundles
     # binaries) but cv2 gets handled by its own PyInstaller hook.
     "--collect-all=sounddevice",
-    "--add-data", f"{SHARED / 'local_audio_brightness.py'};.",
+    "--add-data", f"{SHARED / 'local_audio_brightness.py'}{SEP}.",
     "--collect-submodules=flask",
     "--collect-submodules=werkzeug",
     # B2 - production WSGI server; imported lazily in parent_server._serve,
@@ -168,6 +172,9 @@ args = [
     "--collect-data=esptool",
     "--paths", str(SHARED),
 ]
+# Windows-only resources: .ico icon and the VERSIONINFO resource.
+if IS_WIN:
+    args += ["--icon", str(ICO), "--version-file", str(_VERSION_FILE)]
 
 # #568 — bundle ONLY firmware/registry.json (manifest + download URLs)
 # into the installer. The binaries themselves (esp32/*.bin, giga/*.bin,
@@ -178,7 +185,7 @@ args = [
 reg_path = FWDIR / "registry.json"
 if reg_path.exists():
     args.append("--add-data")
-    args.append(f"{reg_path};firmware")
+    args.append(f"{reg_path}{SEP}firmware")
 
 # #637 — bundle the user manual (HTML + images + markdown source) so the
 # /help route resolves in frozen/installed builds. Without these, the
@@ -193,27 +200,27 @@ MANUAL_FR_DOCX = (HERE / ".." / ".." / "docs" / "USER_MANUAL_fr.docx").resolve()
 SCHEMA_DIR  = (HERE / ".." / ".." / "docs" / "schema").resolve()
 BUILD_DIR   = (HERE / ".." / ".." / "docs" / "build").resolve()
 if HELP_DIR.exists():
-    args += ["--add-data", f"{HELP_DIR};docs/help"]
+    args += ["--add-data", f"{HELP_DIR}{SEP}docs/help"]
 if MANUAL_EN.exists():
-    args += ["--add-data", f"{MANUAL_EN};docs"]
+    args += ["--add-data", f"{MANUAL_EN}{SEP}docs"]
 if MANUAL_FR.exists():
-    args += ["--add-data", f"{MANUAL_FR};docs"]
+    args += ["--add-data", f"{MANUAL_FR}{SEP}docs"]
 # #818 — also bundle PDF / DOCX so the operator can open the offline
 # manual from the installed app without a network round-trip; bundle
 # the glossary schema so the /api/glossary hover layer works in
 # frozen builds.
 if MANUAL_EN_PDF.exists():
-    args += ["--add-data", f"{MANUAL_EN_PDF};docs"]
+    args += ["--add-data", f"{MANUAL_EN_PDF}{SEP}docs"]
 if MANUAL_FR_PDF.exists():
-    args += ["--add-data", f"{MANUAL_FR_PDF};docs"]
+    args += ["--add-data", f"{MANUAL_FR_PDF}{SEP}docs"]
 if MANUAL_EN_DOCX.exists():
-    args += ["--add-data", f"{MANUAL_EN_DOCX};docs"]
+    args += ["--add-data", f"{MANUAL_EN_DOCX}{SEP}docs"]
 if MANUAL_FR_DOCX.exists():
-    args += ["--add-data", f"{MANUAL_FR_DOCX};docs"]
+    args += ["--add-data", f"{MANUAL_FR_DOCX}{SEP}docs"]
 if SCHEMA_DIR.exists():
-    args += ["--add-data", f"{SCHEMA_DIR};docs/schema"]
+    args += ["--add-data", f"{SCHEMA_DIR}{SEP}docs/schema"]
 if BUILD_DIR.exists():
-    args += ["--add-data", f"{BUILD_DIR};docs/build"]
+    args += ["--add-data", f"{BUILD_DIR}{SEP}docs/build"]
 
 args.append(str(SHARED / "main.py"))
 

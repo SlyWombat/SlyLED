@@ -34,7 +34,10 @@ try:
     import pystray
     from PIL import Image, ImageDraw
     _TRAY = True
-except ImportError:
+except Exception:
+    # Not just ImportError: on a headless Linux box (systemd, SSH, no
+    # $DISPLAY) pystray picks its Xorg backend at import time and raises
+    # Xlib's DisplayNameError (#948) — run without a tray instead.
     _TRAY = False
 
 
