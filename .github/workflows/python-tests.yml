@@ -100,7 +100,8 @@ jobs:
         run: |
           pip install "flask>=3.0" "qrcode>=7.0" requests numpy \
             opencv-python-headless "cryptography>=41.0" pyyaml \
-            "paramiko>=3.0" "pyserial>=3.5" "psutil>=5.9" "esptool>=4.7"
+            "paramiko>=3.0" "pyserial>=3.5" "psutil>=5.9" "esptool>=4.7" \
+            "waitress>=3.0"
 
       - name: Restore commit-time file mtimes
         if: runner.os == 'Linux'
