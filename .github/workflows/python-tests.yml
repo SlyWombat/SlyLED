@@ -1,6 +1,6 @@
 # Issue #904 — CI that actually runs the Python test suites.
 #
-# Two jobs:
+# Three jobs:
 #
 #  1. "unit" — every PR + push to main. Fast, no browser: the flask
 #     test-client suites, the aim/ IK gates, the wire-parity suites,
@@ -8,7 +8,11 @@
 #     validators. ~7 min (measured 2026-09-24; the renderer and HinksPix
 #     steps added ~2 min to the ~5 before them).
 #
-#  2. "regression" — weekly cron (+ manual dispatch). Installs
+#  2. "linux-install" — every PR + push to main (#948). Runs
+#     desktop/linux/install.sh in clean Ubuntu/Debian containers and
+#     drives the installed service as its non-root user.
+#
+#  3. "regression" — weekly cron (+ manual dispatch). Installs
 #     Playwright chromium and runs tests/regression/run_all.py (the
 #     stage-setup → layout → bake → 3D-runtime end-to-end flow), plus
 #     the HinksPix SPA suites (they render the served SPA in a real
@@ -78,6 +82,13 @@ jobs:
         with:
           python-version: '3.11'
 
+      - uses: actions/setup-node@v4
+        # The renderer-parity gate runs spa/js under node and prints
+        # [SKIP] (exit 0) without it — pin node so the macOS leg (#948)
+        # enforces parity instead of silently skipping.
+        with:
+          node-version: '20'
+
       - name: Install dependencies
         # No single requirements.txt covers the test surface —
         # desktop/windows/requirements.txt includes Windows-only deps
@@ -125,7 +136,8 @@ jobs:
                    tests/test_platform_paths.py \
                    tests/test_net_ifaces.py \
                    tests/test_firmware_platform.py \
-                   tests/test_platform_smoke.py; do
+                   tests/test_platform_smoke.py \
+                   tests/test_linux_packaging.py; do
             echo "== $t"
             SLYLED_DATA=$(mktemp -d) python3 -X utf8 "$t"
           done
@@ -239,6 +251,24 @@ jobs:
         # drift nudge already runs in docs-drift.yml — not duplicated
         # here.
         run: python3 tools/docs/drift_check.py --mode parity
+
+  linux-install:
+    # #948 Phase 2 — desktop/linux/install.sh in clean containers: the
+    # supported floor (22.04 / Bookworm, python 3.10/3.11) and the newest
+    # target (26.04, python 3.14 — what the kdocker3 bench runs). The test
+    # starts the unit's own ExecStart as its own User= and checks /status,
+    # data placement, SIGKILL persistence and --uninstall/--purge.
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['ubuntu:22.04', 'debian:bookworm', 'ubuntu:26.04']
+    steps:
+      - uses: actions/checkout@v4
+      - name: install.sh in ${{ matrix.image }}
+        run: python3 -X utf8 tests/test_linux_install_docker.py --image '${{ matrix.image }}'
 
   regression:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'

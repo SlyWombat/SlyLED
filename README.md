@@ -51,7 +51,7 @@ A complete lighting-design and control stack that does the jobs grandMA3, Follow
 
 | Role | Board | Purpose |
 |---|---|---|
-| Orchestrator | Windows 11 / macOS | Web UI + show design + CV pipeline |
+| Orchestrator | Windows 11 / Linux (headless service) / macOS (from source) | Web UI + show design + CV pipeline |
 | Orchestrator (alt) | Android (Kotlin/Compose) | Live-operator console |
 | DMX bridge | Arduino Giga R1 WiFi | Art-Net → DMX512 output |
 | LED performer | ESP32 / D1 Mini | WS2812B strips |
@@ -66,6 +66,19 @@ A complete lighting-design and control stack that does the jobs grandMA3, Follow
 2. SlyLED opens in your browser at `http://localhost:8080`.
 3. Go to **Setup → Discover** to pick up any performers + camera nodes already on the network.
 4. Run through the 30-minute walkthrough in [the user manual](docs/USER_MANUAL.pdf) §2.
+
+### Linux (headless controller)
+
+On Ubuntu 22.04+ / Debian Bookworm+ (x86_64 or aarch64 — a Pi 4/5 or a NUC),
+from a clone of this repo:
+
+```bash
+sudo bash desktop/linux/install.sh      # systemd service "slyled" on :8080
+journalctl -u slyled -f                 # logs
+```
+
+Then browse to `http://<host>:8080` from any machine on the LAN. Details:
+[desktop/linux/README.md](desktop/linux/README.md) and manual §3.
 
 ### From source
 

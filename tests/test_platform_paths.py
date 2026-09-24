@@ -11,6 +11,7 @@ Run:
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "desktop", "shared"))
@@ -29,8 +30,16 @@ def eq(name, got, want):
 
 
 HOME = Path("/home/op")
-SRC = Path("/repo/desktop/shared")
-FW = Path("/repo/firmware")
+# A git checkout (REPO/.git exists) vs an installed copy of the same tree
+# (INST, no .git — what desktop/linux/install.sh lays down in /opt/slyled).
+_TMP = Path(tempfile.mkdtemp(prefix="slyled-paths-"))
+REPO, INST = _TMP / "repo", _TMP / "opt-slyled"
+for _root in (REPO, INST):
+    (_root / "desktop" / "shared").mkdir(parents=True)
+    (_root / "firmware").mkdir()
+(REPO / ".git").mkdir()
+SRC, FW = REPO / "desktop" / "shared", REPO / "firmware"
+INST_SRC, INST_FW = INST / "desktop" / "shared", INST / "firmware"
 WIN_ENV = {"APPDATA": "/w/Roaming", "LOCALAPPDATA": "/w/Local"}
 
 
@@ -87,14 +96,35 @@ def run():
        HOME / "Library/Application Support/SlyLED/data")
     eq("linux frozen = ~/.local/share/SlyLED/data",
        app_dirs.data_dir(SRC, True, "linux", {}, HOME), HOME / ".local/share/SlyLED/data")
-    eq("darwin source checkout stays self-contained (BASE/data)",
+    eq("darwin git checkout stays self-contained (BASE/data)",
        app_dirs.data_dir(SRC, False, "darwin", {}, HOME), SRC / "data")
-    eq("linux source checkout stays self-contained (BASE/data)",
+    eq("linux git checkout stays self-contained (BASE/data)",
        app_dirs.data_dir(SRC, False, "linux", {}, HOME), SRC / "data")
+    wt = _TMP / "worktree"
+    (wt / "desktop" / "shared").mkdir(parents=True)
+    (wt / ".git").write_text("gitdir: /elsewhere\n")
+    eq("linked worktree (.git file) counts as a checkout",
+       app_dirs.data_dir(wt / "desktop" / "shared", False, "linux", {}, HOME),
+       wt / "desktop" / "shared" / "data")
+    eq("installed source copy (no .git) -> per-user dir, not the install tree",
+       app_dirs.data_dir(INST_SRC, False, "linux", {}, HOME), HOME / ".local/share/SlyLED/data")
+    eq("installed copy honours XDG_DATA_HOME (systemd unit sets it)",
+       app_dirs.data_dir(INST_SRC, False, "linux", {"XDG_DATA_HOME": "/var/lib/slyled"}, HOME),
+       Path("/var/lib/slyled/SlyLED/data"))
+    eq("installed copy on macOS -> Application Support",
+       app_dirs.data_dir(INST_SRC, False, "darwin", {}, HOME),
+       HOME / "Library/Application Support/SlyLED/data")
 
     # ── firmware cache + runtime dirs ────────────────────────────────────
-    eq("source run: firmware cache = repo firmware tree",
+    eq("git checkout: firmware cache = repo firmware tree",
        app_dirs.firmware_cache_dir(FW, False, "darwin", {}, HOME), FW)
+    eq("installed copy: firmware cache under XDG data, not the root-owned tree",
+       app_dirs.firmware_cache_dir(INST_FW, False, "linux",
+                                   {"XDG_DATA_HOME": "/var/lib/slyled"}, HOME),
+       Path("/var/lib/slyled/SlyLED/firmware"))
+    eq("frozen beats a stray .git: firmware cache per-user",
+       app_dirs.firmware_cache_dir(FW, True, "linux", {}, HOME),
+       HOME / ".local/share/SlyLED/firmware")
     eq("win32 frozen firmware cache = %APPDATA%\\SlyLED\\firmware",
        app_dirs.firmware_cache_dir(FW, True, "win32", WIN_ENV, HOME),
        Path("/w/Roaming/SlyLED/firmware"))

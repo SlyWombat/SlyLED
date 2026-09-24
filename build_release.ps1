@@ -260,10 +260,20 @@ function Set-AndroidStoredHash([string]$hash, [string]$ver) {
 function Get-OrchestratorSourceHash {
     $files = @()
     $files += Get-ChildItem -Path "$root\desktop" -Include *.py,*.html,*.js,*.css -File -Recurse -ErrorAction SilentlyContinue
+    # #948 — non-Windows launchers/installers match none of the globs above
+    # (.sh/.service/.rules/.txt); list them so an install-script-only change
+    # still moves the hash.
     $extra = @(
         "$root\desktop\windows\installer.iss",
         "$root\desktop\windows\build.py",
-        "$root\desktop\windows\run.ps1"
+        "$root\desktop\windows\run.ps1",
+        "$root\desktop\windows\requirements.txt",
+        "$root\desktop\linux\install.sh",
+        "$root\desktop\linux\slyled.service",
+        "$root\desktop\linux\99-slyled-usb.rules",
+        "$root\desktop\linux\requirements.txt",
+        "$root\desktop\mac\run.sh",
+        "$root\desktop\mac\requirements.txt"
     )
     foreach ($e in $extra) {
         if (Test-Path $e) { $files += Get-Item $e }

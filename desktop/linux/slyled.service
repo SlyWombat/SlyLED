@@ -1,0 +1,35 @@
+# SlyLED orchestrator as a headless systemd service (#948 Phase 2).
+# Installed to /etc/systemd/system/slyled.service by install.sh.
+# Change the port with `sudo systemctl edit slyled` (override ExecStart).
+[Unit]
+Description=SlyLED Orchestrator
+Documentation=https://github.com/SlyWombat/SlyLED
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=slyled
+Group=slyled
+# /dev/ttyUSB* and /dev/ttyACM* (firmware flashing) plus the Giga DFU
+# device (99-slyled-usb.rules) are group dialout.
+SupplementaryGroups=dialout
+WorkingDirectory=/opt/slyled/desktop/shared
+# Data, firmware cache and runtimes land under /var/lib/slyled/SlyLED
+# (app_dirs: the install tree has no .git, so it is never written to).
+StateDirectory=slyled
+CacheDirectory=slyled
+Environment=XDG_DATA_HOME=/var/lib/slyled
+Environment=XDG_CACHE_HOME=/var/cache/slyled
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/slyled/.venv/bin/python /opt/slyled/desktop/shared/parent_server.py --no-browser --port 8080
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

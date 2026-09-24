@@ -36,8 +36,9 @@ IP_OUTPUT = """\
 3: eth1    inet 10.20.0.5/16 brd 10.20.255.255 scope global eth1\\       valid_lft forever
 4: wlan0    inet 169.254.3.4/16 scope link wlan0\\       valid_lft forever
 5: docker0    inet 10.99.0.1/24 scope global docker0\\       valid_lft forever
+8: tun0    inet 10.9.0.2/24 scope global tun0\\       valid_lft forever
 6: eth2    inet 172.22.1.9/20 scope global eth2\\       valid_lft forever
-7: tun0    inet 10.8.0.2/32 scope global tun0\\       valid_lft forever
+7: eth3    inet 10.8.0.2/32 scope global eth3\\       valid_lft forever
 """
 
 
@@ -59,7 +60,8 @@ def run():
     ok("non-127 address on lo skipped (WSL2 DNS tunnel)", "10.255.255.254" not in ips, ips)
     ok("link-local skipped", "169.254.3.4" not in ips, ips)
     ok("docker bridge skipped by name", "10.99.0.1" not in ips, ips)
-    eq("interface names parsed", [p["name"] for p in parsed], ["eth0", "eth1", "eth2", "tun0"])
+    ok("VPN tunnel skipped by name", "10.9.0.2" not in ips, ips)
+    eq("interface names parsed", [p["name"] for p in parsed], ["eth0", "eth1", "eth2", "eth3"])
     eq("prefix lengths parsed", [p["prefixlen"] for p in parsed], [24, 16, 20, 32])
 
     filtered = net_ifaces._filter(parsed + parsed)
@@ -74,6 +76,41 @@ def run():
        net_ifaces.subnet_broadcasts(filtered), ["192.168.10.255", "10.20.255.255"])
     eq("scan_prefixes stays /24 per address",
        net_ifaces.scan_prefixes(filtered), ["192.168.10", "10.20.0", "10.8.0"])
+
+    # ── psutil table shaped like kdocker3 (#948 QA Linux target) ─────────
+    # bond0 on the LAN plus nine docker /16 bridges and their veths.
+    from collections import namedtuple
+    Addr = namedtuple("Addr", "family address netmask broadcast ptp")
+    Stat = namedtuple("Stat", "isup flags")
+    table = {"lo": [Addr(socket.AF_INET, "127.0.0.1", "255.0.0.0", None, None)],
+             "bond0": [Addr(socket.AF_INET, "192.168.10.38", "255.255.255.0", None, None)],
+             "docker0": [Addr(socket.AF_INET, "172.17.0.1", "255.255.0.0", None, None)],
+             "veth1a2b3c": [], "tailscale0": [Addr(socket.AF_INET, "100.101.1.2", "255.255.255.255", None, None)]}
+    for n in range(18, 26):
+        table[f"br-{n:02x}c0ffee{n}"] = [Addr(socket.AF_INET, f"172.{n}.0.1", "255.255.0.0", None, None)]
+    stats = {k: Stat(True, "up,loopback,running" if k == "lo" else "up,broadcast,running") for k in table}
+    stats["enp3s0"] = Stat(False, "broadcast")
+    table["enp3s0"] = [Addr(socket.AF_INET, "10.0.0.5", "255.255.255.0", None, None)]
+
+    class FakePsutil:
+        @staticmethod
+        def net_if_addrs():
+            return table
+
+        @staticmethod
+        def net_if_stats():
+            return stats
+
+    saved_ps = net_ifaces.psutil
+    try:
+        net_ifaces.psutil = FakePsutil
+        k3 = net_ifaces._filter(net_ifaces._from_psutil())
+        eq("kdocker3: only bond0 survives", [(e["name"], e["ip"]) for e in k3],
+           [("bond0", "192.168.10.38")])
+        eq("kdocker3: broadcast only on the LAN", net_ifaces.subnet_broadcasts(k3), ["192.168.10.255"])
+        eq("kdocker3: camera sweep only on the LAN", net_ifaces.scan_prefixes(k3), ["192.168.10"])
+    finally:
+        net_ifaces.psutil = saved_ps
 
     # ── fallback chain: first non-empty step wins ────────────────────────
     saved = (net_ifaces._from_psutil, net_ifaces._from_ip_cmd,

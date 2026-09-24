@@ -11,6 +11,9 @@ each inventing their own convention.
   Linux/other    $XDG_DATA_HOME/SlyLED                  (same as data root)             $XDG_CACHE_HOME/SlyLED
                  (default ~/.local/share/SlyLED)                                          (default ~/.cache/SlyLED)
 
+A git checkout (dev run from source) is the one exception: it keeps data in
+desktop/shared/data and the firmware cache in the repo firmware tree.
+
 Every function takes an optional `platform` / `environ` / `home` so the
 per-OS answers can be asserted from any host (tests/test_platform_paths.py).
 Nothing here creates directories — callers mkdir what they use.
@@ -38,6 +41,16 @@ def _home(home):
 def is_frozen():
     """True inside a PyInstaller bundle (exe, .app, or onedir tarball)."""
     return bool(getattr(sys, "frozen", False))
+
+
+def _self_contained(repo_root, frozen):
+    """Not frozen and `repo_root` is a git work tree (.git dir, or file for
+    a linked worktree). Only a developer checkout keeps its data beside the
+    code; an installed copy of the source (desktop/linux/install.sh's
+    /opt/slyled — root-owned, no .git) writes to the per-user dirs like a
+    frozen build does."""
+    frozen = is_frozen() if frozen is None else frozen
+    return not frozen and (Path(repo_root) / ".git").exists()
 
 
 def user_data_root(platform=None, environ=None, home=None):
@@ -80,29 +93,28 @@ def data_dir(source_base, frozen=None, platform=None, environ=None, home=None):
       1. SLYLED_DATA — verbatim; tests and screenshot tools point it at a
          throwaway dir so they can never clobber a live operator project.
       2. Windows — %APPDATA%\\SlyLED\\data, frozen or not (pre-#948 behaviour).
-      3. Frozen elsewhere — <user_data_root>/data. `source_base` would be
-         PyInstaller's extraction dir, which is wiped on exit.
-      4. Source checkout elsewhere — <source_base>/data, so dev runs stay
+      3. Git checkout elsewhere — <source_base>/data, so dev runs stay
          self-contained (gitignored as desktop/shared/data/).
+      4. Everything else (frozen bundle, installed source copy) —
+         <user_data_root>/data. `source_base` is then PyInstaller's
+         extraction dir or a root-owned install tree.
     """
     plat, env = _plat(platform), _env(environ)
-    frozen = is_frozen() if frozen is None else frozen
     if env.get("SLYLED_DATA"):
         return Path(env["SLYLED_DATA"])
     if plat == "win32" and env.get("APPDATA"):
         return user_data_root(plat, env, home) / "data"
-    if frozen:
-        return user_data_root(plat, env, home) / "data"
-    return Path(source_base) / "data"
+    if _self_contained(Path(source_base).parent.parent, frozen):
+        return Path(source_base) / "data"
+    return user_data_root(plat, env, home) / "data"
 
 
 def firmware_cache_dir(source_fw_dir, frozen=None, platform=None, environ=None,
                        home=None):
     """Writable cache for firmware binaries + the registry.json override
-    (#568, #832). A source checkout reuses the repo firmware tree so locally
+    (#568, #832). A git checkout reuses the repo firmware tree so locally
     built binaries are picked up without a download round-trip."""
-    frozen = is_frozen() if frozen is None else frozen
-    if not frozen:
+    if _self_contained(Path(source_fw_dir).parent, frozen):
         return Path(source_fw_dir)
     return user_data_root(platform, environ, home) / "firmware"
 

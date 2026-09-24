@@ -1,0 +1,25 @@
+# SlyLED orchestrator — headless Linux (#948 Phase 2). Installed into
+# /opt/slyled/.venv by install.sh. Mirrors desktop/windows/requirements.txt
+# minus pystray (no display on a rack controller). pillow stays: qrcode
+# renders the phone-pairing QR PNG through it.
+#
+# Every package below ships cp3xx/abi3 wheels for x86_64 and aarch64 EXCEPT
+# esptool, which is published as an sdist only (pure Python, builds fine) —
+# so install.sh must never pass --only-binary=:all:.
+#
+# Deliberately absent: requests (not imported by desktop/shared).
+# pyyaml is added over the Windows list: /api/glossary (SPA help hover
+# cards) needs it and otherwise answers 500.
+flask>=3.0
+waitress>=3.0
+pyserial>=3.5
+esptool>=4.7
+cryptography>=41.0
+qrcode>=7.0
+pillow>=10.0
+pyyaml>=6.0
+paramiko>=3.0
+numpy>=1.26
+opencv-python-headless>=4.9
+sounddevice>=0.4
+psutil>=5.9

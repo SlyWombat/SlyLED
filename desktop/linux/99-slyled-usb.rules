@@ -1,0 +1,24 @@
+# SlyLED — USB boards the Firmware tab flashes (#948 Phase 2).
+# One line per firmware_manager.KNOWN_BOARDS VID:PID. The serial adapters
+# are already group dialout on Debian/Ubuntu; the rules make that explicit
+# and keep ModemManager from probing the native-USB CDC ports mid-flash.
+# The Giga DFU bootloader is a raw USB device (not a tty) and would
+# otherwise be root-only.
+
+# CP210x (ESP32)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", GROUP="dialout", MODE="0660"
+# CH340 (D1 Mini / ESP32)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", GROUP="dialout", MODE="0660"
+# CH9102 (D1 Mini)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", GROUP="dialout", MODE="0660"
+# CH343 (Waveshare ESP32-S3)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d3", GROUP="dialout", MODE="0660"
+# FTDI FT232 (ESP32)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", GROUP="dialout", MODE="0660"
+# ESP32-S3 native USB and USB-UART
+SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", GROUP="dialout", MODE="0660", ENV{ID_MM_DEVICE_IGNORE}="1"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="0002", GROUP="dialout", MODE="0660", ENV{ID_MM_DEVICE_IGNORE}="1"
+# Arduino Giga R1 WiFi (native CDC)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2341", ATTRS{idProduct}=="0266", GROUP="dialout", MODE="0660", ENV{ID_MM_DEVICE_IGNORE}="1"
+# Arduino Giga R1 DFU bootloader (arduino-cli upload)
+SUBSYSTEM=="usb", ATTR{idVendor}=="2341", ATTR{idProduct}=="0366", GROUP="dialout", MODE="0660"

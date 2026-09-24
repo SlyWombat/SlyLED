@@ -6,6 +6,17 @@ The primary design and control interface. Full-featured 7-tab SPA with 2D/3D lay
 **Launch:** `powershell -File desktop\windows\run.ps1` or run `SlyLED.exe`
 **Install:** Run `SlyLED-Setup.exe` (includes system tray icon)
 
+### Linux (headless controller)
+The same orchestrator as a background service on a rack or bench machine with no display — a Raspberry Pi 4/5, a NUC, or any Ubuntu 22.04+ / Debian Bookworm+ host (x86_64 or aarch64). Operate it from a browser on another machine or from the Android app.
+
+**Install:** from a copy of the SlyLED source, run `sudo bash desktop/linux/install.sh`. It installs the code to `/opt/slyled` with its own Python environment, creates the `slyled` service account (member of `dialout`, so the Firmware tab can flash USB boards), and starts the `slyled` service on port 8080. Then open `http://<host>:8080`.
+**Data:** projects, settings and logs are kept in `/var/lib/slyled/SlyLED/data`; downloaded firmware in `/var/lib/slyled/SlyLED/firmware`.
+**Logs:** `journalctl -u slyled -f`
+**Upgrade:** run the installer again from the newer source; your data is kept.
+**Remove:** `sudo bash desktop/linux/install.sh --uninstall` (keeps data; add `--purge` to delete it and the service account).
+**Firewall:** when ufw or firewalld is active the installer opens TCP 8080 and UDP 4210, 4211, 5568 and 6454.
+**Network:** discovery, Art-Net and the camera scan use every physical network interface; Docker/VM bridges and VPN tunnels are skipped.
+
 ### Android App
 Live operator tool for running shows from your phone. Connects to the desktop server over WiFi. As of v1.8.1 the Control tab is rebuilt as a **Command Surface** — see #888 / `docs/design/mobile_ui_redesign.md`.
 

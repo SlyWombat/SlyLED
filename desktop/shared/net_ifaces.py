@@ -15,8 +15,8 @@ One chain, first non-empty answer wins:
                                   traffic sent); /24 assumed.
 
 Loopback interfaces/addresses and link-local (169.254/16) addresses are
-never returned, nor are container/VM bridges (docker*, br-*, veth*,
-virbr*). Private 172.16/12 addresses are dropped when any other address exists — that is the WSL2 NAT
+never returned, nor are container/VM bridges and VPN tunnels (docker*,
+br-*, veth*, virbr*, tun*, tap*, wg*, tailscale*, zt*). Private 172.16/12 addresses are dropped when any other address exists — that is the WSL2 NAT
 bridge / Docker default range, and it has no path to the lighting LAN.
 """
 
@@ -31,7 +31,9 @@ try:
 except ImportError:  # optional — the chain degrades to `ip` / getaddrinfo
     psutil = None
 
-_VIRTUAL_PREFIXES = ("docker", "br-", "veth", "virbr")
+# Container/VM bridges and VPN tunnels: never a path to the lighting LAN.
+_VIRTUAL_PREFIXES = ("docker", "br-", "veth", "virbr", "tun", "tap", "wg",
+                     "tailscale", "zt")
 _NET_172 = ipaddress.ip_network("172.16.0.0/12")
 
 

@@ -7,6 +7,17 @@ L'interface principale de conception et de contrôle. SPA complète à 7 onglets
 **Lancement :** `powershell -File desktop\windows\run.ps1` ou exécutez `SlyLED.exe`
 **Installation :** Exécutez `SlyLED-Setup.exe` (inclut l'icône de la barre système)
 
+### Linux (contrôleur sans écran)
+Le même orchestrateur, en service d'arrière-plan sur une machine de baie ou de banc sans écran — un Raspberry Pi 4/5, un NUC ou tout hôte Ubuntu 22.04+ / Debian Bookworm+ (x86_64 ou aarch64). On le pilote depuis un navigateur sur une autre machine ou depuis l'application Android.
+
+**Installation :** depuis une copie des sources SlyLED, exécutez `sudo bash desktop/linux/install.sh`. Le code est installé dans `/opt/slyled` avec son propre environnement Python, le compte de service `slyled` est créé (membre de `dialout`, pour que l'onglet Firmware puisse flasher les cartes USB) et le service `slyled` démarre sur le port 8080. Ouvrez ensuite `http://<hôte>:8080`.
+**Données :** projets, réglages et journaux sont conservés dans `/var/lib/slyled/SlyLED/data` ; le firmware téléchargé dans `/var/lib/slyled/SlyLED/firmware`.
+**Journaux :** `journalctl -u slyled -f`
+**Mise à jour :** relancez l'installateur depuis les sources plus récentes ; vos données sont conservées.
+**Désinstallation :** `sudo bash desktop/linux/install.sh --uninstall` (conserve les données ; ajoutez `--purge` pour les supprimer avec le compte de service).
+**Pare-feu :** si ufw ou firewalld est actif, l'installateur ouvre TCP 8080 et UDP 4210, 4211, 5568 et 6454.
+**Réseau :** la découverte, Art-Net et le balayage des caméras utilisent toutes les interfaces réseau physiques ; les ponts Docker/VM et les tunnels VPN sont ignorés.
+
 ### Application Android
 Outil opérateur en direct pour exécuter des spectacles depuis votre téléphone. Se connecte au serveur de bureau par Wi-Fi. Depuis la version 1.8.1, l'onglet Contrôle est refait en **Surface de commande** — voir #888 / `docs/design/mobile_ui_redesign.md`.
 
