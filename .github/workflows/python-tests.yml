@@ -82,7 +82,7 @@ jobs:
         run: |
           pip install "flask>=3.0" "qrcode>=7.0" requests numpy \
             opencv-python-headless "cryptography>=41.0" pyyaml \
-            "paramiko>=3.0" "pyserial>=3.5" "psutil>=5.9"
+            "paramiko>=3.0" "pyserial>=3.5" "psutil>=5.9" "esptool>=4.7"
 
       - name: Restore commit-time file mtimes
         # tools/docs/validate_screenshots.py's freshness check and
@@ -115,7 +115,8 @@ jobs:
                    tests/test_913_radar_calibration.py \
                    tests/test_b2_serving.py \
                    tests/test_platform_paths.py \
-                   tests/test_net_ifaces.py; do
+                   tests/test_net_ifaces.py \
+                   tests/test_firmware_platform.py; do
             echo "== $t"
             SLYLED_DATA=$(mktemp -d) python3 -X utf8 "$t"
           done

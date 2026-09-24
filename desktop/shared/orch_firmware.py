@@ -577,7 +577,7 @@ def api_fw_binary(board):
                 ok=False,
                 err=f"otaSha256 mismatch for {board} — cached binary "
                     f"does not match the registry pin. Clear "
-                    f"%APPDATA%\\SlyLED\\firmware\\{board}\\ and retry."), 502
+                    f"{ps._FW_CACHE_DIR / board} and retry."), 502
         if verdict is None:
             ps.log.warning("OTA SHA verify could not read %s; serving "
                          "without integrity check (transient I/O?)",

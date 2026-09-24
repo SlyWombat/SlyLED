@@ -6,8 +6,11 @@ Uses esptool for ESP boards (bundled via PyInstaller).
 Extensible via registry.json for new board types and firmware variants.
 """
 
+import contextlib
+import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -67,25 +70,49 @@ def list_ports():
 
 # ── Chip detection for ambiguous ports ────────────────────────────────────────
 
-def detect_chip(port):
-    """Use esptool to identify the chip on a port (ESP32 vs ESP8266)."""
-    try:
-        import esptool
-        # esptool.main() captures output; run as subprocess instead
-        r = subprocess.run(
-            [sys.executable, "-m", "esptool", "--port", port, "chip_id"],
-            capture_output=True, text=True, timeout=10
-        )
-        out = r.stdout + r.stderr
-        if "ESP32-S3" in out:
-            return "esp32s3"
-        elif "ESP32" in out:
-            return "esp32"
-        elif "ESP8266" in out:
-            return "d1mini"
-    except Exception:
-        pass
+def _chip_to_board(chip_name):
+    name = (chip_name or "").upper()
+    if "ESP32-S3" in name:
+        return "esp32s3"
+    if "ESP32" in name:
+        return "esp32"
+    if "ESP8266" in name:
+        return "d1mini"
     return None
+
+def detect_chip(port):
+    """Use esptool to identify the chip on a port (ESP32 vs ESP8266).
+
+    Runs esptool in-process (#948 Phase 0.5): the old `sys.executable -m
+    esptool` subprocess could never work in a frozen build, where
+    sys.executable is the SlyLED app itself, on any OS."""
+    try:
+        from esptool.cmds import detect_chip as _esptool_detect
+    except Exception:
+        return None
+    esp = None
+    try:
+        # esptool prints "Connecting..." progress; windowed builds have no
+        # console, so swallow it.
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            esp = _esptool_detect(port=port, connect_attempts=3)
+        return _chip_to_board(getattr(esp, "CHIP_NAME", ""))
+    except Exception:
+        return None
+    finally:
+        if esp is not None:
+            # Leave the board running its firmware, not parked in the ROM
+            # bootloader (the old `chip_id` subprocess hard-reset on exit).
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    esp.hard_reset()
+            except Exception:
+                pass
+            try:
+                esp._port.close()
+            except Exception:
+                pass
 
 # ── Serial version + board query ───────────────────────────────────────────────
 
@@ -693,19 +720,44 @@ def flash_esp(port, bin_path, board="esp32", progress_cb=None,
         with _flash_lock:
             _flash_status["running"] = False
 
+def _arduino_cli_candidates(platform=None, environ=None, home=None):
+    """Well-known install locations checked before PATH. A Finder-launched
+    .app or a systemd unit inherits a minimal PATH (/usr/bin:/bin:...), so
+    Homebrew's /opt/homebrew/bin is invisible to a PATH-only lookup (#948)."""
+    plat = sys.platform if platform is None else platform
+    env = os.environ if environ is None else environ
+    h = Path.home() if home is None else Path(home)
+    if plat == "win32":
+        out = []
+        if env.get("LOCALAPPDATA"):
+            out.append(Path(env["LOCALAPPDATA"]) / "Arduino" / "arduino-cli.exe")
+        if env.get("ProgramFiles"):
+            # Arduino CLI Windows installer default
+            out.append(Path(env["ProgramFiles"]) / "Arduino CLI" / "arduino-cli.exe")
+        return out
+    if plat == "darwin":
+        return [Path("/opt/homebrew/bin/arduino-cli"), Path("/usr/local/bin/arduino-cli"),
+                h / "bin" / "arduino-cli", h / ".local" / "bin" / "arduino-cli"]
+    return [h / ".local" / "bin" / "arduino-cli", h / "bin" / "arduino-cli",
+            Path("/usr/local/bin/arduino-cli"), Path("/snap/bin/arduino-cli")]
+
 def _find_arduino_cli():
-    """Find arduino-cli executable."""
-    import os
-    # Check %LOCALAPPDATA%\Arduino\arduino-cli.exe (Windows standard)
-    local = os.path.expandvars(r"%LOCALAPPDATA%\Arduino\arduino-cli.exe")
-    if os.path.isfile(local):
-        return local
-    # Check PATH
-    for p in os.environ.get("PATH", "").split(os.pathsep):
-        candidate = os.path.join(p, "arduino-cli.exe" if os.name == "nt" else "arduino-cli")
-        if os.path.isfile(candidate):
-            return candidate
-    return None
+    """Find arduino-cli executable: well-known locations, then PATH."""
+    for c in _arduino_cli_candidates():
+        if c.is_file() and os.access(c, os.X_OK):
+            return str(c)
+    return shutil.which("arduino-cli")
+
+def arduino_cli_install_hint(platform=None):
+    """OS-appropriate 'arduino-cli not found' message."""
+    plat = sys.platform if platform is None else platform
+    if plat == "win32":
+        how = "winget install ArduinoSA.CLI"
+    elif plat == "darwin":
+        how = "brew install arduino-cli"
+    else:
+        how = "the arduino.cc install script into ~/.local/bin"
+    return f"arduino-cli not found. Install it from arduino.cc or with {how}."
 
 def flash_giga(port, bin_path, progress_cb=None):
     """Flash a Giga R1 WiFi via arduino-cli (DFU mode required)."""
@@ -715,7 +767,7 @@ def flash_giga(port, bin_path, progress_cb=None):
     cli = _find_arduino_cli()
     if not cli:
         with _flash_lock:
-            _flash_status.update(error="arduino-cli not found. Install from arduino.cc or via winget.", message="Error")
+            _flash_status.update(error=arduino_cli_install_hint(), message="Error")
         return False
 
     try:
