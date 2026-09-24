@@ -7,7 +7,10 @@ service across the LAN, the way a phone or browser would.
 
   python tests/qa/qa_948_linux_bench.py --commit <sha>            # read-only preflight
   python tests/qa/qa_948_linux_bench.py --commit <sha> --install  # ship + install + verify
-  python tests/qa/qa_948_linux_bench.py --uninstall               # remove service + /opt/slyled
+  python tests/qa/qa_948_linux_bench.py --uninstall               # install.sh --uninstall --purge + leftover check
+
+--install always ends with the purge unless --keep is given: the bench host is
+left exactly as it was found (operator rule).
 
 kdocker3 is the production Ollama host for SlyTab: this script never reboots
 the host and never touches docker. "Survives reboot" is checked as
@@ -214,12 +217,28 @@ def verify_restart():
     ok("systemd restarts it after SIGKILL (Restart=)", up)
 
 
-def uninstall():
-    print(f"\n== uninstall from {HOST}")
-    r = ssh(f"sudo -n systemctl disable --now {SERVICE} 2>&1; sudo -n rm -f /etc/systemd/system/{SERVICE}.service "
-            f"/etc/udev/rules.d/99-slyled-usb.rules; sudo -n systemctl daemon-reload; "
-            f"sudo -n rm -rf {PREFIX} {STAGE}; systemctl is-active {SERVICE} 2>&1")
+def uninstall(commit="origin/main"):
+    """Remove everything with the product's own `install.sh --uninstall --purge`
+    (so the uninstall path is tested too), then prove nothing is left behind.
+    Operator rule (2026-09-24): the bench host is always left clean."""
+    print(f"\n== uninstall --purge from {HOST}")
+    r = ssh(f"test -f {STAGE}/desktop/linux/install.sh && echo staged")
+    if "staged" not in r.stdout:
+        ship(commit)
+    r = ssh(f"cd {STAGE} && sudo -n bash desktop/linux/install.sh --uninstall --purge 2>&1 | tail -15", timeout=300)
     print("  " + r.stdout.strip().replace("\n", "\n  "))
+    ok("install.sh --uninstall --purge exit 0", r.returncode == 0, r.stderr[-300:])
+    ssh(f"rm -rf {STAGE}")
+    r = ssh(f"systemctl list-unit-files {SERVICE}.service --no-legend | wc -l; "
+            f"ls -d {PREFIX} /var/lib/slyled /var/cache/slyled /etc/udev/rules.d/99-slyled-usb.rules "
+            f"{STAGE} 2>/dev/null | wc -l; id slyled >/dev/null 2>&1 && echo user-present || echo user-gone; "
+            f"ss -lntu | grep -cE ':(8080|4210|4211) ' || true")
+    lines = r.stdout.split()
+    print(f"  leftovers: unit-files={lines[0:1]} paths={lines[1:2]} {lines[2:3]} ports={lines[3:4]}")
+    ok("no slyled unit file left", lines[:1] == ["0"], r.stdout)
+    ok("no slyled paths left (/opt, /var/lib, /var/cache, udev rule, stage)", lines[1:2] == ["0"], r.stdout)
+    ok("slyled user removed", "user-gone" in r.stdout, r.stdout)
+    ok("ports 8080/4210/4211 released", lines[-1:] == ["0"], r.stdout)
 
 
 def main():
@@ -227,10 +246,13 @@ def main():
     ap.add_argument("--commit", default="origin/main")
     ap.add_argument("--install", action="store_true")
     ap.add_argument("--uninstall", action="store_true")
+    ap.add_argument("--keep", action="store_true",
+                    help="leave the service installed after --install (default: purge it)")
     a = ap.parse_args()
     if a.uninstall:
-        uninstall()
-        return
+        uninstall(a.commit)
+        print(f"\n{_p} passed, {_f} failed out of {_p + _f} tests")
+        sys.exit(1 if _f else 0)
     preflight()
     if a.install:
         ship(a.commit)
@@ -239,6 +261,8 @@ def main():
         verify_http()
         verify_network()
         verify_restart()
+        if not a.keep:
+            uninstall(a.commit)
     print(f"\n{_p} passed, {_f} failed out of {_p + _f} tests")
     sys.exit(1 if _f else 0)
 
