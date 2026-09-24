@@ -30,6 +30,7 @@ assert ps is not None, "orch_state.bind() must run before importing orch_hinkspi
 
 import hinkspix_bridge as hb
 import hinkspix_config as hc
+import net_ifaces
 import hinkspix_xlights_import as xi
 from pixel_output import PixelOutputMap, UniverseCollision, to_wire_frame
 
@@ -195,6 +196,82 @@ def _device_dir(cid):
     os.makedirs(d, exist_ok=True)
     return d
 
+
+
+# ── Discovery (#949) ─────────────────────────────────────────────────────────
+#
+# Setup → Discover starts this alongside the UDP PING/ArtPoll discover; the SPA
+# polls it separately, so UDP results never wait on the HTTP sweep. Adding a
+# found controller is the ordinary POST /api/children {ip}, which already
+# probes and types it "hinkspix".
+
+_sweep_lock = threading.Lock()
+_sweep = {"pending": False, "done": 0, "total": 0, "found": [],
+          "notes": [], "startedAt": None, "elapsedMs": None}
+
+
+def _sweep_known_ips():
+    known = {c.get("ip") for c in ps._children}
+    known |= {f.get("cameraIp") for f in ps._fixtures
+              if f.get("fixtureType") == "camera" and f.get("cameraIp")}
+    return {ip for ip in known if ip}
+
+
+def _sweep_bg(hosts, notes):
+    t0 = time.time()
+
+    def progress(done, total):
+        _sweep["done"] = done
+
+    found = []
+    try:
+        for info in hb.discover(hosts, progress=progress):
+            found.append({
+                "ip": info["ip"], "type": "hinkspix", "boardType": info["model"],
+                "hostname": info["ip"], "name": info["model"],
+                "mcpuRaw": info.get("mcpuRaw"), "maxU": info.get("maxU"),
+                "boards": info.get("boards", {}),
+                "uploadSupported": info.get("uploadSupported"),
+            })
+    finally:
+        elapsed = time.time() - t0
+        with _sweep_lock:
+            _sweep.update(pending=False, found=found,
+                          elapsedMs=int(elapsed * 1000))
+        subnets = sorted({f"{e['ip']}/{e['prefixlen']}"
+                          for e in net_ifaces.ipv4_interfaces()})
+        ps.log.info("HinksPix sweep: subnets=%s hosts=%d found=%s in %.1fs%s",
+                    ",".join(subnets), len(hosts),
+                    [f["ip"] for f in found] or "none", elapsed,
+                    ("; " + "; ".join(notes)) if notes else "")
+
+
+@bp.post("/api/hinkspix/discover")
+def api_hinkspix_discover_start():
+    """Start the BoardInfo sweep of every local subnet (net_ifaces), skipping
+    IPs already registered. Idempotent while a sweep is running."""
+    with _sweep_lock:
+        if _sweep["pending"]:
+            return jsonify(dict(_sweep, ok=True))
+        hosts, notes = net_ifaces.sweep_hosts()
+        known = _sweep_known_ips()
+        hosts = [h for h in hosts if h not in known]
+        _sweep.update(pending=True, done=0, total=len(hosts), found=[],
+                      notes=notes, startedAt=time.time(), elapsedMs=None)
+        threading.Thread(target=_sweep_bg, args=(hosts, notes), daemon=True,
+                         name="hinks-sweep").start()
+        return jsonify(dict(_sweep, ok=True))
+
+
+@bp.get("/api/hinkspix/discover")
+def api_hinkspix_discover_state():
+    """Sweep progress and results: pending, done/total, found[], notes[]."""
+    with _sweep_lock:
+        state = dict(_sweep)
+    # A controller added while the sweep ran is no longer "new".
+    known = _sweep_known_ips()
+    state["found"] = [f for f in state["found"] if f["ip"] not in known]
+    return jsonify(state)
 
 
 # ── Device config ────────────────────────────────────────────────────────────

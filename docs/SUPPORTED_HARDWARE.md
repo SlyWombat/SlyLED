@@ -79,6 +79,12 @@ structs are sized for 8 strings regardless of the board's storage limit.
 
 ### HinksPix PRO
 
+**Discovery (#949).** Setup → Discover finds it with an HTTP sweep of the local
+subnets for `XLights_BoardInfo.cgi` (it answers neither SlyLED's UDP PING nor
+Art-Net ArtPoll, and has no vendor MAC prefix). Found controllers appear under
+"Pixel controllers" with their model, firmware and boards; Add registers them.
+Adding by IP still works.
+
 Registered as a child with `type: "hinkspix"` and **`sc: 0` / `strings: []`**.
 That is deliberate and load-bearing: the performer wire structs are hard-sized
 for 8 strings, so a 48-port controller must never enter the UDP performer path

@@ -29,6 +29,7 @@ knowledge of SlyLED's port model. What to *send* is ``hinkspix_config.py``;
 this module only knows how to put bytes on the wire and read them back.
 """
 
+import concurrent.futures
 import gzip
 import json
 import logging
@@ -469,6 +470,77 @@ def probe(ip, timeout=DEFAULT_TIMEOUT, opener=None):
         "unpackSupported": supports_unpack(mcpu, hardware_v3),
         "raw": info,
     }
+
+
+# ── Discovery (#949) ─────────────────────────────────────────────────────────
+#
+# A HinksPix answers neither SlyLED's UDP PING nor Art-Net ArtPoll (in E1.31
+# input mode), xLights has no discovery for it, and its MAC is locally
+# administered (no vendor OUI) — measured on the MS_160 unit 2026-09-24. The one
+# fingerprint it always gives is XLights_BoardInfo.cgi, so discovery is a
+# per-host HTTP sweep.
+
+# Per-request timeout for the sweep. DEFAULT_TIMEOUT (20 s) is for EEPROM
+# writes; a LAN host that has not answered BoardInfo in 0.8 s is not a
+# controller worth waiting for (the MS_160 answers in well under 100 ms).
+DISCOVER_TIMEOUT = 0.8
+DISCOVER_WORKERS = 64
+
+
+def is_board_info(info):
+    """True for a genuine BoardInfo reply: CMD BD_INFO from a HinksPix PRO
+    (Controller H) or EasyLights (E)."""
+    return (isinstance(info, dict) and info.get("CMD") == "BD_INFO"
+            and info.get("Controller") in ("H", "E"))
+
+
+def _discover_one(host, timeout, opener):
+    try:
+        info = probe(host, timeout=timeout, opener=opener)
+    except (HinksPixError, ValueError, TypeError):
+        return None
+    if not is_board_info(info.get("raw")):
+        return None
+    return dict(info, ip=host)
+
+
+def discover(hosts, timeout=None, workers=None, opener=None, progress=None):
+    """Probe every host in `hosts` for XLights_BoardInfo.cgi in parallel.
+
+    Returns ``probe()``-shaped dicts plus ``ip``, in `hosts` order, for the
+    hosts that answered with a real BD_INFO. `hosts` entries may carry a port
+    (``"127.0.0.1:8081"``). `progress(done, total)` is called as hosts finish.
+
+    The whole sweep is bounded: ``ceil(n / workers)`` rounds of two timeouts
+    each (connect + read) plus a second of slack. A host still trickling bytes
+    at the deadline is abandoned, not waited for.
+    """
+    hosts = list(hosts)
+    if not hosts:
+        return []
+    # Read at call time (not as defaults) so DISCOVER_* stay tunable.
+    timeout = DISCOVER_TIMEOUT if timeout is None else timeout
+    workers = max(1, min(workers or DISCOVER_WORKERS, len(hosts)))
+    budget = -(-len(hosts) // workers) * 2 * timeout + 1.0
+    found, done = {}, 0
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers,
+                                                 thread_name_prefix="hinks-sweep")
+    try:
+        futs = {pool.submit(_discover_one, h, timeout, opener): h for h in hosts}
+        try:
+            for fut in concurrent.futures.as_completed(futs, timeout=budget):
+                done += 1
+                res = fut.result()
+                if res:
+                    found[futs[fut]] = res
+                if progress:
+                    progress(done, len(hosts))
+        except concurrent.futures.TimeoutError:
+            log.info("HinksPix sweep: %d of %d hosts still pending after %.1f s; "
+                     "abandoned", len(hosts) - done, len(hosts), budget)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    return [found[h] for h in hosts if h in found]
 
 
 # ── Device decode (reply text -> structured rows) ────────────────────────────

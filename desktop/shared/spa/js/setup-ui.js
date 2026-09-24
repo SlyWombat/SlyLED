@@ -146,7 +146,8 @@ function _renderSetup(){
         +'<button class="btn btn-nav" onclick="discoverChildren()" id="disc-btn" style="margin-left:.5em" data-tip="setupDiscover">Discover</button>'
         +'<button class="btn btn-nav" onclick="setupRefreshAll(this)" style="margin-left:.5em" data-tip="setupRefreshAll">Refresh All</button>'
         +'</div>'
-        +'<div id="disc-results" style="display:none;margin-bottom:.8em"></div>';
+        +'<div id="disc-results" style="display:none;margin-bottom:.8em"></div>'
+        +'<div id="disc-hinks-results" style="display:none;margin-bottom:.8em"></div>';
 
       // Pre-filter fixture types (needed by hardware + fixture sections)
       var ledFixtures=(fixtures||[]).filter(function(f){return (f.fixtureType||'led')==='led';});
@@ -1670,6 +1671,7 @@ function _submitAddFixture(){
 function discoverChildren(){
   var btn=document.getElementById('disc-btn');
   if(btn){btn.disabled=true;btn.textContent='Scanning...';}
+  _discoverHinks();
   ra('GET','/api/children/discover',null,function(){
     // Poll for results
     var poll=setInterval(function(){
@@ -1710,6 +1712,56 @@ function discoverChildren(){
         el.style.display='block';
       });
     },500);
+  });
+}
+
+// #949 — HinksPix controllers answer neither the UDP PING nor ArtPoll, so
+// Discover also runs a BoardInfo HTTP sweep of the local subnets. It has its
+// own endpoint and its own results block: the UDP results above render as
+// soon as they are in and never wait on the sweep.
+function _discoverHinks(){
+  var el=document.getElementById('disc-hinks-results');
+  if(!el)return;
+  var render=function(st){
+    if(st.pending){
+      el.innerHTML='<p style="color:#888;font-size:.85em;padding:.3em 0">Scanning for pixel controllers\u2026 '
+        +(st.done||0)+'/'+(st.total||0)+' hosts</p>';
+      el.style.display='block';
+      return;
+    }
+    var found=st.found||[];
+    var notes=(st.notes||[]).map(function(n){
+      return '<div style="color:#888;font-size:.75em">'+escapeHtml(n)+'</div>';
+    }).join('');
+    if(!found.length){
+      el.innerHTML='<p style="color:#888;font-size:.85em;padding:.3em 0">No new pixel controllers found ('
+        +(st.total||0)+' hosts swept).</p>'+notes;
+      el.style.display='block';
+      return;
+    }
+    var h='<p style="color:#aaa;font-size:.85em;margin-bottom:.4em">Pixel controllers — click Add to register:</p>'
+      +'<table class="tbl" style="max-width:800px"><tr><th>Model</th><th>IP</th><th>Type</th><th>Firmware</th><th>Boards</th><th></th></tr>';
+    found.forEach(function(c){
+      var boards=Object.keys(c.boards||{}).map(function(k){return k+' '+c.boards[k];}).join(', ');
+      h+='<tr><td>'+escapeHtml(c.name||'HinksPix')+'</td><td>'+escapeHtml(c.ip)+'</td>'
+        +'<td><span class="badge" style="background:#dc2626;color:#fff;font-size:.75em">HinksPix</span></td>'
+        +'<td>'+escapeHtml(c.mcpuRaw||'-')+'</td><td style="font-size:.8em">'+escapeHtml(boards||'-')+'</td>'
+        +'<td><button class="btn btn-on" onclick="addDiscovered(\''+escapeHtml(c.ip)+'\')">Add</button></td></tr>';
+    });
+    el.innerHTML=h+'</table>'+notes;
+    el.style.display='block';
+  };
+  ra('POST','/api/hinkspix/discover',{},function(st){
+    if(!st)return;
+    render(st);
+    if(!st.pending)return;
+    var poll=setInterval(function(){
+      ra('GET','/api/hinkspix/discover',null,function(s2){
+        if(!s2)return;
+        render(s2);
+        if(!s2.pending)clearInterval(poll);
+      });
+    },700);
   });
 }
 
@@ -1821,9 +1873,10 @@ function addDiscovered(ip){
         setTimeout(loadSetup,2000);
       });
     }else{
-      // LED fixture — auto-create fixture
+      // LED fixture — auto-create fixture. A HinksPix (#949) gets the same
+      // linear fixture the manual Add path creates; ports bind in Configure.
       ra('POST','/api/fixtures',{name:cname,fixtureType:'led',type:'linear',childId:cid},function(){
-        document.getElementById('hs').textContent='Added LED fixture: '+cname;
+        document.getElementById('hs').textContent=(ctype==='hinkspix'?'Added HinksPix controller: ':'Added LED fixture: ')+cname;
         setTimeout(loadSetup,2000);
       });
     }

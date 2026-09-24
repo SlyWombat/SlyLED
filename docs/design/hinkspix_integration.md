@@ -312,6 +312,14 @@ device and can put the device back afterwards:
   (`XLights_BoardInfo.cgi`) in the same fall-through. No mDNS/ArtPoll guarantee → manual IP add
   (like WLED) is the supported path; an ArtPoll reply, if the unit answers, folds through the
   existing `_artnet_oneshot_poll` merge with type promotion to `hinkspix`.
+  **Update (#949):** measured on the MS_160 unit, it answers neither the 4210 PING nor ArtPoll
+  (E1.31 input mode), and its MAC is locally administered (no OUI). Setup → Discover therefore
+  also runs a BoardInfo HTTP sweep — `hinkspix_bridge.discover()` over
+  `net_ifaces.sweep_hosts()` (real LAN subnets only, /22 or narrower swept whole, wider ones
+  narrowed to the /24, ≤ 1024 hosts, 0.8 s per host, 64 workers), behind
+  `POST/GET /api/hinkspix/discover`. It keeps only `CMD == "BD_INFO"` with `Controller` H/E,
+  skips registered IPs, and reports in its own SPA block so UDP results never wait on it. Add is
+  the ordinary `POST /api/children`, which probes and types the device.
 - **Layout / 3D / Control**: nothing new — fixtures are `led`. `fixture-types.js led` gets a
   badge chip "HinksPix P<port>" and `panelDetailHtml` shows port numbers.
 

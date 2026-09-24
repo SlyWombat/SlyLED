@@ -208,3 +208,33 @@ def allow_port_sharing(sock):
         except OSError:
             pass
     return False
+
+
+def sweep_hosts(interfaces=None, max_hosts=1024, min_prefixlen=22):
+    """Host addresses for a per-host HTTP sweep (#949 HinksPix discovery).
+
+    Returns (hosts, notes). Each interface's real subnet is swept when it is
+    /`min_prefixlen` or narrower (a /22 is 1022 hosts); a wider one (a /16
+    LAN) sweeps only the /24 around the interface address, with a note.
+    The interface's own addresses are skipped, and the total is capped at
+    `max_hosts` so no LAN shape turns into tens of thousands of requests.
+    """
+    ifaces = ipv4_interfaces() if interfaces is None else interfaces
+    own = {e["ip"] for e in ifaces}
+    hosts, seen, notes = [], set(), []
+    for e in ifaces:
+        net = ipaddress.IPv4Interface(f"{e['ip']}/{e['prefixlen']}").network
+        if net.prefixlen < min_prefixlen:
+            notes.append(f"{e['name']} {net} is wider than /{min_prefixlen}: "
+                         f"sweeping only {e['ip']}/24")
+            net = ipaddress.IPv4Interface(f"{e['ip']}/24").network
+        for h in net.hosts():
+            ip = str(h)
+            if ip in own or ip in seen:
+                continue
+            if len(hosts) >= max_hosts:
+                notes.append(f"host cap {max_hosts} reached; {net} truncated")
+                return hosts, notes
+            seen.add(ip)
+            hosts.append(ip)
+    return hosts, notes
