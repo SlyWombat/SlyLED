@@ -879,14 +879,65 @@ def _local_subnet_prefixes():
     order and filtering live in net_ifaces.ipv4_interfaces() (#948)."""
     return net_ifaces.scan_prefixes()
 
+# #948 — children always reply to UDP_PORT (Child.cpp beginPacket(dest,
+# UDP_PORT)), never to the request's source port, so a synchronous request
+# must receive on 4210 alongside the listener. Linux and Windows deliver a
+# unicast datagram to the NEWEST socket bound to a shared port, so
+# _send_recv's own 4210 socket gets the reply. macOS/BSD deliver it to the
+# OLDEST (the listener) — measured on macos-latest CI by
+# tests/test_net_ifaces.py — so there the listener hands the reply to a
+# waiting _send_recv instead.
+_SEND_RECV_VIA_LISTENER = net_ifaces.REUSEPORT
+_udp_waiters = {}            # ip -> [[threading.Event, bytes | None], ...]
+_udp_waiters_lock = threading.Lock()
+
+def _udp_waiter_deliver(ip, data):
+    """Called by the 4210 listener for every valid datagram. Hands it to the
+    oldest _send_recv waiting on `ip` and returns True (the listener then
+    skips its normal dispatch — the same first-datagram-from-ip semantics
+    the socket path has); False when nobody is waiting."""
+    if not _udp_waiters:
+        return False
+    with _udp_waiters_lock:
+        waiters = _udp_waiters.get(ip)
+        if not waiters:
+            return False
+        slot = waiters.pop(0)
+        if not waiters:
+            del _udp_waiters[ip]
+    slot[1] = data
+    slot[0].set()
+    return True
+
+def _send_recv_via_listener(ip, pkt, timeout):
+    slot = [threading.Event(), None]
+    with _udp_waiters_lock:
+        _udp_waiters.setdefault(ip, []).append(slot)
+    with _udp_status_lock:
+        _udp_status["sendRecvPort"] = "listener"
+    try:
+        _send(ip, pkt)
+        return slot[1] if slot[0].wait(timeout) else None
+    finally:
+        with _udp_waiters_lock:
+            waiters = _udp_waiters.get(ip)
+            if waiters and slot in waiters:
+                waiters.remove(slot)
+                if not waiters:
+                    del _udp_waiters[ip]
+
 def _send_recv(ip, pkt, timeout=1.5, maxb=256):
     """Send UDP packet and wait for reply from the specified IP only.
     Binds to UDP_PORT (SO_REUSEADDR, + SO_REUSEPORT on macOS/BSD — see
     net_ifaces.allow_port_sharing) so the child replies to the
     firewall-allowed port 4210.  Falls back to an ephemeral port if 4210
     is momentarily busy; the outcome is recorded in _udp_status (#948).
-    Discards packets from other sources.
+    Discards packets from other sources. On macOS/BSD with the listener
+    bound, the reply is taken from the listener instead (see
+    _SEND_RECV_VIA_LISTENER).
     """
+    if _SEND_RECV_VIA_LISTENER and _udp_status.get("ok"):
+        return _send_recv_via_listener(ip, pkt, timeout)
     for bind_port in (UDP_PORT, 0):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
@@ -1640,6 +1691,8 @@ def _udp_listener():
         if magic != UDP_MAGIC or ver not in (3, 4, UDP_VERSION):
             continue
         ip = addr[0]
+        if _udp_waiter_deliver(ip, data):
+            continue  # #948 — reply to a macOS/BSD _send_recv
         entry = _UDP_DISPATCH.get(cmd)
         if entry is None or len(data) < entry[0]:
             # Unknown cmd — or a known cmd shorter than its pre-#901

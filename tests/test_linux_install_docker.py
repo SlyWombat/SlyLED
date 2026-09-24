@@ -65,7 +65,7 @@ def unit_fields():
 
 def curl_json(path, method="GET", body=None):
     data = f"-H 'Content-Type: application/json' -d {shlex.quote(json.dumps(body))}" if body is not None else ""
-    r = dx(f"curl -s -m 30 -X {method} {data} -w '\\n%{{http_code}}' http://127.0.0.1:{PORT}{path}")
+    r = dx(f"curl -s -m 60 -X {method} {data} -w '\\n%{{http_code}}' http://127.0.0.1:{PORT}{path}")
     out = r.stdout.rstrip("\n").rsplit("\n", 1)
     if len(out) != 2:
         return 0, r.stdout + r.stderr
@@ -105,8 +105,10 @@ def run(image, keep):
         return
     try:
         # Base images ship no python3; the target hosts do. curl for probing.
-        r = dx("apt-get update -q >/dev/null && DEBIAN_FRONTEND=noninteractive "
-               "apt-get install -y -q python3 curl ca-certificates >/dev/null && python3 --version")
+        # Retried: distro mirrors briefly 404 a just-superseded .deb.
+        r = dx("for i in 1 2 3; do apt-get update -q >/dev/null && DEBIAN_FRONTEND=noninteractive "
+               "apt-get install -y -q python3 curl ca-certificates >/dev/null && break; sleep 20; done; "
+               "python3 --version")
         ok("base python3 installed", r.returncode == 0, r.stderr[-400:])
         print(f"  container python: {r.stdout.strip()}")
 
@@ -167,7 +169,10 @@ def run(image, keep):
         log = dx("cat /tmp/slyled.log").stdout
         ok("startup log has no Traceback", "Traceback" not in log, log[-800:])
 
-        s, add = curl_json("/api/children", "POST", {"ip": "10.254.254.254"})
+        # 127.0.0.2: private (accepted) and every probe is refused at once;
+        # an unroutable 10.x address hangs the add past curl's limit on
+        # GitHub runners.
+        s, add = curl_json("/api/children", "POST", {"ip": "127.0.0.2"})
         ok("add a child", s == 200, add)
         r = dx("ls /var/lib/slyled/SlyLED/data/children.json /var/lib/slyled/SlyLED/firmware "
                "&& test ! -e /opt/slyled/desktop/shared/data && echo clean")
@@ -183,7 +188,7 @@ def run(image, keep):
         pid = start_service(u)
         ok("service restarts after SIGKILL", pid is not None, dx("tail -20 /tmp/slyled.log").stdout)
         s, kids = curl_json("/api/children")
-        ok("children persisted across SIGKILL", "10.254.254.254" in json.dumps(kids), kids)
+        ok("children persisted across SIGKILL", "127.0.0.2" in json.dumps(kids), kids)
 
         r = dx("bash /src/desktop/linux/install.sh", timeout=1800)
         ok("re-install (upgrade) exit 0, venv reused",

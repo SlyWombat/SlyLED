@@ -11,8 +11,11 @@ each inventing their own convention.
   Linux/other    $XDG_DATA_HOME/SlyLED                  (same as data root)             $XDG_CACHE_HOME/SlyLED
                  (default ~/.local/share/SlyLED)                                          (default ~/.cache/SlyLED)
 
-A git checkout (dev run from source) is the one exception: it keeps data in
-desktop/shared/data and the firmware cache in the repo firmware tree.
+A Linux git checkout (dev run from source — WSL, CI, Docker) is the one
+exception for data: it keeps it in desktop/shared/data. Windows and macOS
+always use the per-user store, so a source run and the installed app share
+one project store and recloning/cleaning a checkout can never wipe it. Any
+git checkout keeps the firmware cache in the repo firmware tree.
 
 Every function takes an optional `platform` / `environ` / `home` so the
 per-OS answers can be asserted from any host (tests/test_platform_paths.py).
@@ -93,9 +96,12 @@ def data_dir(source_base, frozen=None, platform=None, environ=None, home=None):
       1. SLYLED_DATA — verbatim; tests and screenshot tools point it at a
          throwaway dir so they can never clobber a live operator project.
       2. Windows — %APPDATA%\\SlyLED\\data, frozen or not (pre-#948 behaviour).
-      3. Git checkout elsewhere — <source_base>/data, so dev runs stay
+      3. macOS — ~/Library/Application Support/SlyLED/data, frozen or not:
+         the Mac is an operator bench run from a checkout, and its projects
+         must survive a reclone and be shared with the packaged .app (#948).
+      4. Linux git checkout — <source_base>/data, so dev/CI runs stay
          self-contained (gitignored as desktop/shared/data/).
-      4. Everything else (frozen bundle, installed source copy) —
+      5. Everything else (frozen bundle, installed source copy) —
          <user_data_root>/data. `source_base` is then PyInstaller's
          extraction dir or a root-owned install tree.
     """
@@ -103,6 +109,8 @@ def data_dir(source_base, frozen=None, platform=None, environ=None, home=None):
     if env.get("SLYLED_DATA"):
         return Path(env["SLYLED_DATA"])
     if plat == "win32" and env.get("APPDATA"):
+        return user_data_root(plat, env, home) / "data"
+    if plat == "darwin":
         return user_data_root(plat, env, home) / "data"
     if _self_contained(Path(source_base).parent.parent, frozen):
         return Path(source_base) / "data"

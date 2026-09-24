@@ -153,23 +153,27 @@ def run():
             ok("second bind on a shared port succeeds", False, str(e))
         if second_ok:
             ok("second bind on a shared port succeeds", True)
-        # _send_recv binds after the listener and must receive the child's
-        # unicast reply; the listener must not. Skipped on Windows, where
-        # Microsoft documents SO_REUSEADDR unicast delivery as undefined.
+        # Which of two sockets sharing a port gets a unicast datagram decides
+        # how _send_recv receives a child's reply (children always answer
+        # to 4210). Linux: the newest bind (_send_recv's own socket).
+        # macOS/BSD: the oldest (the listener) — parent_server hands the
+        # reply over (_SEND_RECV_VIA_LISTENER = net_ifaces.REUSEPORT).
+        # Skipped on Windows, where Microsoft documents SO_REUSEADDR unicast
+        # delivery as undefined.
         if second_ok and sys.platform != "win32":
-            a.settimeout(0.3)
-            b.settimeout(1.0)
+            a.settimeout(0.5)
+            b.settimeout(0.5)
             c.sendto(b"reply", ("127.0.0.1", port))
-            try:
-                got_b = b.recvfrom(64)[0]
-            except OSError:
-                got_b = None
-            try:
-                got_a = a.recvfrom(64)[0]
-            except OSError:
-                got_a = None
-            eq("unicast reply lands on the newest bind (_send_recv)", got_b, b"reply")
-            eq("older bind (listener) does not also get it", got_a, None)
+            got = {}
+            for label, sock in (("newest", b), ("oldest", a)):
+                try:
+                    got[label] = sock.recvfrom(64)[0]
+                except OSError:
+                    got[label] = None
+            want = "oldest" if net_ifaces.REUSEPORT else "newest"
+            other = "newest" if want == "oldest" else "oldest"
+            eq(f"unicast lands on the {want} bind ({sys.platform})", got[want], b"reply")
+            eq(f"the {other} bind does not also get it", got[other], None)
     finally:
         a.close(); b.close(); c.close()
 

@@ -96,8 +96,12 @@ def run():
        HOME / "Library/Application Support/SlyLED/data")
     eq("linux frozen = ~/.local/share/SlyLED/data",
        app_dirs.data_dir(SRC, True, "linux", {}, HOME), HOME / ".local/share/SlyLED/data")
-    eq("darwin git checkout stays self-contained (BASE/data)",
-       app_dirs.data_dir(SRC, False, "darwin", {}, HOME), SRC / "data")
+    eq("darwin source run uses Application Support (mirrors win32)",
+       app_dirs.data_dir(SRC, False, "darwin", {}, HOME),
+       HOME / "Library/Application Support/SlyLED/data")
+    eq("darwin source run and .app share one project store",
+       app_dirs.data_dir(SRC, False, "darwin", {}, HOME),
+       app_dirs.data_dir(SRC, True, "darwin", {}, HOME))
     eq("linux git checkout stays self-contained (BASE/data)",
        app_dirs.data_dir(SRC, False, "linux", {}, HOME), SRC / "data")
     wt = _TMP / "worktree"

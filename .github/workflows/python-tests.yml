@@ -137,7 +137,8 @@ jobs:
                    tests/test_net_ifaces.py \
                    tests/test_firmware_platform.py \
                    tests/test_platform_smoke.py \
-                   tests/test_linux_packaging.py; do
+                   tests/test_linux_packaging.py \
+                   tests/test_send_recv_handoff.py; do
             echo "== $t"
             SLYLED_DATA=$(mktemp -d) python3 -X utf8 "$t"
           done
