@@ -84,12 +84,15 @@ def ship(commit):
     print(f"\n== ship {commit} -> {HOST}:{STAGE}")
     sha = subprocess.run(["git", "-C", REPO, "rev-parse", "--short", commit],
                          capture_output=True, text=True, check=True).stdout.strip()
-    ssh(f"rm -rf {STAGE} && mkdir -p {STAGE}", check=True)
-    arc = subprocess.Popen(["git", "-C", REPO, "archive", "--format=tar", commit], stdout=subprocess.PIPE)
-    r = subprocess.run(["ssh", "-o", "BatchMode=yes", HOST, f"tar -x -C {STAGE}"],
-                       stdin=arc.stdout, capture_output=True, text=True, timeout=600)
-    arc.wait()
-    ok(f"source {sha} extracted on host", r.returncode == 0 and arc.returncode == 0, r.stderr)
+    # The host fetches the exact commit from GitHub itself: streaming a ~200 MB
+    # git archive over the WSL->LAN ssh link is far too slow (<1 MB/min seen).
+    full = subprocess.run(["git", "-C", REPO, "rev-parse", commit],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    r = ssh(f"rm -rf {STAGE} && mkdir -p {STAGE} && cd {STAGE} && git init -q && "
+            f"git fetch -q --depth 1 https://github.com/SlyWombat/SlyLED.git {full} && "
+            f"git checkout -q FETCH_HEAD && git rev-parse --short HEAD", timeout=900)
+    ok(f"host fetched {sha} from GitHub", r.returncode == 0 and r.stdout.strip() == sha,
+       (r.stdout + r.stderr)[-300:])
     r = ssh(f"ls {STAGE}/desktop/linux/")
     print(f"  desktop/linux: {r.stdout.split()}")
     ok("desktop/linux/install.sh present", "install.sh" in r.stdout, r.stdout)
