@@ -12,6 +12,7 @@ Run:
 
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -49,7 +50,10 @@ def _get(port, path, timeout=10):
 def run():
     port = _free_port()
     data = tempfile.mkdtemp(prefix="slyled-smoke-")
-    env = dict(os.environ, SLYLED_DATA=data, PYTHONIOENCODING="utf-8")
+    # Unbuffered + faulthandler: if startup hangs, SIGABRT dumps every
+    # thread's stack into the log printed below.
+    env = dict(os.environ, SLYLED_DATA=data, PYTHONIOENCODING="utf-8",
+               PYTHONUNBUFFERED="1", PYTHONFAULTHANDLER="1")
     log_path = os.path.join(data, "server.out")
     log = open(log_path, "w", encoding="utf-8")
     proc = subprocess.Popen([sys.executable, "-X", "utf8", SERVER, "--no-browser",
@@ -66,8 +70,14 @@ def run():
         ok("server answers /status within 60 s", status == 200,
            f"status={status} exit={proc.poll()}")
         if status != 200:
+            if proc.poll() is None and hasattr(signal, "SIGABRT") and os.name != "nt":
+                proc.send_signal(signal.SIGABRT)
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
             log.flush()
-            print(open(log_path, encoding="utf-8", errors="replace").read()[-3000:])
+            print(open(log_path, encoding="utf-8", errors="replace").read()[-8000:])
             return
         st = json.loads(body)
         want = {"win32": "windows", "darwin": "macos"}.get(sys.platform, "linux")
