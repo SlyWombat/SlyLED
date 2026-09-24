@@ -33,7 +33,10 @@ var L={
   // UDP listener health (#771)
   udpListenerOffline:'UDP listener offline',
   udpListenerNoBind:'bind failed',
+  // #948 — per host OS (/api/status `platform`); key suffix Mac / Linux.
   udpListenerHint:'Discover and PONG flows will not work until UDP 4210 is free. On Windows, Stop-Service winnat -Force usually frees an HNS-held port; then click Retry.',
+  udpListenerHintMac:'Discover and PONG flows will not work until UDP 4210 is free. Run lsof -nP -iUDP:4210 in Terminal to find the app holding it, quit that app, then click Retry.',
+  udpListenerHintLinux:'Discover and PONG flows will not work until UDP 4210 is free. Run ss -ulpn \'sport = :4210\' to find the process holding it, stop it, then click Retry.',
   udpListenerRetry:'Retry bind',
   udpListenerRestored:'UDP listener bound — discover should work now',
   udpListenerStillFailing:'UDP listener still cannot bind',

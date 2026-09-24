@@ -1369,6 +1369,18 @@ def favicon():
 def favicon_png():
     return send_from_directory(str(SPA), "favicon.png", mimetype="image/png")
 
+# #948 — host OS as the SPA sees it, so operator hints (UDP-port recovery,
+# install commands) can name the right tools.
+HOST_PLATFORM = ("windows" if sys.platform == "win32"
+                 else "macos" if sys.platform == "darwin" else "linux")
+
+_UDP_BIND_HINT = {
+    "windows": "On Windows: Stop-Service winnat -Force usually frees an "
+               "HNS-held port",
+    "macos": "On macOS: `lsof -nP -iUDP:{port}` shows the holder; quit it",
+    "linux": "On Linux: `ss -ulpn 'sport = :{port}'` shows the holder; stop it",
+}[HOST_PLATFORM]
+
 @app.get("/status")
 def status():
     # #771 — surface the UDP listener's bind state so the SPA can render a
@@ -1377,7 +1389,7 @@ def status():
     # port reservation on Windows is the known trigger).
     udp = get_udp_listener_status()
     return jsonify(role="parent", hostname=socket.gethostname(),
-                   version=VERSION, udpListener=udp)
+                   version=VERSION, platform=HOST_PLATFORM, udpListener=udp)
 
 
 @app.get("/api/status")
@@ -1386,7 +1398,7 @@ def api_status():
     the listener-health banner (#771)."""
     udp = get_udp_listener_status()
     return jsonify(role="parent", hostname=socket.gethostname(),
-                   version=VERSION, udpListener=udp)
+                   version=VERSION, platform=HOST_PLATFORM, udpListener=udp)
 
 
 @app.post("/api/diagnostics/restart-udp-listener")
@@ -1536,9 +1548,10 @@ def _try_bind_udp(port, max_attempts=5):
                 log.error("UDP listener bind to port %d FAILED after %d "
                           "attempts (last error: %s). Discover and PONG "
                           "flows will not work until the port is free. "
-                          "On Windows: Stop-Service winnat -Force, then "
-                          "POST /api/diagnostics/restart-udp-listener.",
-                          port, max_attempts, e)
+                          "%s, then POST "
+                          "/api/diagnostics/restart-udp-listener.",
+                          port, max_attempts, e,
+                          _UDP_BIND_HINT.format(port=port))
     return None
 
 def restart_udp_listener():

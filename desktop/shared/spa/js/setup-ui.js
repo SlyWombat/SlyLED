@@ -39,7 +39,8 @@ function _udpHealthRefresh(){
     var port=u.port||'?';
     var err=u.lastError||(L&&L.udpListenerNoBind)||'bind failed';
     var title=(L&&L.udpListenerOffline)||'UDP listener offline';
-    var hint=(L&&L.udpListenerHint)||'Discover and PONG flows will not work until UDP '+port+' is free. On Windows, Stop-Service winnat -Force usually frees an HNS-held port; then click Retry.';
+    var hintKey=r.platform==='macos'?'udpListenerHintMac':r.platform==='linux'?'udpListenerHintLinux':'udpListenerHint';
+    var hint=(L&&L[hintKey])||'Discover and PONG flows will not work until UDP '+port+' is free. Free the port, then click Retry.';
     var btn=(L&&L.udpListenerRetry)||'Retry bind';
     bar.innerHTML='<div style="font-size:1.4em;line-height:1">⚠</div>'
       +'<div style="flex:1">'

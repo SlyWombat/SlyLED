@@ -281,8 +281,8 @@ function renderFirmwareLibrary(){
         // the file rather than waiting for a re-download.
         badge='<span class="badge" style="background:#7c2d12;color:#fdba74" '
           +'title="Binary exists on disk but the orchestrator could not read it. '
-          +'Check file lock / antivirus / OneDrive cloud-only placeholder; '
-          +'copy the file via Windows Explorer to ensure local availability.">'
+          +'Check file lock / antivirus / cloud-only placeholder (OneDrive, iCloud); '
+          +'make sure the file is downloaded to local disk.">'
           +'Local — unreadable</span>';
       }else if(!e.hasReleaseAsset){
         badge='<span class="badge" style="background:#475569;color:#cbd5e1" title="No releaseAsset in registry — needs local build">Not downloadable</span>';
