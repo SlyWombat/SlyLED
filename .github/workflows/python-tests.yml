@@ -5,7 +5,8 @@
 #  1. "unit" — every PR + push to main. Fast, no browser: the flask
 #     test-client suites, the aim/ IK gates, the wire-parity suites,
 #     the renderer gates, the HinksPix controller suites, and the docs
-#     validators. ~5 min.
+#     validators. ~7 min (measured 2026-09-24; the renderer and HinksPix
+#     steps added ~2 min to the ~5 before them).
 #
 #  2. "regression" — weekly cron (+ manual dispatch). Installs
 #     Playwright chromium and runs tests/regression/run_all.py (the
