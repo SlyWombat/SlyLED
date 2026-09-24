@@ -58,7 +58,14 @@ env:
 jobs:
   unit:
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    # #948 — the orchestrator is a first-class macOS/Linux platform; every
+    # unit suite runs on both. Docs validators stay Linux-only (they need
+    # apt's git-restore-mtime and are OS-independent anyway).
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
       SLYLED_DATA: /tmp/slyled-ci-data
@@ -85,6 +92,7 @@ jobs:
             "paramiko>=3.0" "pyserial>=3.5" "psutil>=5.9" "esptool>=4.7"
 
       - name: Restore commit-time file mtimes
+        if: runner.os == 'Linux'
         # tools/docs/validate_screenshots.py's freshness check and
         # drift_check.py's review-freshness check compare file mtimes.
         # A fresh checkout stamps every file with checkout time (order
@@ -219,11 +227,13 @@ jobs:
           EOF
 
       - name: Docs — screenshot validation
+        if: runner.os == 'Linux'
         # --skip-freshness: any SPA edit stales every capture until a
         # live-rig recapture; the weekly strict run keeps that reminder.
         run: python3 tools/docs/validate_screenshots.py --skip-freshness
 
       - name: Docs — drift parity checks
+        if: runner.os == 'Linux'
         # --mode parity = EN↔FR filename parity + FR review freshness
         # (deterministic; needs the restored mtimes above). The PR-diff
         # drift nudge already runs in docs-drift.yml — not duplicated
