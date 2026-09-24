@@ -158,6 +158,56 @@ def verify_http():
        "desktop/shared/data" not in r.stdout, r.stdout)
 
 
+SNIFF_SYN = r"""
+import socket, struct, time, collections, sys
+s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(3)); s.settimeout(0.5)
+end = time.time() + float(sys.argv[1]); c = collections.Counter()
+while time.time() < end:
+    try: pkt, addr = s.recvfrom(65535)
+    except socket.timeout: continue
+    if addr[2] != socket.PACKET_OUTGOING or pkt[12:14] != b"\x08\x00": continue
+    ip = pkt[14:]; ihl = (ip[0] & 15) * 4
+    if ip[9] != 6: continue
+    dport = struct.unpack("!H", ip[ihl + 2:ihl + 4])[0]; flags = ip[ihl + 13]
+    if dport == 80 and flags & 0x02 and not flags & 0x10:
+        c[(addr[0], socket.inet_ntoa(ip[16:20]).rsplit(".", 1)[0])] += 1
+for (ifc, net), n in sorted(c.items()): print(f"{n} {ifc} {net}.x")
+"""
+
+
+def verify_hinkspix_discovery():
+    """#949: the HTTP BoardInfo sweep finds the HinksPix on the LAN, fast,
+    and never probes docker bridge subnets."""
+    print("\n== #949 HinksPix HTTP sweep (before .6 is registered)")
+    ssh("cat > /tmp/qa_syn.py <<'PYEOF'\n" + SNIFF_SYN + "\nPYEOF")
+    ssh("(sudo -n python3 /tmp/qa_syn.py 12 > /tmp/qa_syn.out 2>&1 &) ; sleep 1.5")
+    t = time.time()
+    s, _ = http("/api/hinkspix/discover", "POST", {})
+    r = {}
+    while time.time() - t < 20:
+        s, r = http("/api/hinkspix/discover")
+        if isinstance(r, dict) and not r.get("pending"):
+            break
+        time.sleep(0.3)
+    wall = time.time() - t
+    found = [f.get("ip") for f in (r.get("found") or [])] if isinstance(r, dict) else []
+    print(f"  sweep: total={r.get('total')} done={r.get('done')} elapsedMs={r.get('elapsedMs')} "
+          f"wall={wall:.1f}s found={found} notes={r.get('notes')}")
+    ok("sweep finds 192.168.10.6", HINKSPIX in found, r)
+    ok("sweep of the /24 completes in < 5 s", (r.get("elapsedMs") or 99999) < 5000, r.get("elapsedMs"))
+    hit = next((f for f in (r.get("found") or []) if f.get("ip") == HINKSPIX), {})
+    ok("found entry typed hinkspix with MCPU and boards",
+       hit.get("type") == "hinkspix" and hit.get("mcpuRaw") and hit.get("boards"), hit)
+    time.sleep(11)
+    syn = ssh("cat /tmp/qa_syn.out; rm -f /tmp/qa_syn.py /tmp/qa_syn.out").stdout
+    print("  outgoing TCP :80 SYNs by interface/subnet:\n    " + (syn.strip() or "(none)").replace("\n", "\n    "))
+    ok("sweep SYNs only on the LAN (192.168.10.x)", "192.168.10.x" in syn, syn)
+    ok("zero sweep SYNs to docker bridge subnets (172.x)", "172." not in syn, syn)
+    j = ssh(f"journalctl -u {SERVICE} --since '-1min' --no-pager 2>&1 | grep -i 'sweep' | tail -2").stdout
+    print("  journal: " + (j.strip() or "(no sweep line)"))
+    ok("journal has the one-line sweep summary", "sweep" in j.lower(), j)
+
+
 def verify_network():
     print("\n== UDP discovery (4210 broadcast)")
     s, _ = http("/api/children/discover")
@@ -170,6 +220,8 @@ def verify_network():
     ok("no PINGs addressed to docker bridge subnets", "172.1" not in r.stdout and "172.2" not in r.stdout,
        r.stdout[-300:])
 
+    verify_hinkspix_discovery()
+
     print(f"\n== HinksPix {HINKSPIX} through the Linux service")
     s, add = http("/api/children", "POST", {"ip": HINKSPIX})
     print(f"  add child: {s} {json.dumps(add)[:300] if not isinstance(add, bytes) else add}")
@@ -177,6 +229,13 @@ def verify_network():
     kid = next((k for k in (kids if isinstance(kids, list) else kids.get("children", []) if isinstance(kids, dict) else [])
                 if k.get("ip") == HINKSPIX), None)
     ok("HinksPix present as a child", kid is not None, str(kids)[:200])
+    s2, _ = http("/api/hinkspix/discover", "POST", {})
+    for _ in range(60):
+        s2, r2 = http("/api/hinkspix/discover")
+        if isinstance(r2, dict) and not r2.get("pending"):
+            break
+        time.sleep(0.3)
+    ok("#949: a registered .6 is not offered again", HINKSPIX not in json.dumps((r2 or {}).get("found", [])), r2)
     if kid:
         cid = kid["id"]
         s, pr = http(f"/api/hinkspix/{cid}/probe", "POST", {})
