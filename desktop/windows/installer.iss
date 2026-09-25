@@ -47,6 +47,12 @@ VersionInfoCopyright=© Electric RV Corporation
 DefaultDirName={autopf}\SlyLED
 DefaultGroupName=SlyLED
 PrivilegesRequired=admin
+; #951 — SlyLED.exe is a 64-bit PyInstaller build. Without these two
+; directives Inno runs in 32-bit mode: {autopf} resolves to
+; "Program Files (x86)" and the uninstall entry lands under WOW6432Node.
+; An existing x86 install is migrated in place (see MigrateX86Install).
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 
 OutputDir=dist
 OutputBaseFilename=SlyLED-Setup
@@ -131,6 +137,18 @@ Filename: "{app}\{#AppExeName}"; \
 ; Rule names are fixed (don't include the port) so uninstall can delete
 ; them without knowing what port the operator picked.
 ;
+; #951 — legacy rule names from older taxonomies, and program-scoped rules
+; (Windows' first-run firewall prompt creates those against the exe path —
+; including the pre-#951 32-bit path), are removed so they don't outlive
+; the install that made them. "SlyLED Children" is the CURRENT 4210 rule
+; and is re-created below.
+Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED UDP 4210"""; Flags: runhidden waituntilterminated; StatusMsg: "Removing legacy firewall rules..."
+Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED HTTP 8080"""; Flags: runhidden waituntilterminated; StatusMsg: "Removing legacy firewall rules..."
+Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED Port 4210"""; Flags: runhidden waituntilterminated; StatusMsg: "Removing legacy firewall rules..."
+Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED TCP 8080"""; Flags: runhidden waituntilterminated; StatusMsg: "Removing legacy firewall rules..."
+Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=all program=""{commonpf32}\SlyLED\SlyLED.exe"""; Flags: runhidden waituntilterminated; StatusMsg: "Removing legacy firewall rules..."
+Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=all program=""{app}\SlyLED.exe"""; Flags: runhidden waituntilterminated; StatusMsg: "Removing legacy firewall rules..."
+
 ; v1.7.109 — delete-before-add. `netsh advfirewall firewall add rule`
 ; does NOT replace an existing rule with the same name; it creates a
 ; duplicate. Pre-fix behaviour on upgrade-with-port-change: the old
@@ -187,8 +205,20 @@ Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED A
 ; leak across upgrades that change the rule taxonomy.
 Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED UDP 4210"""; Flags: runhidden; RunOnceId: "FwLegacyUDP4210"
 Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED HTTP 8080"""; Flags: runhidden; RunOnceId: "FwLegacyHTTP8080"
+; #951 — more legacy names, and program-scoped rules Windows' firewall
+; prompt created against either exe path.
+Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED Port 4210"""; Flags: runhidden; RunOnceId: "FwLegacyPort4210"
+Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED TCP 8080"""; Flags: runhidden; RunOnceId: "FwLegacyTCP8080"
+Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=all program=""{app}\SlyLED.exe"""; Flags: runhidden; RunOnceId: "FwProgApp"
+Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=all program=""{commonpf32}\SlyLED\SlyLED.exe"""; Flags: runhidden; RunOnceId: "FwProgX86"
 
 [UninstallDelete]
+; #951 — files [Code] writes (so Inno doesn't track them) must be listed,
+; or they keep {app} alive and the next "fresh" install inherits the old
+; port from port.txt.
+Type: files; Name: "{app}\port.txt"
+Type: files; Name: "{app}\depth.install-requested"
+Type: files; Name: "{app}\ollama.install-requested"
 ; Remove the install directory if it's empty after uninstall
 Type: dirifempty; Name: "{app}"
 
@@ -211,6 +241,35 @@ var
 
 var
   PortPrevLoaded: Boolean;
+
+const
+  // #951 — this app's uninstall key (AppId + "_is1"); looked up in the
+  // 32-bit registry view to find a pre-#951 install in Program Files (x86).
+  UninstKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{6F3A1D2E-84C7-4B9F-A051-3D28E9F07C14}_is1';
+
+// The install directory of a 32-bit (pre-#951) SlyLED install, or ''.
+function OldX86Dir(): String;
+var
+  Dir: String;
+begin
+  Result := '';
+  if not Is64BitInstallMode then Exit;
+  if RegQueryStringValue(HKLM32, UninstKey, 'InstallLocation', Dir) then begin
+    Dir := RemoveBackslashUnlessRoot(Trim(Dir));
+    if (Dir <> '') and DirExists(Dir) then Result := Dir;
+  end;
+end;
+
+// Where a previous install of THIS app lives, or '' on a genuinely fresh
+// install. #951 — the port is only ever inherited from a previous install
+// Inno itself recognises, never from a port.txt that happens to be left in
+// the target directory by some long-gone install.
+function PrevInstallDir(): String;
+begin
+  Result := WizardForm.PrevAppDir;
+  if Result = '' then Result := OldX86Dir();
+end;
+
 
 procedure InitializeWizard;
 begin
@@ -248,7 +307,17 @@ var
 begin
   if (PortPage <> nil) and (CurPageID = PortPage.ID) and (not PortPrevLoaded) then begin
     PortPrevLoaded := True;
-    PrevPortFile := ExpandConstant('{app}\port.txt');
+    // #951 — Inno's previous-install data first; else port.txt from a
+    // directory Inno knows held a previous install. A fresh install
+    // keeps the 8080 default.
+    PrevPort := GetPreviousData('Port', '');
+    PrevPortInt := StrToIntDef(Trim(PrevPort), -1);
+    if (PrevPortInt >= 1024) and (PrevPortInt <= 65535) then begin
+      PortPage.Values[0] := IntToStr(PrevPortInt);
+      Exit;
+    end;
+    if PrevInstallDir() = '' then Exit;
+    PrevPortFile := AddBackslash(PrevInstallDir()) + 'port.txt';
     if FileExists(PrevPortFile) then begin
       if LoadStringFromFile(PrevPortFile, PrevPort) then begin
         PrevPort := Trim(PrevPort);
@@ -273,6 +342,13 @@ begin
   end;
 end;
 
+// Remember the chosen port with the install record (#951) so an upgrade
+// reads it from Inno's own previous-install data.
+procedure RegisterPreviousData(PreviousDataKey: Integer);
+begin
+  SetPreviousData(PreviousDataKey, 'Port', GetPort(''));
+end;
+
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
   PortVal: Integer;
@@ -293,6 +369,27 @@ begin
       Exit;
     end;
   end;
+end;
+
+// #951 — a pre-#951 install lives in Program Files (x86) with its own
+// uninstall entry. This install replaces it: remove its files and its
+// Apps & Features entry. Its uninstaller is deliberately NOT run — it asks
+// "remove saved data?" and a slip there would delete the operator's rig.
+// Saved data (%APPDATA%\SlyLED) is shared and untouched.
+procedure MigrateX86Install();
+var
+  Dir: String;
+begin
+  Dir := OldX86Dir();
+  if (Dir = '') or (CompareText(Dir, ExpandConstant('{app}')) = 0) then Exit;
+  Log('#951: migrating the 32-bit install at ' + Dir);
+  DeleteFile(AddBackslash(Dir) + 'SlyLED.exe');
+  DeleteFile(AddBackslash(Dir) + 'port.txt');
+  DeleteFile(AddBackslash(Dir) + 'depth.install-requested');
+  DeleteFile(AddBackslash(Dir) + 'ollama.install-requested');
+  DelTree(AddBackslash(Dir) + 'unins*.*', False, True, False);
+  RemoveDir(Dir);
+  RegDeleteKeyIncludingSubkeys(HKLM32, UninstKey);
 end;
 
 // #598 — drop a marker file if the user ticked the depth component.
@@ -320,6 +417,7 @@ begin
     // reads this file when --port is not on the command line.
     PortFile := ExpandConstant('{app}\port.txt');
     SaveStringToFile(PortFile, GetPort(''), False);
+    MigrateX86Install();
   end;
 end;
 

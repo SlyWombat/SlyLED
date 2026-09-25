@@ -61,6 +61,45 @@ def run():
         ok('udpListener reports simulated failure', u3.get('ok') is False)
         ok('udpListener.lastError surfaces', 'simulated' in (u3.get('lastError') or ''))
 
+        # #952 — a failed 4210 bind followed by a successful 4211 (auto-
+        # brightness) bind must still read ok:false. Both listeners used to
+        # write the same record, so the 4211 success masked the 4210 failure.
+        import socket as _sock
+        occupant = _sock.socket(_sock.AF_INET, _sock.SOCK_DGRAM)
+        occupant.bind(('127.0.0.1', 0))
+        busy_port = occupant.getsockname()[1]
+        free = _sock.socket(_sock.AF_INET, _sock.SOCK_DGRAM)
+        free.bind(('127.0.0.1', 0))
+        free_port = free.getsockname()[1]
+        free.close()
+        _saved_bind = _ps._udp_status.copy()
+        _real_sock = _ps.socket.socket
+        class _Loopback(_real_sock):
+            def bind(self, addr):
+                return super().bind(('127.0.0.1', addr[1]))
+        _ps.socket.socket = _Loopback
+        try:
+            s1 = _ps._try_bind_udp(busy_port, max_attempts=1)
+            s2 = _ps._try_bind_udp(free_port, max_attempts=1,
+                                   status=_ps._udp_status['autobri'])
+        finally:
+            _ps.socket.socket = _real_sock
+        u4 = (c.get('/api/status').get_json() or {}).get('udpListener') or {}
+        ok('#952 performer bind failure stays ok:false after autobri binds',
+           u4.get('ok') is False and s1 is None, u4)
+        ok('#952 udpListener.port is the performer port, not 4211',
+           u4.get('port') == busy_port, u4.get('port'))
+        ok('#952 autobri has its own record, ok:true',
+           (u4.get('autobri') or {}).get('ok') is True
+           and (u4.get('autobri') or {}).get('port') == free_port, u4.get('autobri'))
+        for _s in (s2, occupant):
+            try:
+                _s.close()
+            except Exception:
+                pass
+        with _ps._udp_status_lock:
+            _ps._udp_status.update(_saved_bind)
+
         # ── Settings CRUD ───────────────────────────────────────────
         r = c.get('/api/settings')
         ok('GET /api/settings', r.status_code == 200 and 'name' in r.get_json())

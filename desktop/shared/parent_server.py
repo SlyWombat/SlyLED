@@ -1627,6 +1627,14 @@ _udp_status = {
     "reusePort": False,
     "sendRecvPort": None,
     "sendRecvEphemeral": 0,
+    # #952 — the auto-brightness listener (UDP 4211, #862) has its OWN bind
+    # record. Both listeners used to write the top-level keys, so a
+    # successful 4211 bind after a failed 4210 bind reported ok:true and hid
+    # the #771 "discover won't work" banner. The top level is the performer
+    # listener (4210) and nothing else.
+    "autobri": {"ok": False, "port": None, "lastError": None,
+                "attemptedAt": None, "boundAt": None, "attempts": 0,
+                "reusePort": False},
 }
 _udp_status_lock = threading.Lock()
 _udp_listener_thread = None
@@ -1642,35 +1650,41 @@ def get_udp_listener_status():
     """Snapshot of the UDP listener's bind state. JSON-safe; consumed by
     /api/status and the Setup-tab banner."""
     with _udp_status_lock:
-        return dict(_udp_status)
+        out = dict(_udp_status)
+        out["autobri"] = dict(_udp_status["autobri"])
+        return out
 
-def _try_bind_udp(port, max_attempts=5):
+def _try_bind_udp(port, max_attempts=5, status=None):
     """Attempt to bind UDP `port` with bounded backoff. Returns the bound
-    socket on success, or None on terminal failure. Updates `_udp_status`
+    socket on success, or None on terminal failure. Updates the bind record
     on every attempt so the SPA can show the operator what's going on
-    instead of staring at a silently-empty discover list (#771)."""
+    instead of staring at a silently-empty discover list (#771).
+
+    `status` is the record to update: the top-level `_udp_status` (the
+    performer listener, the default) or `_udp_status["autobri"]` (#952)."""
+    st = _udp_status if status is None else status
     backoff = [0.5, 1, 2, 4, 8]  # one entry per max_attempts
     for attempt in range(1, max_attempts + 1):
         with _udp_status_lock:
-            _udp_status["port"] = port
-            _udp_status["attemptedAt"] = time.time()
-            _udp_status["attempts"] = attempt
+            st["port"] = port
+            st["attemptedAt"] = time.time()
+            st["attempts"] = attempt
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             reuse_port = net_ifaces.allow_port_sharing(s)
             s.bind(("", port))
             s.settimeout(1.0)
             with _udp_status_lock:
-                _udp_status["reusePort"] = reuse_port
-                _udp_status["ok"] = True
-                _udp_status["lastError"] = None
-                _udp_status["boundAt"] = time.time()
+                st["reusePort"] = reuse_port
+                st["ok"] = True
+                st["lastError"] = None
+                st["boundAt"] = time.time()
             log.info("UDP listener bound to port %d on attempt %d", port, attempt)
             return s
         except OSError as e:
             with _udp_status_lock:
-                _udp_status["ok"] = False
-                _udp_status["lastError"] = str(e)
+                st["ok"] = False
+                st["lastError"] = str(e)
             if attempt < max_attempts:
                 wait = backoff[min(attempt - 1, len(backoff) - 1)]
                 log.warning("UDP listener bind attempt %d/%d on port %d "
@@ -1715,7 +1729,8 @@ def _udp_autobri_listener():
     Brightness still arrives). Same packet format as the 4210 path
     — 8-byte header + 3-byte payload (master/flags/seq) — re-using
     `_handle_autobri_push` so the dispatch is single-source."""
-    s = _try_bind_udp(UDP_AUTOBRI_PORT, max_attempts=3)
+    s = _try_bind_udp(UDP_AUTOBRI_PORT, max_attempts=3,
+                      status=_udp_status["autobri"])   # #952 — own record
     if s is None:
         return
     while True:
