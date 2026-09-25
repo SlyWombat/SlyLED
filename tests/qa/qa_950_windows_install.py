@@ -10,6 +10,9 @@ Steps (run in order; each is safe to repeat):
   check                       installed-build checks + launch + HTTP + HinksPix discovery/probe
   live   [--rgb R,G,B] [--seconds N]   eaves solid colour via SlyLED's own sACN engine
                                        (operator watches the garage), then blackout
+  verify [--seconds N]        v2.1.3 acceptance: controller E1.31 counters rise (#959), show starts a
+                              stopped engine (#958), right colour (#957), blink reaches the HinksPix
+                              (#960), Online status (#956); restores engine + show state after
   uninstall                   silent uninstall (UAC prompt) + leftover check + remove test data
 
 Nothing is written to the HinksPix config: `live` only streams pixels into the
@@ -260,6 +263,117 @@ def step_live(a):
        any((st.get(k) or {}).get("running") for k in ("sacn", "artnet")) == was_running, st)
 
 
+def controller_counters():
+    """The HinksPix's own E1.31 receive counters (its Status page data):
+    GET /GetInfo.cgi with header ROW: 907 -> "uni,recv,err,uni,recv,err,...".
+    Independent of SlyLED: proves packets actually ARRIVED at the controller."""
+    for _ in range(3):
+        try:
+            req = urllib.request.Request(f"http://{HINKSPIX}/GetInfo.cgi", headers={"ROW": "907"})
+            raw = urllib.request.urlopen(req, timeout=12).read()
+            import gzip as _gz
+            txt = (_gz.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw).decode(errors="replace")
+            f = [x.strip() for x in txt.strip().split(",") if x.strip() != ""]
+            return {int(f[i]): (int(f[i + 1]), int(f[i + 2])) for i in range(0, len(f) - 2, 3)}
+        except Exception:  # noqa: BLE001 — the controller's CGI is occasionally slow
+            time.sleep(1)
+    return None
+
+
+def _engine_running():
+    s, st = http("/api/dmx/status")
+    return isinstance(st, dict) and any((st.get(k) or {}).get("running") for k in ("sacn", "artnet"))
+
+
+def _lit_colours(uni=1, pixels=170):
+    s, m = http(f"/api/dmx/monitor/{uni}")
+    ch = (m or {}).get("channels", []) if isinstance(m, dict) else []
+    cols = {}
+    for p in range(min(pixels, len(ch) // 3)):
+        c = tuple(ch[3 * p:3 * p + 3])
+        if any(c):
+            cols[c] = cols.get(c, 0) + 1
+    return cols
+
+
+def step_verify(a):
+    """v2.1.3 acceptance for the P0/P1 fixes (#956-#960) on the operator's own
+    show. Restores engine + show state afterwards (operator rule)."""
+    print("\n== verify output fixes against the operator's show")
+    cid = _child_id()
+    s, kids = http("/api/children")
+    kid = next((k for k in (kids or []) if isinstance(k, dict) and k.get("id") == cid), {})
+    ok("#956 HinksPix shows Online (app up > 2 min)", kid.get("status") == 1, {k: kid.get(k) for k in ("status", "seen")})
+    s, pl = http("/api/show/playlist")
+    order = (pl or {}).get("order") if isinstance(pl, dict) else None
+    ok("operator has a show playlist", bool(order), pl)
+    if not order:
+        return
+    s, tl = http(f"/api/timelines/{order[0]}")
+    clip = next((c for t in (tl or {}).get("tracks", []) for c in t.get("clips", [])), {}) if isinstance(tl, dict) else {}
+    s, acts = http("/api/actions")
+    act = next((x for x in (acts if isinstance(acts, list) else []) if x.get("id") == clip.get("actionId")), {})
+    want = (act.get("r", 0), act.get("g", 0), act.get("b", 0))
+    print(f"  show: timeline {order[0]} clip action {act.get('name')!r} type {act.get('type')} colour {want}")
+    engine_before = _engine_running()
+    s, st = http("/api/show/status")
+    show_before = isinstance(st, dict) and st.get("running")
+
+    print("\n  -- #958: start the show with the engine stopped")
+    http("/api/show/stop", "POST", {})
+    http("/api/dmx/stop", "POST", {})
+    time.sleep(1)
+    c0 = controller_counters()
+    s, r = http("/api/show/start", "POST", {})
+    time.sleep(4)
+    ok("#958 show start brings the output engine up (or refuses clearly)",
+       _engine_running() or (s == 409 and "engine" in json.dumps(r).lower()), (s, r))
+    c1 = controller_counters()
+    print(f"  controller counters before {c0} after {c1}")
+    ok("#959 controller RECEIVED universe 1 packets during the show",
+       bool(c0 and c1) and c1.get(1, (0, 0))[0] - c0.get(1, (0, 0))[0] > 40, (c0, c1))
+    ok("#959 controller RECEIVED universe 2 packets during the show",
+       bool(c0 and c1) and c1.get(2, (0, 0))[0] - c0.get(2, (0, 0))[0] > 40, (c0, c1))
+    ok("no receive errors on universes 1-2", bool(c1) and c1.get(1, (0, 0))[1] == 0 and c1.get(2, (0, 0))[1] == 0, c1)
+    samples = [_lit_colours() for _ in range(6) if not time.sleep(0.25)]
+    seen = {}
+    for sm in samples:
+        for c, n in sm.items():
+            seen[c] = seen.get(c, 0) + n
+    print(f"  lit colours on universe 1: {seen}")
+    ok("steady output (every sample has lit pixels — no competing writer)", all(samples), [sum(x.values()) for x in samples])
+    if act.get("type") in (1, 4) and want != (0, 0, 0):
+        ok(f"#957 lit pixels are the action's colour {want}", set(seen) == {want}, seen)
+    print(f"  >>> OPERATOR (if you can see the eaves): should show {act.get('name')!r} in {want} <<<", flush=True)
+    time.sleep(a.seconds if a.seconds < 60 else 10)
+    http("/api/show/stop", "POST", {})
+
+    print("\n  -- #960: engine stop -> start blinks the pixel fixtures")
+    http("/api/dmx/stop", "POST", {})
+    time.sleep(1)
+    b0 = controller_counters()
+    http("/api/dmx/start", "POST", {"protocol": "sacn"})
+    lit_during = []
+    for _ in range(12):
+        lit_during.append(sum(_lit_colours().values()))
+        time.sleep(0.25)
+    b1 = controller_counters()
+    print(f"  lit pixels during blink window: {lit_during}  counters {b0} -> {b1}")
+    ok("#960 engine start lights the HinksPix pixels (blink visible in the output)", max(lit_during) > 0, lit_during)
+    ok("#960 blink reaches the controller (counters rise)",
+       bool(b0 and b1) and b1.get(1, (0, 0))[0] > b0.get(1, (0, 0))[0], (b0, b1))
+    time.sleep(3)
+    ok("#960 blink ends dark (no leftover output)", sum(_lit_colours().values()) == 0, _lit_colours())
+
+    # Restore what the operator had (rule: leave their app as found).
+    if not engine_before:
+        http("/api/dmx/stop", "POST", {})
+    if show_before:
+        http("/api/show/start", "POST", {})
+    ok("engine + show restored to how they were",
+       _engine_running() == engine_before, (engine_before, _engine_running()))
+
+
 def step_uninstall(a):
     print("\n== uninstall (silent; approve the UAC prompt)")
     ps("Get-Process SlyLED -ErrorAction SilentlyContinue | Stop-Process -Force")
@@ -287,17 +401,17 @@ def step_uninstall(a):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("step", choices=["fetch", "install", "check", "live", "uninstall"])
+    ap.add_argument("step", choices=["fetch", "install", "check", "live", "verify", "uninstall"])
     ap.add_argument("--tag")
     ap.add_argument("--sha-setup")
     ap.add_argument("--sha-exe")
     ap.add_argument("--rgb", default="0,0,255")
     ap.add_argument("--seconds", type=int, default=60)
     a = ap.parse_args()
-    if a.step in ("check", "live", "uninstall"):
+    if a.step in ("check", "live", "verify", "uninstall"):
         use_installed_port()
     {"fetch": step_fetch, "install": step_install, "check": step_check,
-     "live": step_live, "uninstall": step_uninstall}[a.step](a)
+     "live": step_live, "verify": step_verify, "uninstall": step_uninstall}[a.step](a)
     print(f"\n{_p} passed, {_f} failed out of {_p + _f} tests")
     sys.exit(1 if _f else 0)
 
