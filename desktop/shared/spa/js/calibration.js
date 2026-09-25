@@ -2456,12 +2456,13 @@ function _moverCalCancel(){
   });
 }
 
+// #927 — "Re-calibrate (full)" used to DELETE /api/calibration/mover/<fid>,
+// a route removed with the SMART pipeline in #784; the 404 was swallowed and
+// the button did nothing. Under the #784 sphere model re-calibrating IS the
+// Set Home + Movement Direction flow, so open the live Calibrate menu.
 function _moverCalDelete(){
   if(!_moverCalFid)return;
-  ra('DELETE','/api/calibration/mover/'+_moverCalFid,null,function(){
-    (_fixtures||[]).forEach(function(f){if(f.id===_moverCalFid)f.moverCalibrated=false;});
-    _moverCalStart(_moverCalFid);
-  });
+  _moverCalStart(_moverCalFid);
 }
 
 // ── Manual mover calibration (#368) — DELETED in #788 ──────────────

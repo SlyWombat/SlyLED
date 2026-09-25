@@ -69,6 +69,18 @@ function Get-BuildConfig([string]$name, [string]$default) {
 }
 $androidBuildDir = Get-BuildConfig 'androidBuildDir' 'C:\Android\build\slyled-app'
 
+# ── Helper: UTF-8 without a BOM (#933) ─────────────────────────────────────
+# Windows PowerShell 5.1's `Set-Content -Encoding UTF8` writes a BOM, which
+# broke parent_server.py's shebang and strict JSON readers of the build
+# caches; it also appended a newline to content that already ended in one,
+# so parent_server.py grew a blank line every build. Every committed file
+# this script writes goes through here, and every read of those files says
+# -Encoding UTF8 (5.1 reads a BOM-less file as ANSI otherwise, mangling
+# the em-dashes and arrows in the Python source).
+function Write-Utf8NoBom([string]$path, [string]$content) {
+    [System.IO.File]::WriteAllText($path, $content, (New-Object System.Text.UTF8Encoding($false)))
+}
+
 # ── Helper: increment a "major.minor.patch" version string ─────────────────
 function Increment-Patch([string]$ver) {
     $parts = $ver.Split(".")
@@ -218,7 +230,7 @@ function Get-AndroidSourceHash {
             # Strip versionCode / versionName so a version-only bump doesn't
             # invalidate the cache. Match the assignment lines regardless of
             # whitespace.
-            $lines = Get-Content $f.FullName |
+            $lines = Get-Content $f.FullName -Encoding UTF8 |
                      Where-Object { $_ -notmatch '^\s*versionCode\s*=' -and `
                                     $_ -notmatch '^\s*versionName\s*=' }
             $bytes = [System.Text.Encoding]::UTF8.GetBytes(($lines -join "`n"))
@@ -242,13 +254,13 @@ $androidCachePath = "$root\android\.build-cache.json"
 function Get-AndroidStoredHash {
     if (-not (Test-Path $androidCachePath)) { return "" }
     try {
-        $j = Get-Content $androidCachePath -Raw | ConvertFrom-Json
+        $j = Get-Content $androidCachePath -Raw -Encoding UTF8 | ConvertFrom-Json
         return $j.sourceHash
     } catch { return "" }
 }
 function Set-AndroidStoredHash([string]$hash, [string]$ver) {
     $obj = [pscustomobject]@{ sourceHash = $hash; lastBuiltVersion = $ver; lastBuiltTs = (Get-Date -Format 'o') }
-    $obj | ConvertTo-Json | Set-Content $androidCachePath -Encoding UTF8
+    Write-Utf8NoBom $androidCachePath (($obj | ConvertTo-Json) + "`r`n")
 }
 
 # ── Helper: hash orchestrator (desktop) source for the version-bump gate ─
@@ -293,7 +305,7 @@ function Get-OrchestratorSourceHash {
         if ($rel -eq 'desktop/shared/parent_server.py') {
             # Strip VERSION = "..." so a version-only bump doesn't
             # invalidate the cache.
-            $lines = Get-Content $f.FullName |
+            $lines = Get-Content $f.FullName -Encoding UTF8 |
                      Where-Object { $_ -notmatch '^\s*VERSION\s*=\s*"' }
             $bytes = [System.Text.Encoding]::UTF8.GetBytes(($lines -join "`n"))
         } else {
@@ -313,13 +325,13 @@ $orchCachePath = "$root\desktop\.build-cache.json"
 function Get-OrchStoredHash {
     if (-not (Test-Path $orchCachePath)) { return "" }
     try {
-        $j = Get-Content $orchCachePath -Raw | ConvertFrom-Json
+        $j = Get-Content $orchCachePath -Raw -Encoding UTF8 | ConvertFrom-Json
         return $j.sourceHash
     } catch { return "" }
 }
 function Set-OrchStoredHash([string]$hash, [string]$ver) {
     $obj = [pscustomobject]@{ sourceHash = $hash; lastBuiltVersion = $ver; lastBuiltTs = (Get-Date -Format 'o') }
-    $obj | ConvertTo-Json | Set-Content $orchCachePath -Encoding UTF8
+    Write-Utf8NoBom $orchCachePath (($obj | ConvertTo-Json) + "`r`n")
 }
 
 # ── Helper: bump the MAJOR/MINOR/PATCH defines in a version header ─────────
@@ -337,7 +349,7 @@ function Write-VersionFile([string]$path, [string]$ver) {
     $content = $content -replace "(#define\s+${prefix}_MAJOR\s+)\d+", "`${1}$($parts[0])"
     $content = $content -replace "(#define\s+${prefix}_MINOR\s+)\d+", "`${1}$($parts[1])"
     $content = $content -replace "(#define\s+${prefix}_PATCH\s+)\d+", "`${1}$($parts[2])"
-    Set-Content $path $content -NoNewline -Encoding UTF8
+    Write-Utf8NoBom $path $content
 }
 
 # ── Step 1: Determine app version ──────────────────────────────────────────
@@ -349,7 +361,7 @@ function Write-VersionFile([string]$path, [string]$ver) {
 $gitCmd = Get-Command git -ErrorAction SilentlyContinue
 
 if (-not $CompileOnly) {
-    $serverPy = Get-Content "$root\desktop\shared\parent_server.py" -Raw
+    $serverPy = Get-Content "$root\desktop\shared\parent_server.py" -Raw -Encoding UTF8
     if ($serverPy -match 'VERSION = "([^"]+)"') { $orchCurVer = $Matches[1] } else { $orchCurVer = "1.0.0" }
 
     $orchSrcHash = Get-OrchestratorSourceHash
@@ -395,7 +407,8 @@ if (-not $CompileOnly) {
     if ($DryRun) {
         Write-Host "DRY RUN: would sync parent_server.py VERSION to $appVersion" -ForegroundColor Gray
     } else {
-        (Get-Content "$root\desktop\shared\parent_server.py" -Raw) -replace 'VERSION = "[^"]+"', "VERSION = `"$appVersion`"" | Set-Content "$root\desktop\shared\parent_server.py" -Encoding UTF8
+        Write-Utf8NoBom "$root\desktop\shared\parent_server.py" `
+            ((Get-Content "$root\desktop\shared\parent_server.py" -Raw -Encoding UTF8) -replace 'VERSION = "[^"]+"', "VERSION = `"$appVersion`"")
     }
 
     Write-Host "Orchestrator version: $appVersion (Android tracks independently)" -ForegroundColor Green
@@ -599,7 +612,7 @@ if (-not $SkipAndroid) {
     # Read Android's CURRENT versionName as the source of truth — mirrors
     # how firmware boards read from registry.json. Android tracks its own
     # patch level independently from $appVersion (orchestrator).
-    $androidGradle = Get-Content "$root\android\app\build.gradle.kts" -Raw
+    $androidGradle = Get-Content "$root\android\app\build.gradle.kts" -Raw -Encoding UTF8
     if ($androidGradle -match 'versionName\s*=\s*"([^"]+)"') {
         $androidCurVer = $Matches[1]
     } else {
@@ -631,7 +644,7 @@ if (-not $SkipAndroid) {
             $androidGradle = $androidGradle -replace 'versionCode\s*=\s*\d+', "versionCode = $newCode"
         }
         $androidGradle = $androidGradle -replace 'versionName = "[^"]+"', "versionName = `"$androidVer`""
-        Set-Content "$root\android\app\build.gradle.kts" -Value $androidGradle -Encoding UTF8
+        Write-Utf8NoBom "$root\android\app\build.gradle.kts" $androidGradle
 
         Set-Location "$root\android"
         .\gradlew.bat assembleRelease --no-daemon

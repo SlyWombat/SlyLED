@@ -414,6 +414,26 @@ _OTA_APP_FILENAME = {
 _OTA_MAX_APP_BYTES = 2 * 1024 * 1024
 
 
+def _sha256_hex(path):
+    """Hex SHA-256 of *path*, or None when it can't be read (#875 logging)."""
+    import hashlib
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fp:
+            for chunk in iter(lambda: fp.read(1 << 16), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def _is_within(path, root):
+    try:
+        return os.path.realpath(path).startswith(os.path.realpath(root) + os.sep)
+    except (OSError, TypeError, ValueError):
+        return False
+
+
 def _ota_cache_is_poisoned(board, path):
     """Return True if a cached OTA binary at `path` has the size
     signature of a merged-image cache poisoning. Caller deletes +
@@ -571,17 +591,44 @@ def api_fw_binary(board):
     if expected_sha:
         verdict = _verify_sha256(bin_path, expected_sha)
         if verdict is False:
-            ps.log.error("OTA SHA mismatch for %s: expected %s; refusing serve",
-                       board, expected_sha[:12])
+            actual = _sha256_hex(bin_path)
+            # #875 — self-heal like the #870 size guard: a DOWNLOADED copy
+            # that fails its pin is deleted, so the next OTA request
+            # re-fetches it from the release. A local build under _FW_DIR
+            # is never deleted — that's source, and the fix is a rebuild
+            # or re-pin, not a retry.
+            in_cache = _is_within(bin_path, ps._FW_CACHE_DIR)
+            if in_cache:
+                try:
+                    bin_path.unlink()
+                    removed = True
+                except OSError:
+                    removed = False
+            else:
+                removed = False
+            ps.log.error("OTA SHA mismatch for %s at %s: expected %s, got %s — %s",
+                         board, bin_path, expected_sha[:12], (actual or "<unreadable>")[:12],
+                         "removed the cached copy; the next request re-downloads it"
+                         if removed else "refusing serve")
+            if removed:
+                hint = "the cached copy was removed — retry the update to download it again."
+            elif in_cache:
+                hint = f"clear {ps._FW_CACHE_DIR / board} and retry."
+            else:
+                hint = (f"the local build {bin_path} doesn't match the registry pin — "
+                        f"rebuild it or re-pin registry.json.")
             return jsonify(
-                ok=False,
-                err=f"otaSha256 mismatch for {board} — cached binary "
-                    f"does not match the registry pin. Clear "
-                    f"{ps._FW_CACHE_DIR / board} and retry."), 502
+                ok=False, removed=removed,
+                err=f"otaSha256 mismatch for {board} — {hint}"), 502
         if verdict is None:
             ps.log.warning("OTA SHA verify could not read %s; serving "
                          "without integrity check (transient I/O?)",
                          bin_path)
+    elif entry:
+        # #875 — a registry that lost its pin (build_release.ps1 regression)
+        # used to be silent.
+        ps.log.warning("OTA registry entry for %s has no otaSha256 — serving %s "
+                       "without an integrity check", board, bin_path)
 
     return send_file(str(bin_path), mimetype="application/octet-stream",
                      download_name=f"slyled-{board}.bin")

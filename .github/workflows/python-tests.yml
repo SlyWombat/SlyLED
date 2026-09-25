@@ -139,7 +139,10 @@ jobs:
                    tests/test_firmware_platform.py \
                    tests/test_platform_smoke.py \
                    tests/test_linux_packaging.py \
-                   tests/test_send_recv_handoff.py; do
+                   tests/test_send_recv_handoff.py \
+                   tests/test_870_ota_app_only.py \
+                   tests/test_camera_bump_version.py \
+                   tests/test_no_bom.py; do
             echo "== $t"
             SLYLED_DATA=$(mktemp -d) python3 -X utf8 "$t"
           done
@@ -321,7 +324,7 @@ jobs:
         # belong with chromium rather than in the unit job; the other
         # eight suites run there per-PR instead.
         run: |
-          for f in tests/test_hinkspix_*_spa.py tests/test_schedule_spa.py; do
+          for f in tests/test_hinkspix_*_spa.py tests/test_schedule_spa.py tests/test_880_profiles_spa.py; do
             echo "== $f"
             SLYLED_DATA=$(mktemp -d) python3 -X utf8 "$f"
           done

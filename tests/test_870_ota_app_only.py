@@ -254,6 +254,11 @@ def test_873_sha_mismatch_refuses_serve_with_502():
         _assert("otasha256" in err or "mismatch" in err,
                 f"error names otaSha256 / mismatch (got {body.get('err')!r})")
         _ = actual_sha  # actual_sha differs from pinned; documented inline
+        # #875 — self-heal: the poisoned CACHED copy is gone, so the next
+        # request re-fetches instead of 502-ing forever.
+        _assert(not cache.exists(), "#875 mismatched cache file deleted")
+        _assert(body.get("removed") is True, f"#875 response says removed (got {body})")
+        _assert("retry" in err, f"#875 error tells the operator to retry (got {err!r})")
 
 
 def test_873_sha_match_serves_200():
@@ -334,6 +339,33 @@ def test_873_d1mini_uses_legacy_sha256_pin():
             r = c.get("/api/firmware/binary/d1mini")
         _assert(r.status_code == 502,
                 f"D1 SHA mismatch → 502 (got {r.status_code})")
+        # #875 — a LOCAL build (under _FW_DIR) is source: never deleted.
+        _assert(local.exists(), "#875 mismatched local build is NOT deleted")
+        _assert((r.get_json() or {}).get("removed") is False, "#875 removed=False for a local build")
+
+
+def test_875_missing_pin_logs_a_warning():
+    """#875 — an entry without otaSha256 still serves (back-compat) but no
+    longer silently: a warning says there's no integrity check."""
+    with _Sandbox() as sb:
+        sb.patch_registry([{
+            "id": "child-led-esp32", "releaseTag": "esp32-v7.5.15",
+            "releaseAsset": "esp32-firmware-merged.bin",
+            "otaAsset": "esp32-firmware-app.bin",
+        }])
+        cache = parent_server._FW_CACHE_DIR / "esp32" / "main.ino.app.bin"
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_bytes(b"\x11" * 500_000)
+        seen = []
+        real = parent_server.log.warning
+        parent_server.log.warning = lambda msg, *a, **k: seen.append(msg % a if a else msg)
+        try:
+            with parent_server.app.test_client() as c:
+                r = c.get("/api/firmware/binary/esp32")
+        finally:
+            parent_server.log.warning = real
+        _assert(r.status_code == 200, f"still served (got {r.status_code})")
+        _assert(any("no otaSha256" in m for m in seen), f"warning logged (got {seen})")
 
 
 # ── Test registry ────────────────────────────────────────────────────────────
@@ -349,6 +381,7 @@ ALL = [
     test_873_sha_match_serves_200,
     test_873_no_sha_pin_falls_through_for_back_compat,
     test_873_d1mini_uses_legacy_sha256_pin,
+    test_875_missing_pin_logs_a_warning,
 ]
 
 

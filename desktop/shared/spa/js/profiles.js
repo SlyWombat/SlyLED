@@ -90,6 +90,39 @@ function renderPatchView(){
 // function reads it to flip on the "Update available" badge.
 window._commStaleSet=window._commStaleSet||{};
 
+// #880 — Settings → Profiles section body (#profile-lib). Every profile
+// change path (editor save, OFL/community import, delete) calls this; it was
+// referenced but never defined, so opening Settings → Profiles threw a
+// ReferenceError and the section stayed empty. Also drops the shared
+// profile cache so the layout / emulator pick up the change.
+function loadDmxProfiles(){
+  window._profileCache=null;
+  var el=document.getElementById('profile-lib');
+  if(!el)return;
+  ra('GET','/api/dmx-profiles',null,function(profiles){
+    if(!profiles){el.innerHTML='<p style="color:#f66;font-size:.82em">Could not load profiles.</p>';return;}
+    var builtin=profiles.filter(function(p){return p.builtin;});
+    var own=profiles.filter(function(p){return !p.builtin;});
+    var comm=own.filter(function(p){return p._community&&p._community.slug;});
+    var h='<p style="font-size:.82em;color:#94a3b8;margin:.2em 0 .5em">'+profiles.length+' profiles: '
+      +builtin.length+' built-in, '+own.length+' custom'+(comm.length?' ('+comm.length+' from the community)':'')
+      +'. <a href="#" onclick="showProfileBrowser();return false" style="color:#22d3ee">Browse all</a></p>';
+    if(own.length){
+      h+='<table class="tbl" style="font-size:.8em"><tr><th>Name</th><th>Mfr</th><th>Cat</th><th>Ch</th><th></th></tr>';
+      own.sort(function(a,b){return String(a.name||'').localeCompare(String(b.name||''));}).forEach(function(p){
+        h+='<tr><td>'+escapeHtml(p.name||p.id)+(p._community&&p._community.slug?' <span style="color:#7c3aed;font-size:.75em">· community</span>':'')
+          +'</td><td>'+escapeHtml(p.manufacturer||'')+'</td><td>'+escapeHtml(p.category||'')+'</td><td>'+(p.channelCount||0)+'</td>'
+          +'<td style="white-space:nowrap"><button class="btn" onclick="viewProfile(\''+escapeHtml(p.id)+'\')" style="font-size:.7em;background:#335;color:#fff">View</button> '
+          +'<button class="btn" onclick="editProfile(\''+escapeHtml(p.id)+'\')" style="font-size:.7em;background:#446;color:#fff">Edit</button></td></tr>';
+      });
+      h+='</table>';
+    }else{
+      h+='<p style="font-size:.8em;color:#64748b">No custom profiles yet — clone a built-in one, import from OFL or the community, or start a New Profile.</p>';
+    }
+    el.innerHTML=h;
+  });
+}
+
 function showProfileBrowser(){
   _modalStack=[]; // top-level modal — clear stack
   ra('GET','/api/dmx-profiles',null,function(profiles){
@@ -240,7 +273,7 @@ function viewProfile(id){
 function deleteProfile(id,name){
   if(!confirm('Delete profile "'+name+'"?'))return;
   ra('DELETE','/api/dmx-profiles/'+id,null,function(r){
-    if(r&&r.ok){document.getElementById('hs').textContent='Profile deleted';showProfileBrowser();}
+    if(r&&r.ok){document.getElementById('hs').textContent='Profile deleted';showProfileBrowser();loadDmxProfiles();}
     else document.getElementById('hs').textContent='Delete failed: '+(r&&r.err||'unknown');
   });
 }
