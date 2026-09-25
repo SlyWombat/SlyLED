@@ -98,7 +98,7 @@ ios/
 ## Releasing
 
 ```bash
-cd /mnt/d/SlyLED
+cd "<repo root>"   # e.g. /mnt/d/Projects/Lighting Arduino
 git tag ios-v0.7.0
 git push origin ios-v0.7.0
 ```

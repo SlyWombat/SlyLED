@@ -87,6 +87,8 @@ Makefile.*
 moc_*.cpp
 ui_*.h
 main/arduino_secrets.h.bak
+# any backup / carried-over copy of a secrets header (e.g. .from-D-SlyLED)
+arduino_secrets.h.*
 
 # Android signing (never commit)
 android/*.jks

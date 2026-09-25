@@ -146,7 +146,7 @@ After all six are entered, the workflow can run.
 From your Windows/WSL working tree:
 
 ```bash
-cd /mnt/d/SlyLED
+cd "<repo root>"   # e.g. /mnt/d/Projects/Lighting Arduino
 git tag ios-v0.1.0
 git push origin ios-v0.1.0
 ```

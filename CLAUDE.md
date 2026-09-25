@@ -9,8 +9,8 @@ Clone from GitHub; source never lives in OneDrive. Since 2026-09-15
 (SlyWombat/house-network-ops#195) the work trees are `C:\Projects\Lighting Arduino`
 on DAVEBOOK-5 and `D:\Projects\Lighting Arduino` on gpd-dave (WSL: `/mnt/c/Projects/...`,
 `/mnt/d/Projects/...`). All editing, git commits, builds, and tests happen there.
-The older `D:\SlyLED` tree (canonical 2026-05-06 to 2026-09-15) is being retired;
-#937 lists the hard-coded `D:\SlyLED` paths that must go first. The OneDrive
+The older `D:\SlyLED` tree (canonical 2026-05-06 to 2026-09-15) is retired (2026-09-25,
+#937): nothing references it and it can be deleted — never work there. The OneDrive
 `Projects\Lighting Arduino` folder is retired too. Operator-facing build artifacts are
 mirrored by `build_release.ps1` to the builds-only OneDrive pickup folder
 `%OneDrive%\My Documents\ElectricRV\Development\Releases\SlyLED` (no source there).
