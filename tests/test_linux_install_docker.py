@@ -230,9 +230,15 @@ def run(image, keep, tarball=None):
                "&& (cd /up && sha256sum SlyLED-9.9.9-linux.tar.gz > SlyLED-9.9.9-linux.tar.gz.sha256) "
                "&& cd /up && nohup python3 -m http.server 8765 >/tmp/http.log 2>&1 &")
             time.sleep(1.5)
-            r = dx("SLYLED_RELEASE_BASE=http://127.0.0.1:8765 bash /src/desktop/linux/install.sh "
-                   "--release v9.9.9", timeout=1800)
-            ok("--release upgrade exit 0", r.returncode == 0, r.stdout[-500:] + r.stderr[-500:])
+            # The documented one-liner: the script arrives on stdin (no file,
+            # no BASH_SOURCE, no tree), run from an unrelated directory.
+            r = dx("cd /tmp && cat /src/desktop/linux/install.sh | "
+                   "SLYLED_RELEASE_BASE=http://127.0.0.1:8765 bash -s -- --release v9.9.9",
+                   timeout=1800)
+            ok("piped `bash -s -- --release` upgrade exit 0 (the documented one-liner)",
+               r.returncode == 0, r.stdout[-500:] + r.stderr[-500:])
+            ok("piped run never trips `set -u` on BASH_SOURCE",
+               "unbound variable" not in r.stderr, r.stderr[-300:])
             ok("--release verified the sha256", "sha256 verified" in r.stdout, r.stdout[-400:])
             ok(f"upgrade says 'upgrading v{want_ver} → v9.9.9'",
                f"upgrading v{want_ver} → v9.9.9" in r.stdout, r.stdout[-400:])
@@ -248,6 +254,9 @@ def run(image, keep, tarball=None):
                "SlyLED-9.9.9-linux.tar.gz' > SlyLED-9.9.9-linux.tar.gz.sha256")
             r = dx("SLYLED_RELEASE_BASE=http://127.0.0.1:8765 bash /src/desktop/linux/install.sh "
                    "--release 9.9.9", timeout=300)
+            r2 = dx("cd /tmp && cat /src/desktop/linux/install.sh | bash -s --", timeout=120)
+            ok("piped without --release says to add it",
+               r2.returncode != 0 and "add --release" in r2.stderr, r2.stderr[-300:])
             ok("a tampered checksum is refused (nothing installed)",
                r.returncode != 0 and "sha256 mismatch" in r.stderr, r.stdout[-300:] + r.stderr[-300:])
 

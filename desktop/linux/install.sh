@@ -28,8 +28,18 @@ UNIT_DST=/etc/systemd/system/${SERVICE}.service
 UDEV_DST=/etc/udev/rules.d/99-slyled-usb.rules
 PORT=8080
 
-HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-SRC=$(cd "$HERE/../.." && pwd)
+# Piped (`curl … | sudo bash -s -- --release latest`) there is no script file:
+# BASH_SOURCE is unset (fatal under `set -u`) and there is no tree to install
+# from — only --release works, and it re-execs the downloaded tarball's own
+# install.sh (#962 follow-up).
+SELF="${BASH_SOURCE[0]:-}"
+if [ -n "$SELF" ] && [ -f "$SELF" ]; then
+    HERE=$(cd "$(dirname "$SELF")" && pwd)
+    SRC=$(cd "$HERE/../.." && pwd)
+else
+    HERE=""
+    SRC=""
+fi
 
 if [ -t 1 ]; then B=$'\033[1m' R=$'\033[0m'; else B='' R=''; fi
 say() { printf '%s[slyled]%s %s\n' "$B" "$R" "$*"; }
@@ -37,7 +47,7 @@ die() { printf '[slyled] ERROR: %s\n' "$*" >&2; exit 1; }
 have_systemd() { [ -d /run/systemd/system ]; }
 
 usage() {
-    if [ -f "${BASH_SOURCE[0]:-}" ]; then sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    if [ -n "$SELF" ] && [ -f "$SELF" ]; then sed -n '2,20p' "$SELF" | sed 's/^# \{0,1\}//'
     else echo "usage: install.sh [--release <tag|latest>] [--uninstall [--purge]] [--version]"; fi
     exit "${1:-0}"
 }
@@ -68,11 +78,11 @@ done
 if [ "$SHOW_VERSION" -eq 1 ]; then
     if [ -f "$PREFIX/VERSION" ]; then echo "installed: $(cat "$PREFIX/VERSION")"
     else echo "installed: none"; fi
-    v=$(tree_version "$SRC"); [ -n "$v" ] && echo "this tree: $v"
+    if [ -n "$SRC" ]; then v=$(tree_version "$SRC"); [ -n "$v" ] && echo "this tree: $v"; fi
     exit 0
 fi
 
-[ "$(id -u)" -eq 0 ] || die "run as root: sudo bash $0"
+[ "$(id -u)" -eq 0 ] || die "run as root: sudo bash ${SELF:-install.sh} …"
 
 # ── --release: fetch + verify the tarball, then run ITS install.sh ──────
 # #962 — no git checkout needed. SLYLED_RELEASE_BASE overrides the download
@@ -129,6 +139,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
 fi
 
 # ── prerequisites ────────────────────────────────────────────────────────
+[ -n "$SRC" ] || die "piped install: add --release latest (or --release v<ver>), e.g. curl -fsSL …/install.sh | sudo bash -s -- --release latest"
 [ -f "$SRC/desktop/shared/parent_server.py" ] \
     || die "run from a SlyLED source tree or an extracted release tarball ($SRC), or use --release"
 command -v python3 >/dev/null || die "python3 not found"
