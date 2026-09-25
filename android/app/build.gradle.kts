@@ -34,8 +34,8 @@ android {
         applicationId = "com.slywombat.slyled"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1093
-        versionName = "1.8.13"
+        versionCode = 1094
+        versionName = "1.8.14"
     }
 
     signingConfigs {
@@ -151,6 +151,7 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
 }
+
 
 
 
