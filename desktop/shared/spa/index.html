@@ -330,6 +330,8 @@
            oninput='setBrightness(this.value)'>
     <span id='rt-bri-val' style='color:#e2e8f0;font-size:.82em;font-family:monospace;min-width:3em;text-align:right'>100%</span>
   </div>
+  <!-- #954 show scheduler -->
+  <div id='sched-panel' style='margin-top:1.2em'></div>
 </div>
 
 <div id='t-settings' class='tab' style='display:none'>
@@ -344,6 +346,8 @@
 
   <!-- GENERAL -->
   <div id='ss-general'>
+    <!-- #954 — location for sunset/sunrise schedules (entered, never looked up) -->
+    <div class='card' id='sched-loc'></div>
     <div class='card'>
       <div class='card-title'>App Settings</div>
       <label>Orchestrator Name</label><input id='s-nm' maxlength='15' style='width:200px' data-tip='setName'>
@@ -802,6 +806,7 @@
 <script src="/js/hinkspix.js"></script>
 <script src="/js/hinkspix_config.js"></script>
 <script src="/js/hinkspix_guide.js"></script>
+<script src="/js/schedule.js"></script>
 <script src="/js/settings.js"></script>
 <script src="/js/firmware.js"></script>
 <script src="/js/camera-deploy.js"></script>

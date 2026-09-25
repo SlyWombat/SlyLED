@@ -484,6 +484,42 @@ data class ShowStatus(
     val elapsed: Double = 0.0,
     val duration: Double = 0.0,
     val loop: Boolean = false,
+    // #954 — what the show scheduler is doing (null from an older server).
+    val schedule: ScheduleSummary? = null,
+)
+
+/** #954 — compact scheduler state carried on /api/show/status. */
+@Serializable
+data class ScheduleSummary(
+    val enabled: Boolean = false,
+    val override: ScheduleOverride? = null,
+    val now: ScheduleNow? = null,
+    val next: ScheduleNext? = null,
+    val error: String? = null,
+)
+
+@Serializable
+data class ScheduleOverride(
+    val active: Boolean = false,
+    val kind: String? = null,
+    val by: String? = null,
+    val since: Double? = null,
+    val resumeAt: Double? = null,
+)
+
+@Serializable
+data class ScheduleNow(
+    val what: String? = null,
+    val schedule: String? = null,
+    val reason: String? = null,
+    val until: String? = null,       // ISO UTC
+    val untilDesc: String? = null,   // "23:00" / "sunset −15 m"
+)
+
+@Serializable
+data class ScheduleNext(
+    val at: String? = null,          // ISO UTC
+    val what: String? = null,
 )
 
 @Serializable

@@ -13,6 +13,7 @@ function loadRuntime(){
   // Start polling show status + fixture grid
   _rtRefresh();
   _rtTimer=setInterval(_rtRefresh,1000);
+  if(typeof schedLoad==='function')schedLoad();   // #954
 }
 
 function _rtRenderPlaylist(d){
@@ -20,6 +21,8 @@ function _rtRenderPlaylist(d){
   var totalEl=document.getElementById('rt-playlist-total');
   if(!el)return;
   var items=d.items||[];
+  // #954 — the Schedule panel's "show playlist" entries use this order.
+  window._rtPlaylistOrder=(d.order||items.map(function(it){return it.id;})).slice();
   if(!items.length){
     el.innerHTML='<div style="padding:.6em;color:#888;font-size:.82em">No timelines in playlist. Go to the <a href="#" onclick="showTab(\'shows\');return false" style="color:#22d3ee">Shows tab</a> to create timelines.</div>';
     if(totalEl)totalEl.textContent='';

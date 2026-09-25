@@ -89,6 +89,7 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
                 timelines = timelines,
                 onStop = { viewModel.stopShow() },
                 onNext = { viewModel.nextShow() },
+                onResumeSchedule = { viewModel.resumeSchedule() },
                 onJumpToShows = {
                     scope.launch {
                         pagerState.animateScrollToPage(ControlPage.SHOWS.ordinal)

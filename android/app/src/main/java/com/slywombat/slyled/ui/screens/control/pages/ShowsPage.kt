@@ -67,6 +67,17 @@ fun ShowsPage(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(bottom = 12.dp),
         )
+        // #954 — next scheduled change, when the show scheduler is on.
+        val sched = showStatus?.schedule
+        val nextAt = com.slywombat.slyled.ui.screens.control.scheduleLocalTime(sched?.next?.at)
+        if (sched?.enabled == true && sched.next?.what != null && nextAt != null) {
+            Text(
+                "Next up: ${sched.next.what} at $nextAt",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+        }
         if (timelines.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(

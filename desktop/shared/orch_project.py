@@ -1072,6 +1072,7 @@ def api_project_export():
         "moverCalibrations": ps._mover_cal,
         "cameraSsh": clean_camera_ssh,
         "showPlaylist": ps._show_playlist,
+        "schedule": ps._schedule_doc,          # #954
         "profiles": export_profiles,
         "settings": clean_settings,
         # Spatial data (#336)
@@ -1173,6 +1174,11 @@ def api_project_import():
         # Restore show playlist — prune any orphan IDs that reference deleted timelines
         ps._show_playlist.clear()
         ps._show_playlist.update(data.get("showPlaylist", {"order": [], "loopAll": False}))
+        # #954 — the schedule travels with the project. An older project has
+        # none: keep a disabled default rather than the previous rig's.
+        _sched = ps.schedule_eval.default_document()
+        _sched.update(data.get("schedule") or {})
+        ps._schedule_doc = _sched
         valid_tl_ids = {t["id"] for t in ps._timelines}
         ps._show_playlist["order"] = [tid for tid in ps._show_playlist.get("order", []) if tid in valid_tl_ids]
         # Auto-populate playlist if empty but timelines exist (fixes #312)
@@ -1304,8 +1310,10 @@ def api_project_import():
         ps._save("range_calibrations", ps._range_cal)
         ps._save("mover_calibrations", ps._mover_cal)
         ps._save("show_playlist", ps._show_playlist)
+        ps._save("schedule", ps._schedule_doc)
         ps._save("settings", ps._settings)
     ps._apply_dmx_settings()
+    ps._scheduler.wake()
     name = data.get("name", "Untitled")
     # Report camera nodes that need SSH credentials re-entered
     ssh_needed = []

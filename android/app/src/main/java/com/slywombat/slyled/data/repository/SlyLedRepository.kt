@@ -435,6 +435,7 @@ class SlyLedRepository @Inject constructor(
     suspend fun stopShow() = requireApi().stopShow()
     // #888 — playlist transport + page-level safety actions.
     suspend fun nextShow() = requireApi().nextShow()
+    suspend fun resumeSchedule() = requireApi().resumeSchedule()   // #954
     suspend fun moverAllHome() = requireApi().moverAllHome()
     suspend fun killStrobes() = requireApi().killStrobes()
     suspend fun killEffects() = requireApi().killEffects()

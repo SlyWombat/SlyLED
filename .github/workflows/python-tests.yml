@@ -98,7 +98,7 @@ jobs:
         # extras); pyserial/paramiko/cryptography gate optional
         # parent_server paths that test_parent.py exercises.
         run: |
-          pip install "flask>=3.0" "qrcode>=7.0" requests numpy \
+          pip install "flask>=3.0" "qrcode>=7.0" requests numpy tzdata \
             opencv-python-headless "cryptography>=41.0" pyyaml \
             "paramiko>=3.0" "pyserial>=3.5" "psutil>=5.9" "esptool>=4.7" \
             "waitress>=3.0"
@@ -142,6 +142,18 @@ jobs:
                    tests/test_send_recv_handoff.py; do
             echo "== $t"
             SLYLED_DATA=$(mktemp -d) python3 -X utf8 "$t"
+          done
+
+      - name: Show scheduler suites (#954)
+        # solar + the pure evaluator + the engine with a fake clock, then
+        # the routes/integration suite (sACN routed to 127.0.0.1; asserts
+        # no dark frame across a show→wash hand-off). The browser half,
+        # test_schedule_spa.py, runs with chromium below.
+        run: |
+          for f in tests/test_solar.py tests/test_schedule_eval.py \
+                   tests/test_schedule_engine.py tests/test_schedule_routes.py; do
+            echo "== $f"
+            SLYLED_DATA=$(mktemp -d) python3 -X utf8 "$f"
           done
 
       - name: Renderer gates (tests/test_pixel_renderer*.py)
@@ -288,7 +300,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install "flask>=3.0" "qrcode>=7.0" requests numpy \
+          pip install "flask>=3.0" "qrcode>=7.0" requests numpy tzdata \
             opencv-python-headless "cryptography>=41.0" pyyaml \
             "paramiko>=3.0" "pyserial>=3.5" playwright
           playwright install --with-deps chromium
@@ -308,7 +320,7 @@ jobs:
         # belong with chromium rather than in the unit job; the other
         # eight suites run there per-PR instead.
         run: |
-          for f in tests/test_hinkspix_*_spa.py; do
+          for f in tests/test_hinkspix_*_spa.py tests/test_schedule_spa.py; do
             echo "== $f"
             SLYLED_DATA=$(mktemp -d) python3 -X utf8 "$f"
           done

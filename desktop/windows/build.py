@@ -170,6 +170,10 @@ args = [
     "--collect-submodules=numpy",
     "--collect-submodules=cv2",
     "--collect-data=esptool",
+    # #954 — the show scheduler uses zoneinfo; Windows has no system tz
+    # database, so the IANA data ships in the bundle via the tzdata package.
+    "--hidden-import=tzdata",
+    "--collect-data=tzdata",
     "--paths", str(SHARED),
 ]
 # Windows-only resources: .ico icon and the VERSIONINFO resource.

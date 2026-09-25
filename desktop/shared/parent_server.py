@@ -39,6 +39,8 @@ from datetime import datetime
 
 import pixel_renderer          # #938 server-side per-pixel effect renderer
 import pixel_output            # #939 pixel-string -> DMX universe mapping
+import schedule_eval           # #954 show scheduler: pure evaluator
+import show_scheduler          # #954 show scheduler: engine thread
 from wled_bridge import (wled_probe, wled_stop,
                          wled_get_effects, wled_get_palettes, wled_get_segments)
 from spatial_engine import (catmull_rom_sample, resolve_fixture,
@@ -409,6 +411,12 @@ def _migrate_controller_placeholders():
 
 
 _migrate_controller_placeholders()
+
+# #954 — show schedule document + engine state (override survives restarts).
+_schedule_doc = _load("schedule", schedule_eval.default_document())
+for _sk, _sv in schedule_eval.default_document().items():
+    _schedule_doc.setdefault(_sk, _sv)
+_schedule_state = _load("schedule_state", {"override": None})
 
 
 def _fixture_view(f, children_by_id=None):
@@ -2918,6 +2926,9 @@ def start_background_tasks():
     threading.Thread(target=_heartbeat_loop, daemon=True).start()
     # #956 — always: a device added after boot needs the same refresh.
     threading.Thread(target=_periodic_ping, daemon=True, name="status-loop").start()
+    # #954 — the show scheduler (idles when disabled). Waits ~5 s so the
+    # DMX engine auto-start and the first performer ping land first.
+    _scheduler.start(delay_s=5.0)
     _check_depth_install_marker()
     _check_ollama_install_marker()
     # Boot-time warm-up of any AI helper that's already installed.
@@ -13954,6 +13965,7 @@ def api_dmx_blackout():
     `aim.park.go_home(fid)` + `lamp_off()` together — separate helper.
     """
     from dmx_profiles import lamp_off
+    _schedule_manual("blackout")   # #954 — Android long-press blackout etc.
     engines_to_use = []
     if _artnet.running:
         engines_to_use.append(_artnet)
@@ -14790,7 +14802,10 @@ def _boot_stop_trackers():
 import threading as _thr_boot
 _thr_boot.Thread(target=_boot_stop_trackers, daemon=True).start()
 
-if _settings.get("autoStartShow"):
+if _settings.get("autoStartShow") and _schedule_doc.get("enabled"):
+    # #954 — the scheduler supersedes autoStartShow (#390) when enabled.
+    log.info("Auto-start show skipped: the show scheduler is enabled and decides what plays")
+elif _settings.get("autoStartShow"):
     import threading as _thr2
     _thr2.Thread(target=_auto_start_show, daemon=True).start()
 
@@ -16741,6 +16756,10 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
                               frame_count, elapsed)
             frame_count += 1
     log.info("DMX playback: stopped after %d frames", frame_count)
+    if _handoff_active():
+        # #954 — scheduler hand-off: hold the last frame for the next show.
+        log.info("DMX playback: hand-off — no end-of-play sweep")
+        return
     # #940 — zero the pixel universes. Pixel spans are never "claimed" by
     # mover-control, so they don't reach the claim-aware park below and would
     # otherwise latch on the final frame's colours indefinitely.
@@ -16839,6 +16858,7 @@ def api_timeline_start(tid):
     if _sync_progress and not _sync_progress.get("done"):
         return jsonify(err="Sync still in progress - wait for it to finish"), 409
 
+    _schedule_manual()          # #954
     # #958 — never "start" a show whose DMX/streamed output can't be sent.
     output, out_err = _ensure_output_engine(f"timeline {tid} start")
     if out_err:
@@ -16883,6 +16903,9 @@ def api_timeline_start(tid):
 @app.post("/api/timelines/<int:tid>/stop")
 def api_timeline_stop(tid):
     """Stop timeline playback on all children + DMX playback thread + blackout."""
+    global _handoff_until
+    _schedule_manual()          # #954
+    _handoff_until = 0.0
     # Stop DMX playback thread
     _dmx_playback_stop.set()
 
@@ -16991,7 +17014,7 @@ def api_show_playlist_set():
 
 
 def _show_playback_loop(playlist_order, loop_all, go_epoch, start_idx=0,
-                        my_generation=None):
+                        my_generation=None, first_offset_s=0.0):
     """Background thread: play timelines sequentially.
 
     `my_generation` is captured at spawn time. After every mutation of
@@ -17036,7 +17059,8 @@ def _show_playback_loop(playlist_order, loop_all, go_epoch, start_idx=0,
         _settings["activeTimeline"] = tid
         _save("settings", _settings)
         log.info("Show playback: single-item loop_all → _dmx_playback_loop")
-        _dmx_playback_loop(tid, time.time(), duration, loop=True)
+        # #954 — a scheduler join-in-progress starts mid-timeline.
+        _dmx_playback_loop(tid, time.time() - first_offset_s, duration, loop=True)
         if not _is_current():
             return  # a newer show start/next has taken over; leave shared state alone
         _show_playback["running"] = False
@@ -17075,7 +17099,9 @@ def _show_playback_loop(playlist_order, loop_all, go_epoch, start_idx=0,
             # skip the blackout sweep so the next iteration's first
             # frame doesn't follow an all-zero frame on the wire.
             is_final = (idx == len(tl_list) - 1) and not loop_all
-            _dmx_playback_single(tid, time.time(), duration, is_final=is_final)
+            # #954 — only the first segment of a join-in-progress is offset.
+            seg_offset = first_offset_s if (first_pass and idx == start_idx) else 0.0
+            _dmx_playback_single(tid, time.time() - seg_offset, duration, is_final=is_final)
 
             if _dmx_playback_stop.is_set():
                 break
@@ -17283,7 +17309,11 @@ def _dmx_playback_single(tid, go_epoch, duration, is_final=True):
     # holds its t=duration values until the next segment writes its t=0
     # values, eliminating the visible one-frame blackout.
     ended_by_stop = _dmx_playback_stop.is_set()
-    if is_final or ended_by_stop:
+    # #954 — a scheduler hand-off: the next show writes its first frame
+    # right away, so hold this one instead of sweeping to black.
+    if (is_final or ended_by_stop) and _handoff_active():
+        log.info("DMX playback (single): hand-off — no end-of-play sweep")
+    elif is_final or ended_by_stop:
         # #940 — pixels obey the same #840 rule as DMX: blacking out at every
         # mid-playlist boundary would reintroduce the visible one-frame gap
         # between segments. Only the final segment (or an operator Stop) dims.
@@ -17336,6 +17366,7 @@ def api_show_start():
     unbaked = [tid for tid in order if tid not in _bake_result]
     if unbaked and not has_track_actions:
         return jsonify(err="Unbaked timelines in playlist", unbaked=unbaked), 400
+    _schedule_manual()          # #954 — a manual start pauses the schedule
     # #958 — never "start" a show whose DMX/streamed output can't be sent.
     output, out_err = _ensure_output_engine("show start")
     if out_err:
@@ -17463,6 +17494,7 @@ def api_show_next():
     """
     if not _show_playback.get("running"):
         return jsonify(err="No show running"), 400
+    _schedule_manual()          # #954
     cur_idx = int(_show_playback.get("currentIndex", 0))
     loop_all = bool(_show_playback.get("loopAll", False))
     order = list(_show_playlist.get("order", []))
@@ -17512,6 +17544,9 @@ def api_show_next():
 @app.post("/api/show/stop")
 def api_show_stop():
     """Stop sequential show playback + blackout all unclaimed output (#848)."""
+    global _handoff_until
+    _schedule_manual()          # #954 — the operator takes over
+    _handoff_until = 0.0        # a real stop always sweeps
     _dmx_playback_stop.set()
     pkt_stop = _hdr(CMD_RUNNER_STOP)
     pkt_off = _hdr(CMD_ACTION_STOP)
@@ -17534,6 +17569,328 @@ def api_show_stop():
     _show_playback["running"] = False
     _show_playback["currentTid"] = -1
     return jsonify(ok=True)
+
+
+# ── Show scheduler (#954) ────────────────────────────────────────────────────
+# The evaluator (schedule_eval) says what should be playing; the engine
+# (show_scheduler) turns changes into playback through the actions below. All
+# playback goes through `_start_show_at`, which bakes first (bakes are
+# in-memory and lost on restart), starts the output engine (#958), joins a
+# window in position, and hands off without a blackout sweep so there is no
+# dark frame between entries. See docs/design/show_scheduler.md.
+
+# (_schedule_doc / _schedule_state are loaded with the other persisted state
+# near the top of the module — the boot autoStartShow check needs them.)
+
+# While time.monotonic() < _handoff_until, a playback loop that ends skips its
+# end-of-play blackout sweep: the next show is about to write its first frame.
+# An operator Stop resets it to 0 so a real stop always sweeps.
+_handoff_until = 0.0
+
+
+def _handoff_active():
+    return time.monotonic() < _handoff_until
+
+
+def _bake_and_wait(tid, timeout_s=240):
+    """Bake *tid* if it isn't baked; wait for it. True when baked."""
+    if tid in _bake_result:
+        return True
+    for _ in range(int(timeout_s * 2)):
+        if not (_bake_progress and not _bake_progress.done):
+            break
+        time.sleep(0.5)
+    with app.test_request_context():
+        api_timeline_bake(tid)
+    for _ in range(int(timeout_s * 2)):
+        if tid in _bake_result and (_bake_progress is None or _bake_progress.done):
+            return True
+        if _bake_progress is not None and _bake_progress.done:
+            break
+        time.sleep(0.5)
+    return tid in _bake_result
+
+
+def _sync_and_wait(tid, timeout_s=120):
+    """Load a baked timeline's steps onto performers (no-op without any)."""
+    if not any(c.get("ip") and _is_performer(c) for c in _children):
+        return
+    with app.test_request_context():
+        try:
+            api_bake_sync(tid)
+        except Exception as exc:
+            log.warning("Scheduler: sync of timeline %s failed (%s) — continuing", tid, exc)
+            return
+    time.sleep(0.5)
+    for _ in range(int(timeout_s * 2)):
+        if not _sync_progress or _sync_progress.get("done"):
+            return
+        time.sleep(0.5)
+
+
+def _start_show_at(order, loop_all, offset_s=0.0, handoff=False):
+    """Start the playlist *order* at *offset_s* seconds into it (#954).
+
+    Bakes and syncs first. With `handoff`, the outgoing playback does not
+    sweep to black. Returns a dict describing what started; raises
+    RuntimeError when nothing can start (unknown/unbakeable timelines,
+    output engine down)."""
+    global _show_playback, _show_playback_generation, _handoff_until
+    items = []
+    has_track = any(a.get("type") == 18 for a in _actions)
+    for tid in order:
+        tl = next((t for t in _timelines if t["id"] == tid), None)
+        if tl is None:
+            log.warning("Scheduler: timeline %s doesn't exist — skipped", tid)
+            continue
+        if not _bake_and_wait(tid) and not has_track:
+            log.warning("Scheduler: timeline %s would not bake — skipped", tid)
+            continue
+        items.append((tid, tl))
+    if not items:
+        raise RuntimeError(f"nothing playable in {order}")
+    for tid, _tl in items:
+        _sync_and_wait(tid)
+    total = sum(float(tl.get("durationS", 60) or 60) for _t, tl in items)
+    idx, within = 0, 0.0
+    if offset_s > 0 and total > 0:
+        if not loop_all and offset_s >= total:
+            raise RuntimeError("the playlist has already finished in this window")
+        pos = offset_s % total
+        for i, (_tid, tl) in enumerate(items):
+            d = float(tl.get("durationS", 60) or 60)
+            if pos < d:
+                idx, within = i, pos
+                break
+            pos -= d
+    output, out_err = _ensure_output_engine("schedule")
+    if out_err:
+        raise RuntimeError(out_err)
+    if handoff:
+        _handoff_until = time.monotonic() + 1.5
+    _dmx_playback_stop.set()
+    time.sleep(0.15)
+    _dmx_playback_stop.clear()
+    go_epoch = int(time.time()) + 2 - int(within)
+    loop_flag = 1 if loop_all else 0
+    go_pkt = _hdr(CMD_RUNNER_GO, go_epoch) + struct.pack("<IB", go_epoch, loop_flag)
+    for child in _children:
+        if child.get("ip") and _is_performer(child):
+            _send(child["ip"], go_pkt)
+    tids = [t for t, _tl in items]
+    _show_playback = {"running": True, "currentIndex": idx, "currentTid": tids[idx],
+                      "startEpoch": go_epoch, "loopAll": loop_all, "totalElapsed": 0,
+                      "source": "schedule"}
+    with _lock:
+        _settings["runnerRunning"] = True
+        _settings["activeTimeline"] = tids[idx]
+        _settings["runnerStartEpoch"] = go_epoch
+        _save("settings", _settings)
+    _show_playback_generation += 1
+    threading.Thread(target=_show_playback_loop,
+                     args=(tids, loop_all, go_epoch, idx, _show_playback_generation),
+                     kwargs={"first_offset_s": within},
+                     daemon=True, name="show-playback").start()
+    return {"order": tids, "index": idx, "offsetS": within, "output": output}
+
+
+def _stop_show_internal(sweep=True):
+    """Stop show playback. `sweep=False` = hold the last frame (idle: hold)."""
+    global _handoff_until
+    if not sweep:
+        _handoff_until = time.monotonic() + 1.5
+    else:
+        _handoff_until = 0.0
+    _dmx_playback_stop.set()
+    if sweep:
+        pkt_stop = _hdr(CMD_RUNNER_STOP)
+        pkt_off = _hdr(CMD_ACTION_STOP)
+        for child in _children:
+            if child.get("ip"):
+                _send(child["ip"], pkt_stop)
+                _send(child["ip"], pkt_off)
+        if _artnet.running or _sacn.running:
+            _blackout_unclaimed_fixtures()
+    with _lock:
+        _settings["runnerRunning"] = False
+        _settings["activeTimeline"] = -1
+        _settings["runnerStartEpoch"] = 0
+        _save("settings", _settings)
+    _show_playback["running"] = False
+    _show_playback["currentTid"] = -1
+
+
+class _SchedulerActions:
+    """The engine's side effects (show_scheduler calls these)."""
+
+    def _start(self, play, position_s):
+        if play.get("kind") == "timeline":
+            order = [play.get("timelineId")]
+        else:
+            order = list(play.get("order") or [])
+        return _start_show_at(order, bool(play.get("loop", True)),
+                              offset_s=position_s, handoff=True)
+
+    def play(self, play, position_s, decision):
+        self._start(play, position_s)
+
+    def idle(self, play, decision):
+        if play.get("kind") == "hold":
+            _stop_show_internal(sweep=False)
+        elif play.get("kind") in ("timeline", "playlist"):
+            self._start(play, 0.0)
+        else:
+            _stop_show_internal(sweep=True)
+
+    def off(self, decision):
+        _stop_show_internal(sweep=True)
+
+
+def _schedule_save_state(state):
+    _save("schedule_state", state)
+
+
+_scheduler = show_scheduler.ShowScheduler(
+    get_doc=lambda: _schedule_doc, actions=_SchedulerActions(),
+    state=_schedule_state, save_state=_schedule_save_state, log=log)
+
+
+def _schedule_manual(kind="manual"):
+    """#954 — a playback verb that didn't come from the scheduler: when the
+    scheduler is on, the operator takes over (override)."""
+    if not _schedule_doc.get("enabled"):
+        return
+    body = request.get_json(silent=True) or {}
+    if body.get("source") == "schedule":
+        return
+    _scheduler.set_override(kind, by=request.remote_addr)
+
+
+def _schedule_summary():
+    """Compact schedule line for /api/show/status (Android polls it)."""
+    if not _schedule_doc.get("enabled"):
+        return {"enabled": False}
+    out = {"enabled": True, "override": _schedule_state.get("override")}
+    try:
+        d = schedule_eval.evaluate(_schedule_doc, time.time())
+    except schedule_eval.ScheduleError as exc:
+        out["error"] = str(exc)
+        return out
+    win = d.get("window")
+    out["now"] = {"what": (d["entry"] or {}).get("name") if d.get("entry") else d["source"],
+                  "schedule": (d["entry"] or {}).get("scheduleName") if d.get("entry") else None,
+                  "reason": d["reason"],
+                  "until": win["endUtc"] if win else None,
+                  "untilDesc": win["endDesc"] if win else None}
+    nxt = d.get("next")
+    out["next"] = None if not nxt else {"at": nxt["atUtc"], "what": nxt["what"]}
+    return schedule_eval.to_json(out)
+
+
+@app.get("/api/schedule")
+def api_schedule_get():
+    return jsonify(_schedule_doc)
+
+
+@app.put("/api/schedule")
+def api_schedule_put():
+    global _schedule_doc
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify(ok=False, errors=["schedule must be an object"]), 400
+    doc = schedule_eval.default_document()
+    doc.update(body)
+    errors, warnings = schedule_eval.validate(doc, [t["id"] for t in _timelines])
+    if errors:
+        return jsonify(ok=False, errors=errors, warnings=warnings), 400
+    with _lock:
+        _schedule_doc = doc
+        _save("schedule", _schedule_doc)
+    _scheduler.wake()
+    return jsonify(ok=True, warnings=warnings)
+
+
+@app.post("/api/schedule/enabled")
+def api_schedule_enabled():
+    body = request.get_json(silent=True) or {}
+    with _lock:
+        _schedule_doc["enabled"] = bool(body.get("enabled"))
+        _save("schedule", _schedule_doc)
+    log.info("Scheduler: %s by %s", "enabled" if _schedule_doc["enabled"] else "disabled",
+             request.remote_addr)
+    _scheduler.wake()
+    return jsonify(ok=True, enabled=_schedule_doc["enabled"])
+
+
+@app.post("/api/schedule/location")
+def api_schedule_location():
+    """Location for sunrise/sunset times, entered in Settings (#954)."""
+    body = request.get_json(silent=True) or {}
+    loc = {"lat": body.get("lat"), "lon": body.get("lon"),
+           "tz": body.get("tz") or schedule_eval.DEFAULT_TZ}
+    for k in ("lat", "lon"):
+        if loc[k] in ("", None):
+            loc[k] = None
+            continue
+        try:
+            loc[k] = float(loc[k])
+        except (TypeError, ValueError):
+            return jsonify(ok=False, err=f"{k} must be a number"), 400
+    doc = dict(_schedule_doc, location=loc)
+    errors, _w = schedule_eval.validate(doc, [t["id"] for t in _timelines])
+    loc_errors = [e for e in errors if "location" in e or "time zone" in e]
+    if loc_errors:
+        return jsonify(ok=False, err="; ".join(loc_errors)), 400
+    with _lock:
+        _schedule_doc["location"] = loc
+        _save("schedule", _schedule_doc)
+    _scheduler.wake()
+    return jsonify(ok=True, location=loc)
+
+
+@app.get("/api/schedule/state")
+def api_schedule_state():
+    view = _scheduler.state_view(_schedule_doc)
+    names = {t["id"]: t.get("name") for t in _timelines}
+    view["timelines"] = names
+    view["log"] = list(_scheduler.log_ring)[-20:]
+    return jsonify(schedule_eval.to_json(view))
+
+
+@app.get("/api/schedule/preview")
+def api_schedule_preview():
+    try:
+        tz = schedule_eval.tzinfo_for(_schedule_doc)
+        raw = request.args.get("date")
+        import datetime as _dt
+        first = (_dt.date.fromisoformat(raw) if raw
+                 else _dt.datetime.now(_dt.timezone.utc).astimezone(tz).date())
+        days = max(1, min(14, int(request.args.get("days", 7))))
+        return jsonify(schedule_eval.to_json(schedule_eval.preview(_schedule_doc, first, days)))
+    except (ValueError, schedule_eval.ScheduleError) as exc:
+        return jsonify(ok=False, err=str(exc)), 400
+
+
+@app.post("/api/schedule/override")
+def api_schedule_override():
+    body = request.get_json(silent=True) or {}
+    kind = body.get("kind", "manual")
+    if kind not in ("manual", "hold"):
+        return jsonify(ok=False, err="kind must be manual or hold"), 400
+    _scheduler.set_override(kind, by=request.remote_addr)
+    return jsonify(ok=True, override=_schedule_state.get("override"))
+
+
+@app.post("/api/schedule/resume")
+def api_schedule_resume():
+    _scheduler.resume(by=request.remote_addr)
+    return jsonify(ok=True)
+
+
+@app.get("/api/schedule/log")
+def api_schedule_log():
+    limit = max(1, min(500, int(request.args.get("limit", 200))))
+    return jsonify(schedule_eval.to_json(list(_scheduler.log_ring)[-limit:]))
 
 
 @app.get("/api/show/status")
@@ -17581,6 +17938,8 @@ def api_show_status():
         # #763 — fixtures currently held by mover-control. Operator-facing
         # SPA renders a green-ring slow-blink badge on these.
         "claimedFixtures": _claim_arbiter.claimed_fids(),
+        # #954 — what the scheduler is doing, for the Android anchor line.
+        "schedule": _schedule_summary(),
     })
 
 
@@ -18806,6 +19165,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     _serve(args.host, args.port)
+
 
 
 

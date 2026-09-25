@@ -42,8 +42,10 @@ fun NowPlayingAnchor(
     modifier: Modifier = Modifier,
     onStop: () -> Unit,
     onNext: () -> Unit,
+    onResumeSchedule: () -> Unit = {},
     onJumpToShows: () -> Unit = {},
 ) {
+    val schedule = showStatus?.schedule
     val haptic = rememberHaptics()
     if (!isRunning || timelineStatus == null) {
         // Idle: tight one-liner. Reserves the slot so the pager doesn't
@@ -58,6 +60,7 @@ fun NowPlayingAnchor(
                 },
             color = MaterialTheme.colorScheme.surfaceVariant,
         ) {
+          Column {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -77,6 +80,9 @@ fun NowPlayingAnchor(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            ScheduleLine(schedule, onResumeSchedule,
+                Modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp))
+          }
         }
         return
     }
@@ -165,6 +171,8 @@ fun NowPlayingAnchor(
                     trackColor = MaterialTheme.colorScheme.outlineVariant,
                 )
             }
+            // #954 — scheduler line: "Scheduled · until 23:00" / "Manual — Resume".
+            ScheduleLine(schedule, onResumeSchedule, Modifier.padding(top = 6.dp))
             // Playlist progress hint when applicable.
             if (showStatus != null && showStatus.running && showStatus.totalTimelines > 1) {
                 Spacer(Modifier.height(6.dp))
@@ -223,4 +231,74 @@ private fun formatTime(seconds: Int): String {
     val m = seconds / 60
     val s = seconds % 60
     return "%02d:%02d".format(m, s)
+}
+
+
+/**
+ * #954 — one line under Now Playing when the show scheduler is on:
+ * "Scheduled · Evening (Christmas) · until 23:00 (sunset −15 m)" or
+ * "Manual — schedule paused" with a Resume button. Stop/Next still work as
+ * before; the server turns them into the manual override.
+ */
+@Composable
+fun ScheduleLine(
+    schedule: com.slywombat.slyled.data.model.ScheduleSummary?,
+    onResume: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (schedule == null || !schedule.enabled) return
+    val haptic = rememberHaptics()
+    val paused = schedule.override?.active == true
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        val text = when {
+            paused -> "Manual — schedule paused"
+            schedule.error != null -> "Schedule: ${schedule.error}"
+            else -> {
+                val now = schedule.now
+                val what = now?.what ?: "idle"
+                val until = scheduleLocalTime(now?.until)
+                buildString {
+                    append("Scheduled · ").append(what)
+                    now?.schedule?.let { append(" (").append(it).append(")") }
+                    if (until != null) {
+                        append(" · until ").append(until)
+                        val desc = now?.untilDesc
+                        if (desc != null && desc != until) append(" (").append(desc).append(")")
+                    } else {
+                        val nx = schedule.next
+                        val at = scheduleLocalTime(nx?.at)
+                        if (nx?.what != null && at != null) append(" · next ").append(nx.what).append(" at ").append(at)
+                    }
+                }
+            }
+        }
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (paused) RedError else CyanSecondary,
+            modifier = Modifier.weight(1f),
+        )
+        if (paused) {
+            TextButton(onClick = {
+                haptic(HapticEvent.SOFT_TICK)
+                onResume()
+            }) { Text("Resume") }
+        }
+    }
+}
+
+/** ISO-8601 UTC ("2026-12-01T04:00:00Z") → local "HH:mm", or null. */
+fun scheduleLocalTime(iso: String?): String? {
+    if (iso.isNullOrBlank()) return null
+    return try {
+        java.time.OffsetDateTime.parse(iso)
+            .atZoneSameInstant(java.time.ZoneId.systemDefault())
+            .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
+    } catch (_: Exception) {
+        null
+    }
 }

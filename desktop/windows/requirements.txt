@@ -11,3 +11,4 @@ opencv-python-headless>=4.9
 sounddevice>=0.4
 waitress>=3.0
 psutil>=5.9
+tzdata>=2024.1          # #954 show scheduler: zoneinfo on hosts without a system tz database

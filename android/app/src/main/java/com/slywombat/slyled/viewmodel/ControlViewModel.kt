@@ -425,6 +425,18 @@ class ControlViewModel @Inject constructor(
         }
     }
 
+    /** #954 — "Manual — schedule paused · Resume". */
+    fun resumeSchedule() {
+        viewModelScope.launch {
+            try {
+                repository.resumeSchedule()
+                _showStatus.value = repository.getShowStatus()
+            } catch (e: Exception) {
+                _message.value = "Resume failed: ${e.message}"
+            }
+        }
+    }
+
     /**
      * #888 — Fixtures-page shortcut renderer needs full profile JSON.
      * Cache by profileId so N fixtures sharing one profile don't each

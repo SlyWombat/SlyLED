@@ -219,6 +219,10 @@ interface SlyLedApi {
     @POST("api/show/next")
     suspend fun nextShow(): OkResponse
 
+    // #954 — clear a manual override and return to the show schedule.
+    @POST("api/schedule/resume")
+    suspend fun resumeSchedule(): OkResponse
+
     // #888 — page-level safety actions backing the v3 design.
     @POST("api/mover-control/all-home")
     suspend fun moverAllHome(): OkResponse

@@ -1,3 +1,4 @@
 flask>=3.0
 cryptography>=41.0
 paramiko>=3.0
+tzdata>=2024.1          # #954 show scheduler: zoneinfo on hosts without a system tz database

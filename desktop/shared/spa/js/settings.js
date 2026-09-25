@@ -57,6 +57,7 @@ function _getStageMm(){
          d:parseFloat(document.getElementById('s-sd').value)||1500};
 }
 function loadSettings(){
+  if(typeof schedLocLoad==='function')schedLocLoad();   // #954 location card
   ra('GET','/api/settings',null,function(d){
     if(!d)return;
     document.getElementById('s-nm').value=d.name||'';
