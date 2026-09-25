@@ -913,7 +913,16 @@ def _graceful_dmx_shutdown():
 atexit.register(_graceful_dmx_shutdown)
 
 def _signal_shutdown_handler(signum, frame):
+    try:
+        name = signal.Signals(signum).name
+    except (ValueError, AttributeError):
+        name = str(signum)
+    # #962 — one line in the service journal / `docker logs` so a clean stop
+    # is distinguishable from a crash.
+    print(f"SlyLED Orchestrator: {name} received — stopping DMX output and exiting",
+          flush=True)
     _graceful_dmx_shutdown()
+    print("SlyLED Orchestrator: shutdown complete", flush=True)
     os._exit(0)
 
 for _sig_name in ("SIGINT", "SIGTERM", "SIGBREAK"):
@@ -19331,12 +19340,24 @@ if __name__ == "__main__":
     except Exception as _e:
         log.warning("#780 P1 mountedInverted migration on startup failed: %s", _e)
     ap = argparse.ArgumentParser(description="SlyLED Parent Server")
-    ap.add_argument("--port",       type=int, default=8080)
+    # SLYLED_PORT (#962) sets the default so a container's CMD and its
+    # HEALTHCHECK read one value; --port still wins.
+    ap.add_argument("--port",       type=int,
+                    default=int(os.environ.get("SLYLED_PORT") or 8080))
     ap.add_argument("--host",       default="0.0.0.0")
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
 
     if _check_single_instance(args.port):
+        if args.no_browser:
+            # #962 — headless (service / container): there is no browser to
+            # hand off to, and exiting 0 made `restart: unless-stopped` loop
+            # silently. Say what's wrong and fail.
+            print(f"ERROR: another SlyLED Orchestrator is already answering on port "
+                  f"{args.port} — not starting a second one. Stop it (e.g. "
+                  f"`systemctl stop slyled`) or use a different --port.",
+                  file=sys.stderr)
+            sys.exit(1)
         print(f"SlyLED Orchestrator is already running on port {args.port}.")
         print(f"Opening browser to existing instance...")
         webbrowser.open(f"http://localhost:{args.port}")

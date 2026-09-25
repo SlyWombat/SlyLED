@@ -1,0 +1,26 @@
+# SlyLED orchestrator — docker compose (#962). Linux hosts only.
+#
+#   docker compose up -d        then open http://<this-host>:8080
+#
+# network_mode: host is required: discovery broadcasts (UDP 4210), the
+# HinksPix sweep, Art-Net and sACN need the LAN, which a bridge network can't
+# reach. Open TCP 8080 and UDP 4210 4211 5568 6454 in the host firewall.
+services:
+  slyled:
+    # The compose file attached to each release pins its version; here,
+    # SLYLED_VERSION=2.1.7 docker compose up -d  (default: latest, i.e. the
+    # newest non-prerelease).
+    image: ghcr.io/slywombat/slyled:${SLYLED_VERSION:-latest}
+    network_mode: host
+    restart: unless-stopped
+    stop_grace_period: 20s
+    environment:
+      TZ: America/Toronto
+      # SLYLED_PORT: "8080"
+    volumes:
+      - slyled-data:/var/lib/slyled
+    # Optional — flash ESP32 firmware over USB from the Firmware tab:
+    # devices: ["/dev/ttyUSB0:/dev/ttyUSB0"]
+    # group_add: ["20"]          # the HOST's dialout gid: getent group dialout
+volumes:
+  slyled-data:

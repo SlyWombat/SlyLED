@@ -10,13 +10,21 @@ L'interface principale de conception et de contrôle. SPA complète à 7 onglets
 ### Linux (contrôleur sans écran)
 Le même orchestrateur, en service d'arrière-plan sur une machine de baie ou de banc sans écran — un Raspberry Pi 4/5, un NUC ou tout hôte Ubuntu 22.04+ / Debian Bookworm+ (x86_64 ou aarch64). On le pilote depuis un navigateur sur une autre machine ou depuis l'application Android.
 
-**Installation :** depuis une copie des sources SlyLED, exécutez `sudo bash desktop/linux/install.sh`. Le code est installé dans `/opt/slyled` avec son propre environnement Python, le compte de service `slyled` est créé (membre de `dialout`, pour que l'onglet Firmware puisse flasher les cartes USB) et le service `slyled` démarre sur le port 8080. Ouvrez ensuite `http://<hôte>:8080`.
+**Installation :** chaque version fournit `SlyLED-<version>-linux.tar.gz` (un seul fichier pour x86_64 et aarch64). Soit `curl -fsSL https://raw.githubusercontent.com/SlyWombat/SlyLED/main/desktop/linux/install.sh | sudo bash -s -- --release latest` (téléchargement et vérification SHA-256), soit téléchargez-le, `tar xzf SlyLED-<version>-linux.tar.gz` puis `sudo bash SlyLED-<version>/desktop/linux/install.sh`. Aucun clone git n'est nécessaire. Le code est installé dans `/opt/slyled` avec son propre environnement Python, le compte de service `slyled` est créé (membre de `dialout`, pour que l'onglet Firmware puisse flasher les cartes USB) et le service `slyled` démarre sur le port 8080. Ouvrez ensuite `http://<hôte>:8080`.
 **Données :** projets, réglages et journaux sont conservés dans `/var/lib/slyled/SlyLED/data` ; le firmware téléchargé dans `/var/lib/slyled/SlyLED/firmware`.
 **Journaux :** `journalctl -u slyled -f`
-**Mise à jour :** relancez l'installateur depuis les sources plus récentes ; vos données sont conservées.
+**Mise à jour :** lancez l'installateur d'une archive plus récente (ou `--release latest`) — il affiche `upgrading vX → vY` et conserve vos données. `bash install.sh --version` indique la version installée.
 **Désinstallation :** `sudo bash desktop/linux/install.sh --uninstall` (conserve les données ; ajoutez `--purge` pour les supprimer avec le compte de service).
 **Pare-feu :** si ufw ou firewalld est actif, l'installateur ouvre TCP 8080 et UDP 4210, 4211, 5568 et 6454.
 **Réseau :** la découverte, Art-Net et le balayage des caméras utilisent toutes les interfaces réseau physiques ; les ponts Docker/VM et les tunnels VPN sont ignorés.
+
+### Docker (hôtes Linux)
+L'orchestrateur existe aussi en image, `ghcr.io/slywombat/slyled:<version>` (x86_64 et arm64) : `docker run -d --name slyled --network host --restart unless-stopped -e TZ=America/Toronto -v slyled-data:/var/lib/slyled ghcr.io/slywombat/slyled:<version>`, ou `docker compose up -d` avec le `docker-compose.yml` joint à la version.
+
+**Le réseau hôte est obligatoire.** La découverte, le balayage HinksPix, Art-Net et le multicast sACN doivent atteindre votre réseau local, ce qu'un réseau pont Docker ne permet pas. L'image est donc **réservée à Linux** : Docker Desktop (Windows/macOS) exécute les conteneurs dans une VM. Sous Windows, utilisez `SlyLED-Setup.exe`.
+**Données :** le volume `slyled-data` contient projets, réglages et firmware.
+**Pare-feu :** ouvrez TCP 8080 et UDP 4210, 4211, 5568 et 6454 sur l'hôte.
+**Ne le lancez pas à côté du service `slyled`** sur le même port — le second s'arrête avec « already answering on port 8080 ».
 
 ### Application Android
 Outil opérateur en direct pour exécuter des spectacles depuis votre téléphone. Se connecte au serveur de bureau par Wi-Fi. Depuis la version 1.8.1, l'onglet Contrôle est refait en **Surface de commande** — voir #888 / `docs/design/mobile_ui_redesign.md`.

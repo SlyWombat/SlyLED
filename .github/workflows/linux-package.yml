@@ -1,0 +1,236 @@
+# linux-package — Linux release tarball + Docker image for the orchestrator (#962).
+#
+# On a published orchestrator release (tag v<ver>, NOT cam-v*/esp32-v*/ios-v*/
+# mmwave-v*): build SlyLED-<ver>-linux.tar.gz (+ .sha256) from git at the tag,
+# install-test it in a clean container, build + smoke-test the image, push
+# ghcr.io/slywombat/slyled:<ver> for linux/amd64 + linux/arm64 (plus :latest
+# only when the release is not a prerelease), and attach the tarball, its
+# sha256 and a version-pinned docker-compose.yml to the release.
+#
+# On PRs / main pushes touching the packaging: build + test only, no push.
+# workflow_dispatch(tag) re-runs the release path for an existing tag.
+#
+# Version of record = desktop/shared/parent_server.py VERSION at the tag; the
+# gate below fails the run if the tag doesn't match. Nothing here bumps it.
+#
+# GHCR: the first push creates the package PRIVATE. The repo owner must set it
+# public once (github.com/users/SlyWombat/packages/container/slyled/settings)
+# before `docker pull` works without `docker login ghcr.io`.
+
+name: linux-package
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing orchestrator release tag (e.g. v2.1.7)"
+        required: true
+  pull_request:
+    paths:
+      - "desktop/linux/**"
+      - "desktop/shared/**"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker-compose.yml"
+      - "firmware/registry.json"
+      - "firmware/orangepi/**"
+      - "tests/test_docker_image.py"
+      - "tests/test_linux_install_docker.py"
+      - ".github/workflows/linux-package.yml"
+  push:
+    branches: [main]
+    paths:
+      - "desktop/linux/**"
+      - "desktop/shared/**"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker-compose.yml"
+      - "firmware/registry.json"
+      - "firmware/orangepi/**"
+      - "tests/test_docker_image.py"
+      - "tests/test_linux_install_docker.py"
+      - ".github/workflows/linux-package.yml"
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: linux-package-${{ github.event_name }}-${{ github.event.release.tag_name || inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/slywombat/slyled
+
+jobs:
+  meta:
+    # Orchestrator releases only.
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v')
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.m.outputs.tag }}
+      ref: ${{ steps.m.outputs.ref }}
+      version: ${{ steps.m.outputs.version }}
+      publish: ${{ steps.m.outputs.publish }}
+      prerelease: ${{ steps.m.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: m
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REL_TAG: ${{ github.event.release.tag_name }}
+          REL_PRE: ${{ github.event.release.prerelease }}
+          IN_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          case "$EVENT" in
+            release)            tag="$REL_TAG"; publish=true; pre="$REL_PRE" ;;
+            workflow_dispatch)  tag="$IN_TAG";  publish=true
+                                pre=$(gh release view "$tag" --json isPrerelease -q .isPrerelease) ;;
+            *)                  tag="";         publish=false; pre=true ;;
+          esac
+          if [ -n "$tag" ]; then
+            case "$tag" in v[0-9]*) ;; *) echo "::error::not an orchestrator tag: $tag"; exit 1 ;; esac
+            git rev-parse -q --verify "refs/tags/$tag" >/dev/null || { echo "::error::tag $tag not found"; exit 1; }
+            ref="$tag"
+          else
+            ref="$(git rev-parse HEAD)"
+          fi
+          ver=$(git show "$ref:desktop/shared/parent_server.py" \
+                | sed -n 's/^VERSION *= *"\([0-9.]*\)".*/\1/p' | head -1)
+          [ -n "$ver" ] || { echo "::error::VERSION not found in parent_server.py at $ref"; exit 1; }
+          if [ -n "$tag" ] && [ "$tag" != "v$ver" ]; then
+            echo "::error::version gate: tag $tag != parent_server.py VERSION $ver"
+            exit 1
+          fi
+          {
+            echo "tag=$tag"; echo "ref=$ref"; echo "version=$ver"
+            echo "publish=$publish"; echo "prerelease=$pre"
+          } >> "$GITHUB_OUTPUT"
+          echo "tag=$tag ref=$ref version=$ver publish=$publish prerelease=$pre"
+
+  tarball:
+    needs: meta
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build tarball from git (not the working tree)
+        run: python3 desktop/linux/build_tarball.py --ref "${{ needs.meta.outputs.ref }}" --out dist
+      - name: Verify checksum
+        working-directory: dist
+        run: sha256sum -c "SlyLED-${{ needs.meta.outputs.version }}-linux.tar.gz.sha256"
+      - name: Install + upgrade from the tarball in a clean container
+        run: >
+          python3 -X utf8 tests/test_linux_install_docker.py --image ubuntu:24.04
+          --tarball "dist/SlyLED-${{ needs.meta.outputs.version }}-linux.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-tarball
+          path: dist/SlyLED-${{ needs.meta.outputs.version }}-linux.tar.gz*
+          if-no-files-found: error
+
+  image:
+    needs: meta
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.meta.outputs.ref }}
+      - id: args
+        run: |
+          echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - name: Build amd64 for the smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: slyled:ci
+          build-args: |
+            VERSION=${{ needs.meta.outputs.version }}
+            REVISION=${{ steps.args.outputs.revision }}
+            CREATED=${{ steps.args.outputs.created }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test the image
+        run: python3 -X utf8 tests/test_docker_image.py --image slyled:ci
+      - if: needs.meta.outputs.publish == 'true'
+        uses: docker/setup-qemu-action@v3
+      - if: needs.meta.outputs.publish == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: tags
+        if: needs.meta.outputs.publish == 'true'
+        run: |
+          t="${IMAGE}:${{ needs.meta.outputs.version }}"
+          if [ "${{ needs.meta.outputs.prerelease }}" != "true" ]; then t="$t,${IMAGE}:latest"; fi
+          echo "tags=$t" >> "$GITHUB_OUTPUT"
+      - id: push
+        if: needs.meta.outputs.publish == 'true'
+        name: Build + push amd64 + arm64
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            VERSION=${{ needs.meta.outputs.version }}
+            REVISION=${{ steps.args.outputs.revision }}
+            CREATED=${{ steps.args.outputs.created }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  attach:
+    needs: [meta, tarball, image]
+    if: needs.meta.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.meta.outputs.tag }}
+      VER: ${{ needs.meta.outputs.version }}
+      DIGEST: ${{ needs.image.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.meta.outputs.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-tarball
+          path: dist
+      - name: Version-pinned compose file
+        run: |
+          sed "s#ghcr.io/slywombat/slyled:\${SLYLED_VERSION:-latest}#ghcr.io/slywombat/slyled:${VER}#" \
+              docker-compose.yml > dist/docker-compose.yml
+          grep -q "ghcr.io/slywombat/slyled:${VER}" dist/docker-compose.yml
+      - name: Attach to the release
+        run: |
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            "dist/SlyLED-${VER}-linux.tar.gz" "dist/SlyLED-${VER}-linux.tar.gz.sha256" \
+            dist/docker-compose.yml
+      - name: Add the image to the release notes
+        run: |
+          body=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body)
+          marker="<!-- linux-package -->"
+          body="${body%%$marker*}"
+          sum=$(cut -d' ' -f1 "dist/SlyLED-${VER}-linux.tar.gz.sha256")
+          printf '%s\n\n%s\n### Linux\n\n| Artifact | Reference |\n|---|---|\n| Docker image (amd64, arm64) | `ghcr.io/slywombat/slyled:%s` — digest `%s` |\n| `SlyLED-%s-linux.tar.gz` | SHA-256 `%s` |\n\nDocker needs `--network host` (Linux hosts only) — see `docker-compose.yml`.\n' \
+            "$body" "$marker" "$VER" "$DIGEST" "$VER" "$sum" > notes.md
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md

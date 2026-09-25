@@ -9,13 +9,21 @@ The primary design and control interface. Full-featured 7-tab SPA with 2D/3D lay
 ### Linux (headless controller)
 The same orchestrator as a background service on a rack or bench machine with no display — a Raspberry Pi 4/5, a NUC, or any Ubuntu 22.04+ / Debian Bookworm+ host (x86_64 or aarch64). Operate it from a browser on another machine or from the Android app.
 
-**Install:** from a copy of the SlyLED source, run `sudo bash desktop/linux/install.sh`. It installs the code to `/opt/slyled` with its own Python environment, creates the `slyled` service account (member of `dialout`, so the Firmware tab can flash USB boards), and starts the `slyled` service on port 8080. Then open `http://<host>:8080`.
+**Install:** every release carries `SlyLED-<version>-linux.tar.gz` (one file for x86_64 and aarch64). Either `curl -fsSL https://raw.githubusercontent.com/SlyWombat/SlyLED/main/desktop/linux/install.sh | sudo bash -s -- --release latest` (downloads it and checks its SHA-256), or download it yourself, `tar xzf SlyLED-<version>-linux.tar.gz` and `sudo bash SlyLED-<version>/desktop/linux/install.sh`. It installs the code to `/opt/slyled` with its own Python environment, creates the `slyled` service account (member of `dialout`, so the Firmware tab can flash USB boards), and starts the `slyled` service on port 8080. Then open `http://<host>:8080`. No git checkout needed.
 **Data:** projects, settings and logs are kept in `/var/lib/slyled/SlyLED/data`; downloaded firmware in `/var/lib/slyled/SlyLED/firmware`.
 **Logs:** `journalctl -u slyled -f`
-**Upgrade:** run the installer again from the newer source; your data is kept.
+**Upgrade:** run a newer tarball's installer (or `--release latest` again) — it says `upgrading vX → vY` and keeps your data. `bash install.sh --version` shows what is installed.
 **Remove:** `sudo bash desktop/linux/install.sh --uninstall` (keeps data; add `--purge` to delete it and the service account).
 **Firewall:** when ufw or firewalld is active the installer opens TCP 8080 and UDP 4210, 4211, 5568 and 6454.
 **Network:** discovery, Art-Net and the camera scan use every physical network interface; Docker/VM bridges and VPN tunnels are skipped.
+
+### Docker (Linux hosts)
+The orchestrator is also an image, `ghcr.io/slywombat/slyled:<version>` (x86_64 and arm64): `docker run -d --name slyled --network host --restart unless-stopped -e TZ=America/Toronto -v slyled-data:/var/lib/slyled ghcr.io/slywombat/slyled:<version>`, or `docker compose up -d` with the `docker-compose.yml` attached to the release.
+
+**Host networking is required.** Discovery, the HinksPix sweep, Art-Net and sACN multicast need to reach your LAN, which a Docker bridge network can't. That also makes the image **Linux-only**: Docker Desktop on Windows or macOS runs containers in a VM. On Windows use `SlyLED-Setup.exe`.
+**Data:** the `slyled-data` volume holds projects, settings and firmware (same layout as the service).
+**Firewall:** open TCP 8080 and UDP 4210, 4211, 5568 and 6454 on the host.
+**Don't run it next to the `slyled` service** on the same port — the second one stops with "already answering on port 8080".
 
 ### Android App
 Live operator tool for running shows from your phone. Connects to the desktop server over WiFi. As of v1.8.1 the Control tab is rebuilt as a **Command Surface** — see #888 / `docs/design/mobile_ui_redesign.md`.

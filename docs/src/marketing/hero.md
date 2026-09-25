@@ -3,8 +3,21 @@ title: SlyLED
 tagline: Source-available three-tier stage-lighting control with local-first AI calibration.
 layout: hero
 cta_primary:
-  label: Download for Windows
-  href: /slyled/downloads/SlyLED-Setup.exe
+  label: Download (Windows · Linux · Docker · Android)
+  href: https://github.com/SlyWombat/SlyLED/releases/latest
+downloads:
+  - label: Windows installer
+    href: https://github.com/SlyWombat/SlyLED/releases/latest
+    file: SlyLED-Setup.exe
+  - label: Linux (x86_64 / aarch64)
+    href: https://github.com/SlyWombat/SlyLED/releases/latest
+    file: SlyLED-<version>-linux.tar.gz
+  - label: Docker (Linux hosts)
+    href: https://github.com/SlyWombat/SlyLED/pkgs/container/slyled
+    file: ghcr.io/slywombat/slyled
+  - label: Android
+    href: https://github.com/SlyWombat/SlyLED/releases/latest
+    file: slyled-android.apk
 cta_secondary:
   label: Watch the 90-second demo
   href: /slyled/demo

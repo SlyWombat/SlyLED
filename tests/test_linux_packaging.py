@@ -123,15 +123,76 @@ def run():
     ok("no pystray on a headless controller", "pystray" not in lin)
     ok("psutil present (net_ifaces)", "psutil" in lin)
 
+    # ── #962 distribution: tarball, image, compose, workflow ────────────
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("build_tarball", os.path.join(LIN, "build_tarball.py"))
+    bt = importlib.util.module_from_spec(spec)
+    _dwb, sys.dont_write_bytecode = sys.dont_write_bytecode, True   # no __pycache__ in desktop/linux
+    spec.loader.exec_module(bt)
+    sys.dont_write_bytecode = _dwb
+    m = re.search(r"paths=\((.*?)\)\nfor p in (.*?); do", inst, re.S)
+    inst_paths = set(m.group(1).split()) | set(m.group(2).split()) if m else set()
+    inst_paths -= {"docs/build", "\\"}   # untracked build output; line continuation
+    ok("tarball manifest == install.sh paths", set(bt.PATHS) == inst_paths,
+       (sorted(set(bt.PATHS) ^ inst_paths)))
+    ok("install.sh excludes the camera-model bulk", "--exclude='firmware/orangepi/models'" in inst)
+    ok("tarball excludes it too", "firmware/orangepi/models/" in bt.EXCLUDE_PREFIXES)
+    ok("install.sh has --release with a sha256 check",
+       "--release" in inst and "sha256sum -c" in inst)
+    ok("install.sh writes /opt/slyled/VERSION", '> "$PREFIX/VERSION"' in inst)
+    ok("install.sh reports upgrades", "upgrading v" in inst)
+
+    df = read(ROOT, "Dockerfile")
+    users = re.findall(r"^USER\s+(\S+)", df, re.M)
+    ok("Dockerfile runs as a non-root USER", users and users[-1] not in ("root", "0"), users)
+    ent = re.search(r"^ENTRYPOINT\s+(\[.*\])", df, re.M)
+    ok("exec-form ENTRYPOINT with --no-browser",
+       ent and ent.group(1).startswith("[") and "--no-browser" in ent.group(1), ent and ent.group(1))
+    ok("HEALTHCHECK present", "HEALTHCHECK" in df)
+    env_unit = {e.split("=", 1)[0]: e.split("=", 1)[1] for e in k.get("Environment", []) if "=" in e}
+    for key in ("XDG_DATA_HOME", "XDG_CACHE_HOME"):
+        m2 = re.search(key + r"=(\S+)", df)
+        ok(f"image {key} == unit's", m2 and m2.group(1) == env_unit.get(key),
+           (m2 and m2.group(1), env_unit.get(key)))
+    ok("VOLUME /var/lib/slyled", re.search(r"^VOLUME\s+/var/lib/slyled\s*$", df, re.M))
+    exposed = set(re.findall(r"(\d+/(?:tcp|udp))", (re.search(r"^EXPOSE (.*)$", df, re.M) or [""])[0]))
+    fw = set(re.findall(r"(\d{4}/udp)", inst)) | {"8080/tcp"}
+    ok("EXPOSE set == install.sh firewall set", exposed == fw, (sorted(exposed), sorted(fw)))
+    ok("image never sets SLYLED_DATA (only moves data/)", "SLYLED_DATA" not in df)
+    ok("tzdata in the image", "tzdata" in df)
+
+    import yaml
+    comp = yaml.safe_load(read(ROOT, "docker-compose.yml"))
+    svc = (comp.get("services") or {}).get("slyled") or {}
+    ok("compose: network_mode host", svc.get("network_mode") == "host", svc.get("network_mode"))
+    grace = str(svc.get("stop_grace_period", "")).rstrip("s")
+    ok("compose stop_grace_period == unit TimeoutStopSec",
+       grace == k.get("TimeoutStopSec", [""])[0], (grace, k.get("TimeoutStopSec")))
+    ok("compose TZ example is America/Toronto",
+       (svc.get("environment") or {}).get("TZ") == "America/Toronto")
+    ok("compose data on a named volume at /var/lib/slyled",
+       any(str(v).endswith(":/var/lib/slyled") for v in svc.get("volumes") or []))
+    ok("compose restart: unless-stopped", svc.get("restart") == "unless-stopped")
+
+    wf = read(ROOT, ".github", "workflows", "linux-package.yml")
+    ok("workflow runs on release: published", "types: [published]" in wf)
+    ok("workflow ignores non-orchestrator tags",
+       "startsWith(github.event.release.tag_name, 'v')" in wf)
+    ok("workflow version gate (tag == v<VERSION>)", 'version gate' in wf and '"v$ver"' in wf)
+    ok("workflow pushes amd64 + arm64", "linux/amd64,linux/arm64" in wf)
+    ok(":latest only for non-prereleases", "prerelease" in wf and ":latest" in wf)
+
     # ── release hash gate sees the new files (build_release.ps1) ─────────
     ps1 = read(ROOT, "build_release.ps1")
     fn = ps1[ps1.find("function Get-OrchestratorSourceHash"):]
     m = re.search(r"\$extra = @\((.*?)\)", fn, re.S)
     extra = m.group(1).replace("\\", "/") if m else ""
     for f in sorted(os.listdir(LIN)):
-        if f.endswith(".md"):
+        if f.endswith(".md") or f == "__pycache__":
             continue  # docs don't ship in the install; they must not bump the version
         ok(f"hash gate lists desktop/linux/{f}", f"desktop/linux/{f}" in extra)
+    for f in ("Dockerfile", ".dockerignore", "docker-compose.yml"):
+        ok(f"hash gate lists {f}", f"/{f}\"" in extra or f"root/{f}" in extra, extra[-300:])
 
 
 def main():

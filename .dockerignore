@@ -1,0 +1,15 @@
+# Image contents = the Linux release tarball's paths (#962). Whitelist, so a
+# dirty working tree (project data, camera-model bulk, build output) can't
+# leak into an image.
+*
+!desktop/shared
+!desktop/linux
+!firmware/registry.json
+!firmware/orangepi
+!docs/help
+!docs/schema
+!docs/USER_MANUAL*
+**/__pycache__
+**/*.pyc
+desktop/shared/data
+firmware/orangepi/models

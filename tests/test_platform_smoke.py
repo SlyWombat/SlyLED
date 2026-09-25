@@ -103,6 +103,19 @@ def run():
         ok("/help 200", status == 200, status)
         ok("/help serves the manual", b"<html" in body[:2000].lower(), body[:120])
 
+        # #962 — a second headless instance on the same port must FAIL
+        # (exit 1, clear message), not exit 0 after trying to open a
+        # browser: exit 0 made a container's `restart: unless-stopped` loop.
+        data2 = tempfile.mkdtemp(prefix="slyled-smoke2-")
+        second = subprocess.run([sys.executable, "-X", "utf8", SERVER, "--no-browser",
+                                 "--port", str(port)], cwd=ROOT,
+                                env=dict(env, SLYLED_DATA=data2),
+                                capture_output=True, text=True, timeout=120)
+        ok("second --no-browser instance on the same port exits 1",
+           second.returncode == 1, f"rc={second.returncode}")
+        ok("…and says another instance is answering",
+           "already answering on port" in second.stderr, second.stderr[-300:])
+
         ok("data dir honoured (SLYLED_DATA)",
            os.path.isdir(os.path.join(data, "logs")) or any(
                f.endswith(".json") for f in os.listdir(data)),

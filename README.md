@@ -70,11 +70,19 @@ A complete lighting-design and control stack that does the jobs grandMA3, Follow
 ### Linux (headless controller)
 
 On Ubuntu 22.04+ / Debian Bookworm+ (x86_64 or aarch64 — a Pi 4/5 or a NUC),
-from a clone of this repo:
+no git checkout needed — the release tarball, SHA-256 checked:
 
 ```bash
-sudo bash desktop/linux/install.sh      # systemd service "slyled" on :8080
+curl -fsSL https://raw.githubusercontent.com/SlyWombat/SlyLED/main/desktop/linux/install.sh \
+  | sudo bash -s -- --release latest    # systemd service "slyled" on :8080
 journalctl -u slyled -f                 # logs
+```
+
+Or as a container (Linux hosts; host networking is required for discovery):
+
+```bash
+docker run -d --name slyled --network host --restart unless-stopped \
+  -e TZ=America/Toronto -v slyled-data:/var/lib/slyled ghcr.io/slywombat/slyled:latest
 ```
 
 Then browse to `http://<host>:8080` from any machine on the LAN. Details:

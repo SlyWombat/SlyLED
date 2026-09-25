@@ -13,8 +13,15 @@ SIGKILL restart, and a clean --uninstall / --purge.
 The container gets the working tree's tracked + untracked-not-ignored files
 (no .git), so uncommitted changes are exercised too.
 
+With --tarball PATH (#962) the container gets ONLY the release tarball — no
+source tree — and the run also checks /opt/slyled/VERSION, that no camera
+models were swept in, an in-place upgrade through `install.sh --release`
+(served from a local HTTP server, sha256-verified, "upgrading X → Y", data
+kept) and that a tampered checksum is refused.
+
 Run (needs docker; SKIPs with exit 0 without it):
     python3 tests/test_linux_install_docker.py [--image ubuntu:24.04] [--keep]
+    python3 tests/test_linux_install_docker.py --tarball dist/SlyLED-2.1.7-linux.tar.gz
 """
 
 import argparse
@@ -92,7 +99,7 @@ def start_service(u):
     return None
 
 
-def run(image, keep):
+def run(image, keep, tarball=None):
     u = unit_fields()
     ok("unit: non-root User=", u.get("User") not in (None, "", "root"), u.get("User"))
     ok("unit: SupplementaryGroups includes dialout",
@@ -112,20 +119,31 @@ def run(image, keep):
         ok("base python3 installed", r.returncode == 0, r.stderr[-400:])
         print(f"  container python: {r.stdout.strip()}")
 
-        files = subprocess.run(["git", "-C", ROOT, "ls-files", "-z", "--cached", "--others",
-                                "--exclude-standard"], capture_output=True, check=True).stdout
-        files = b"\0".join(f for f in files.split(b"\0")
-                           if f and os.path.exists(os.path.join(ROOT, f.decode())))
-        tar = subprocess.Popen(["tar", "-C", ROOT, "--null", "-T", "-", "-cf", "-"],
-                               stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-        load = subprocess.Popen(["docker", "exec", "-i", NAME, "bash", "-c",
-                                 "mkdir -p /src && tar -C /src -xf -"], stdin=tar.stdout)
-        tar.stdin.write(files)
-        tar.stdin.close()
-        load.wait(timeout=600)
-        tar.wait()
-        ok("source tree copied (no .git)", load.returncode == 0 and
-           dx("test ! -e /src/.git && test -f /src/desktop/linux/install.sh").returncode == 0)
+        if tarball:
+            ver = os.path.basename(tarball)[len("SlyLED-"):-len("-linux.tar.gz")]
+            r = subprocess.run(["docker", "cp", tarball, f"{NAME}:/tmp/{os.path.basename(tarball)}"],
+                               capture_output=True, text=True)
+            r2 = dx(f"mkdir -p /rel && tar -C /rel -xzf /tmp/{os.path.basename(tarball)} "
+                    f"&& ln -s /rel/SlyLED-{ver} /src && test ! -e /src/.git "
+                    f"&& test \"$(cat /src/VERSION)\" = {ver}")
+            ok("release tarball extracted (no source tree, VERSION file)",
+               r.returncode == 0 and r2.returncode == 0, r.stderr + r2.stderr)
+        else:
+            ver = None
+            files = subprocess.run(["git", "-C", ROOT, "ls-files", "-z", "--cached", "--others",
+                                    "--exclude-standard"], capture_output=True, check=True).stdout
+            files = b"\0".join(f for f in files.split(b"\0")
+                               if f and os.path.exists(os.path.join(ROOT, f.decode())))
+            tar = subprocess.Popen(["tar", "-C", ROOT, "--null", "-T", "-", "-cf", "-"],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+            load = subprocess.Popen(["docker", "exec", "-i", NAME, "bash", "-c",
+                                     "mkdir -p /src && tar -C /src -xf -"], stdin=tar.stdout)
+            tar.stdin.write(files)
+            tar.stdin.close()
+            load.wait(timeout=600)
+            tar.wait()
+            ok("source tree copied (no .git)", load.returncode == 0 and
+               dx("test ! -e /src/.git && test -f /src/desktop/linux/install.sh").returncode == 0)
 
         t = time.time()
         r = dx("bash /src/desktop/linux/install.sh", timeout=1800)
@@ -133,6 +151,13 @@ def run(image, keep):
         ok(f"install.sh exit 0 ({time.time() - t:.0f}s)", r.returncode == 0, r.stderr[-800:])
         ok("install.sh notes systemd absent instead of failing",
            "systemd is not running" in r.stdout, r.stdout[-300:])
+        want_ver = ver or dx("sed -n 's/^VERSION *= *\"\\([0-9.]*\\)\".*/\\1/p' "
+                             "/src/desktop/shared/parent_server.py").stdout.strip()
+        got_ver = dx("cat /opt/slyled/VERSION").stdout.strip()
+        ok("/opt/slyled/VERSION written", got_ver == want_ver, (got_ver, want_ver))
+        ok("fresh install says 'installing'", f"installing v{want_ver}" in r.stdout, r.stdout[-300:])
+        ok("no camera models swept into /opt/slyled",
+           dx("test ! -e /opt/slyled/firmware/orangepi/models").returncode == 0)
 
         r = dx("id slyled; getent passwd slyled | cut -d: -f6,7; "
                "stat -c '%U %a' /opt/slyled /opt/slyled/desktop/shared; "
@@ -193,7 +218,38 @@ def run(image, keep):
         r = dx("bash /src/desktop/linux/install.sh", timeout=1800)
         ok("re-install (upgrade) exit 0, venv reused",
            r.returncode == 0 and "reusing /opt/slyled/.venv" in r.stdout, r.stdout[-400:] + r.stderr[-400:])
+        ok("same-version re-install says so", "same version" in r.stdout, r.stdout[-300:])
         dx(f"kill {pid}")
+
+        if tarball:
+            # In-place upgrade through --release: a re-versioned copy of the
+            # tarball served over HTTP, as GitHub would serve the release.
+            dx("rm -rf /up && mkdir -p /up/stage && cp -a /src/. /up/stage/SlyLED-9.9.9 "
+               "&& echo 9.9.9 > /up/stage/SlyLED-9.9.9/VERSION "
+               "&& tar -C /up/stage -czf /up/SlyLED-9.9.9-linux.tar.gz SlyLED-9.9.9 "
+               "&& (cd /up && sha256sum SlyLED-9.9.9-linux.tar.gz > SlyLED-9.9.9-linux.tar.gz.sha256) "
+               "&& cd /up && nohup python3 -m http.server 8765 >/tmp/http.log 2>&1 &")
+            time.sleep(1.5)
+            r = dx("SLYLED_RELEASE_BASE=http://127.0.0.1:8765 bash /src/desktop/linux/install.sh "
+                   "--release v9.9.9", timeout=1800)
+            ok("--release upgrade exit 0", r.returncode == 0, r.stdout[-500:] + r.stderr[-500:])
+            ok("--release verified the sha256", "sha256 verified" in r.stdout, r.stdout[-400:])
+            ok(f"upgrade says 'upgrading v{want_ver} → v9.9.9'",
+               f"upgrading v{want_ver} → v9.9.9" in r.stdout, r.stdout[-400:])
+            ok("/opt/slyled/VERSION updated to 9.9.9",
+               dx("cat /opt/slyled/VERSION").stdout.strip() == "9.9.9")
+            ok("installed --version reports it",
+               "installed: 9.9.9" in dx("bash /src/desktop/linux/install.sh --version").stdout)
+            pid = start_service(u)
+            s, kids = curl_json("/api/children")
+            ok("data kept across the upgrade", pid is not None and "127.0.0.2" in json.dumps(kids), kids)
+            dx(f"kill {pid}")
+            dx("cd /up && echo '0000000000000000000000000000000000000000000000000000000000000000  "
+               "SlyLED-9.9.9-linux.tar.gz' > SlyLED-9.9.9-linux.tar.gz.sha256")
+            r = dx("SLYLED_RELEASE_BASE=http://127.0.0.1:8765 bash /src/desktop/linux/install.sh "
+                   "--release 9.9.9", timeout=300)
+            ok("a tampered checksum is refused (nothing installed)",
+               r.returncode != 0 and "sha256 mismatch" in r.stderr, r.stdout[-300:] + r.stderr[-300:])
 
         r = dx("bash /src/desktop/linux/install.sh --uninstall; "
                "test -e /opt/slyled || echo noprefix; test -e /etc/systemd/system/slyled.service || echo nounit; "
@@ -215,11 +271,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="ubuntu:24.04")
     ap.add_argument("--keep", action="store_true", help="leave the container running")
+    ap.add_argument("--tarball", help="install from this release tarball instead of the source tree")
     a = ap.parse_args()
     if not shutil.which("docker") or subprocess.run(["docker", "info"], capture_output=True).returncode:
         print("  [SKIP] docker not available")
         sys.exit(0)
-    run(a.image, a.keep)
+    run(a.image, a.keep, os.path.abspath(a.tarball) if a.tarball else None)
     passed = sum(1 for _, c, _ in results if c)
     failed = len(results) - passed
     for name, cond, detail in results:

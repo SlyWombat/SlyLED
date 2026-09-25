@@ -272,6 +272,11 @@ function Get-OrchestratorSourceHash {
         "$root\desktop\linux\slyled.service",
         "$root\desktop\linux\99-slyled-usb.rules",
         "$root\desktop\linux\requirements.txt",
+        "$root\desktop\linux\build_tarball.py",
+        # #962 — the container image is an orchestrator artifact too.
+        "$root\Dockerfile",
+        "$root\.dockerignore",
+        "$root\docker-compose.yml",
         "$root\desktop\mac\run.sh",
         "$root\desktop\mac\requirements.txt"
     )
@@ -834,4 +839,6 @@ if (-not $DryRun) {
     Write-Host "Next steps:"
     Write-Host "  git add -A && git commit -m 'release: v$appVersion' && git push origin main --tags"
     Write-Host "  gh release create v$appVersion --target main --title 'v$appVersion'"
+    Write-Host "  (publishing the release runs .github/workflows/linux-package.yml: the Linux"
+    Write-Host "   tarball + ghcr.io/slywombat/slyled:$appVersion image, attached to the release)"
 }
