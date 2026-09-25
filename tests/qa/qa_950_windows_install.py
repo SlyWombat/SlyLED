@@ -28,8 +28,23 @@ from pathlib import Path
 
 REPO = "SlyWombat/SlyLED"
 WORK = Path(os.environ.get("TEMP", ".")) / "slyled-qa-950"
-PORT = 8080
+PORT = 8080          # replaced at runtime by the installed port.txt when present
 BASE = f"http://127.0.0.1:{PORT}"
+
+
+def use_installed_port():
+    """The installer lets the operator pick the port (and remembers a previous
+    one), so read {app}\\port.txt instead of assuming 8080."""
+    global PORT, BASE
+    e = uninstall_entry() or {}
+    loc = (e.get("InstallLocation") or "").rstrip("\\")
+    if loc:
+        code, out, _ = ps(f"Get-Content '{loc}\\port.txt' -ErrorAction SilentlyContinue")
+        if out.strip().isdigit():
+            PORT = int(out.strip())
+            BASE = f"http://127.0.0.1:{PORT}"
+            FW_PORTS["tcp"] = {PORT}
+    print(f"  (orchestrator port: {PORT})")
 HINKSPIX = "192.168.10.6"
 FW_PORTS = {"tcp": {PORT}, "udp": {4210, 4211, 5568, 6454}}
 
@@ -107,7 +122,10 @@ def step_fetch(a):
     for name, want in (("SlyLED-Setup.exe", a.sha_setup), ("SlyLED.exe", a.sha_exe)):
         f = WORK / name
         if not f.exists():
-            ok(f"{name} present", False)
+            if name == "SlyLED-Setup.exe":
+                ok(f"{name} present", False)
+            else:
+                print(f"  {name}: not a release asset (the installer embeds it) - skipped")
             continue
         h = hashlib.sha256(f.read_bytes()).hexdigest()
         print(f"  {name}: {f.stat().st_size} bytes sha256={h}")
@@ -135,6 +153,8 @@ def step_check(a):
     e = uninstall_entry() or {}
     loc = (e.get("InstallLocation") or "").rstrip("\\")
     exe = Path(loc) / "SlyLED.exe" if loc else None
+    code, out, _ = ps(f"Get-Content '{loc}\\port.txt' -ErrorAction SilentlyContinue")
+    ok("silent install uses the default port 8080 (not an inherited one)", out.strip() == "8080", f"port.txt={out.strip()}")
     ok("SlyLED.exe in the install location", bool(exe) and ps(f"Test-Path '{exe}'")[1] == "True", loc)
     code, out, _ = ps("Get-ChildItem \"$env:ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\","
                       "\"$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\" -Recurse -Filter *SlyLED*.lnk "
@@ -243,7 +263,8 @@ def step_uninstall(a):
         ok("uninstaller exit code 0", out.strip().endswith("0"), (out, err))
         time.sleep(3)
         loc = (e.get("InstallLocation") or "").rstrip("\\")
-        ok("install folder removed", ps(f"Test-Path '{loc}'")[1] == "False", loc)
+        left = ps(f"Get-ChildItem -Force '{loc}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name")[1]
+        ok("install folder removed", ps(f"Test-Path '{loc}'")[1] == "False", f"{loc} still holds: {left}")
     ok("Add/Remove Programs entry gone", uninstall_entry() is None, uninstall_entry())
     ok("firewall rules removed", not firewall_rules(), firewall_rules())
     ok("server no longer answering", http("/status", timeout=3)[0] is None)
@@ -262,6 +283,8 @@ def main():
     ap.add_argument("--rgb", default="0,0,255")
     ap.add_argument("--seconds", type=int, default=60)
     a = ap.parse_args()
+    if a.step in ("check", "live", "uninstall"):
+        use_installed_port()
     {"fetch": step_fetch, "install": step_install, "check": step_check,
      "live": step_live, "uninstall": step_uninstall}[a.step](a)
     print(f"\n{_p} passed, {_f} failed out of {_p + _f} tests")
