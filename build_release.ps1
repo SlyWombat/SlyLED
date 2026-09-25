@@ -578,7 +578,11 @@ if (-not $SkipWindows) {
         }
         Set-Location $root
         # Pin the orchestrator source-hash now that the rebuild succeeded.
-        Set-OrchStoredHash $orchSrcHash $appVersion
+        # Hash the tree as it is NOW, after this run rewrote parent_server.py
+        # / installer.iss (Set-Content re-encodes them and adds a trailing
+        # newline). Storing the pre-rewrite hash made the next run see a
+        # "change" and bump again with no source change (#950 follow-up).
+        Set-OrchStoredHash (Get-OrchestratorSourceHash) $appVersion
     }
 }
 
@@ -632,7 +636,10 @@ if (-not $SkipAndroid) {
             $apkSize = $apkPath.Length
             Write-Host "APK: $([math]::Round($apkSize/1MB, 1)) MB at $($apkPath.FullName)" -ForegroundColor Green
         }
-        Set-AndroidStoredHash $androidSrcHash $androidVer
+        # As above: hash after build.gradle.kts was rewritten, or every
+        # later run bumps Android with no Android change — breaking its
+        # independent version track (v2.1.5 produced a no-change 1.8.15).
+        Set-AndroidStoredHash (Get-AndroidSourceHash) $androidVer
         Set-Location $root
     }
 }
