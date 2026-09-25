@@ -233,6 +233,8 @@ def step_live(a):
     ok("SlyLED layout = device layout (port 17, 200 px, universe 1)", s == 200, b)
     s, b = http(f"/api/hinkspix/{cid}/fixtures-from-ports", "POST", {})
     ok("fixture bound to port 17", s == 200, b)
+    s0, st0 = http("/api/dmx/status")
+    was_running = isinstance(st0, dict) and any((st0.get(k) or {}).get("running") for k in ("sacn", "artnet"))
     s, b = http("/api/dmx/settings", "POST", {"protocol": "sacn"})
     ok("DMX engine protocol -> sACN", s == 200, b)
     s, b = http("/api/dmx/start", "POST", {"protocol": "sacn"})
@@ -243,10 +245,19 @@ def step_live(a):
     print(f"  >>> OPERATOR: eaves should be solid ({r},{g},{bl}) for {a.seconds}s — look at the garage now <<<",
           flush=True)
     time.sleep(a.seconds)
-    s, b = http(f"/api/children/{cid}/action", "POST", {"type": 0, "allStrings": True})
-    ok("blackout", s == 200, b)
-    time.sleep(1)
-    http("/api/dmx/stop", "POST", {})
+    # Clean up for real: STOP the live action (clears it and blacks out its
+    # spans). A type-0 "blackout" action is itself a live action that keeps
+    # streaming zeros at 40 Hz and fights any show started later (QA left
+    # one running on 2026-09-24 and the operator's first show flickered).
+    s, b = http(f"/api/children/{cid}/action/stop", "POST", {})
+    ok("live action stopped and cleared", s == 200 and isinstance(b, dict) and b.get("ok"), b)
+    # Leave the output engine as found. Stopping it made the operator's next
+    # show "run" with no output (#958).
+    if not was_running:
+        http("/api/dmx/stop", "POST", {})
+    s, st = http("/api/dmx/status")
+    ok("DMX engine left as found", isinstance(st, dict) and
+       any((st.get(k) or {}).get("running") for k in ("sacn", "artnet")) == was_running, st)
 
 
 def step_uninstall(a):
