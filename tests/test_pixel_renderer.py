@@ -172,6 +172,30 @@ def main():
     dark = pr.render_fixture({"segments": []}, [{"leds": 4}], 1.0)
     check(dark == b"\x00" * 12, "uncovered strings render black")
 
+    print("Pixel renderer — zero colour channels are real values (#957)")
+    # v1 used JS `p.g || 200`, so a 0 channel took the default: the operator's
+    # "Red Chase" streamed as (255, 200, 255). Every effect that takes r/g/b
+    # must reproduce pure primaries, black and amber exactly.
+    red_chase = pr.render_string(4, {"r": 255, "g": 0, "b": 0, "speedMs": 100,
+                                     "spacing": 6, "direction": 0}, 170, 1234)
+    lit = {red_chase[i:i + 3] for i in range(0, len(red_chase), 3)} - {b"\x00\x00\x00"}
+    check(lit == {b"\xff\x00\x00"}, f"Red Chase lights pure red, not pink (got {lit})")
+    # (type, params that light the pixel at di=0/e=0 at full colour)
+    full = {4: {}, 7: {}, 9: {}, 12: {}, 11: {}}
+    for t, extra in full.items():
+        for col in ((255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 128, 0)):
+            prm = dict(extra, r=col[0], g=col[1], b=col[2])
+            got = pr.pixel(t, prm, 0, 50, 0)
+            if t == 12 and got == [255, 255, 255]:
+                continue  # a sparkle glint, not the base colour
+            check(got == list(col), f"type {t} {col} renders {col} (got {got})")
+    check(pr.pixel(4, {"r": 0, "g": 0, "b": 0}, 0, 50, 0) == [0, 0, 0],
+          "an explicit black chase stays black")
+    check(pr.pixel(4, {}, 0, 50, 0) == [100, 200, 255],
+          "missing channels still take the effect default")
+    check(pr.pixel(4, {"r": 255, "g": 0, "b": 0, "speedMs": 0, "spacing": 0}, 0, 50, 0)
+          == [255, 0, 0], "timing params keep the falsy rule (speedMs/spacing 0 -> default)")
+
     print("Pixel renderer — JS twin agreement on spec version")
     js = JS_RENDERER.read_text(encoding="utf-8")
     m = re.search(r"EFFECT_SPEC_VERSION\s*=\s*(\d+)", js)

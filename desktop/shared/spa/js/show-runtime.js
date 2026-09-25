@@ -137,11 +137,19 @@ function _rtAddTimeline(){
   });
 }
 
+// #958 — the server now starts a stopped DMX engine on show start (and
+// refuses with 409 if it can't); say so, so the operator knows output is live.
+function _rtOutputNote(r){
+  var o=r&&r.output;
+  if(!o||!o.running)return'';
+  return o.autoStarted?' · DMX output ('+(o.protocol==='sacn'?'sACN':'Art-Net')+') started':'';
+}
+
 function _rtPlayFrom(idx){
   _rtBakeAll(function(){
     ra('POST','/api/show/start',{startIndex:idx},function(r){
       if(!r||!r.ok){alert(r&&r.err||'Failed to start');return;}
-      document.getElementById('hs').textContent='Show started from item '+(idx+1);
+      document.getElementById('hs').textContent='Show started from item '+(idx+1)+_rtOutputNote(r);
     });
   });
 }
@@ -267,7 +275,7 @@ function _rtStartShow(){
         alert(r&&r.err||'Failed to start show');
         return;
       }
-      document.getElementById('hs').textContent='Show started — '+r.timelines+' timeline(s)';
+      document.getElementById('hs').textContent='Show started — '+r.timelines+' timeline(s)'+_rtOutputNote(r);
     });
   });
 }

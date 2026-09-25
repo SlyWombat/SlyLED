@@ -663,7 +663,13 @@ function dmxProtoChange(){
   var radios=document.getElementsByName('dmx-proto');
   for(var i=0;i<radios.length;i++){if(radios[i].checked){proto=radios[i].value;break;}}
   document.getElementById('dmx-sacn-opts').style.display=(proto==='sacn')?'':'none';
-  document.getElementById('dmx-artnet-opts').style.display=(proto==='artnet')?'':'none';
+  // #959 — routes apply to both protocols (sACN unicasts a routed
+  // universe too), so the routing panel stays visible; only the hint
+  // about what happens to unrouted universes differs.
+  var hint=document.getElementById('dmx-route-hint');
+  if(hint)hint.textContent=(proto==='sacn')
+    ?'Unrouted universes go to their sACN multicast group. Route pixel controllers (HinksPix, WLED) to their IP: multicast is unreliable on home Wi-Fi.'
+    :'Unrouted universes broadcast.';
 }
 
 var _dmxInterfaces=[];

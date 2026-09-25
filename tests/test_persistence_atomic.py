@@ -65,7 +65,7 @@ def run():
     # ── _save round-trips through _load ─────────────────────────────
     _save("t889rt", {"a": [1, 2, 3], "b": "x"})
     ok("_save/_load round-trip", _load("t889rt", None) == {"a": [1, 2, 3], "b": "x"})
-    ok("_save leaves no .tmp behind", not (DATA / "t889rt.json.tmp").exists())
+    ok("_save leaves no .tmp behind", not list(DATA.glob("t889rt.json*.tmp")))
 
     # ── _save atomicity: failure at replace-time keeps OLD content ──
     _save("t889atomic", {"generation": 1})

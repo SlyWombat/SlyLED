@@ -222,8 +222,12 @@ def _save(name, obj):
     # including Windows). A crash mid-write leaves the previous file
     # intact instead of a truncated one. Pattern copied from
     # remote_orientation.py::RemoteRegistry.save.
+    # The temp name is per-thread: the show-playback thread and a request
+    # thread can save the same file at once, and with one shared
+    # `<name>.json.tmp` the second os.replace() found it already moved
+    # (FileNotFoundError killed the playback thread). Last writer wins.
     p = DATA / f"{name}.json"
-    tmp = DATA / f"{name}.json.tmp"
+    tmp = DATA / f"{name}.json.{threading.get_ident()}.tmp"
     tmp.write_text(json.dumps(obj, indent=2))
     os.replace(tmp, p)
     # #853 — fixture changes invalidate the per-universe intensity-
@@ -14098,6 +14102,10 @@ def _apply_dmx_settings():
         priority=s.get("sacnPriority", 100),
         bind_ip=s.get("bindIp", "0.0.0.0"),
         frame_rate=s.get("frameRate", 40),
+        # #959 — sACN honours the same per-universe routes as Art-Net.
+        # Before this it was multicast-only, so a HinksPix routed to
+        # 192.168.10.6 received nothing.
+        unicast_targets=_routes_to_unicast(s.get("universeRoutes", [])),
     )
 
 _apply_dmx_settings()
@@ -14258,6 +14266,58 @@ def _run_boot_blink_body(engine, force):
         else:
             engine.get_universe(uni).set_channel(addr, 0)
     log.info("Boot blink complete: %d fixtures cycled rainbow → blackout", len(dmx_fx))
+
+def _rig_needs_dmx_output():
+    """#958 — True when the rig has anything only a DMX engine can drive:
+    DMX fixtures, or a streamed pixel controller (HinksPix, #940) whose
+    frames are rendered into engine universe buffers."""
+    if any(f.get("fixtureType") == "dmx" for f in _fixtures):
+        return True
+    return any(c.get("type") == "hinkspix" for c in _children)
+
+
+def _ensure_output_engine(reason):
+    """#958 — make sure the configured DMX engine is transmitting before a
+    show/timeline starts. Pre-fix, Start show reported success with both
+    engines stopped and streamed + DMX fixtures rendered into buffers that
+    nothing sent (operator's first HinksPix show, eaves dark).
+
+    Returns (engine_status, error). engine_status is a dict for the API
+    response; error is a message when the rig needs output and no engine
+    could be started (caller refuses with 409). A rig with no DMX or
+    streamed fixtures needs no engine and returns (None, None).
+    """
+    # The playback loops write to the engine for the CONFIGURED protocol
+    # (`_dmx_playback_single`), so that is the one that must be running —
+    # a running Art-Net engine doesn't help a show set to sACN.
+    proto = _dmx_settings.get("protocol", "artnet")
+    engine = _sacn if proto == "sacn" else _artnet
+    proto = "sacn" if engine is _sacn else "artnet"
+    if engine.running:
+        return {"protocol": proto, "running": True, "autoStarted": False}, None
+    if not _rig_needs_dmx_output():
+        return None, None
+    err = None
+    try:
+        _apply_dmx_settings()
+        engine.start()
+    except Exception as e:
+        # Saved bind IP may be stale (DHCP moved) — retry on 0.0.0.0 (#345)
+        log.warning("%s: %s engine start failed on %s (%s) — retrying on 0.0.0.0",
+                    reason, proto.upper(), _dmx_settings.get("bindIp", "?"), e)
+        try:
+            engine._bind_ip = "0.0.0.0"
+            engine.start()
+        except Exception as e2:
+            err = str(e2)
+    if not engine.running:
+        return ({"protocol": proto, "running": False, "autoStarted": False},
+                f"DMX output ({proto}) is stopped and could not be started"
+                f"{': ' + err if err else ''} — check Settings → DMX")
+    _apply_profile_defaults(engine)
+    log.info("%s: DMX output was stopped — started %s engine", reason, proto.upper())
+    return {"protocol": proto, "running": True, "autoStarted": True}, None
+
 
 # Auto-start DMX engine if universe routes are configured (#389: gated by setting)
 if _dmx_settings.get("autoStartEngine", True) and _dmx_settings.get("universeRoutes"):
@@ -16441,6 +16501,11 @@ def api_timeline_start(tid):
     if _sync_progress and not _sync_progress.get("done"):
         return jsonify(err="Sync still in progress - wait for it to finish"), 409
 
+    # #958 — never "start" a show whose DMX/streamed output can't be sent.
+    output, out_err = _ensure_output_engine(f"timeline {tid} start")
+    if out_err:
+        return jsonify(err=out_err, output=output), 409
+
     # Send RUNNER_GO with 5s offset for NTP alignment
     go_epoch = int(time.time()) + 5
     loop_flag = 1 if tl.get("loop") else 0
@@ -16475,7 +16540,7 @@ def api_timeline_start(tid):
     threading.Thread(target=_dmx_playback_loop, args=(tid, go_epoch, duration, loop),
                      daemon=True).start()
 
-    return jsonify(ok=True, started=started, goEpoch=go_epoch)
+    return jsonify(ok=True, started=started, goEpoch=go_epoch, output=output)
 
 @app.post("/api/timelines/<int:tid>/stop")
 def api_timeline_stop(tid):
@@ -16933,6 +16998,10 @@ def api_show_start():
     unbaked = [tid for tid in order if tid not in _bake_result]
     if unbaked and not has_track_actions:
         return jsonify(err="Unbaked timelines in playlist", unbaked=unbaked), 400
+    # #958 — never "start" a show whose DMX/streamed output can't be sent.
+    output, out_err = _ensure_output_engine("show start")
+    if out_err:
+        return jsonify(err=out_err, output=output), 409
     # Stop any existing playback
     _dmx_playback_stop.set()
     time.sleep(0.1)
@@ -16967,7 +17036,8 @@ def api_show_start():
     threading.Thread(target=_show_playback_loop,
                      args=(order, loop_all, go_epoch, start_idx, my_gen),
                      daemon=True).start()
-    return jsonify(ok=True, started=started, goEpoch=go_epoch, timelines=len(order))
+    return jsonify(ok=True, started=started, goEpoch=go_epoch, timelines=len(order),
+                   output=output)
 
 
 def _blackout_unclaimed_fixtures():

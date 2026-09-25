@@ -1,4 +1,4 @@
-"""pixel_renderer.py — SlyLED Effect Spec v1 (#938).
+"""pixel_renderer.py — SlyLED Effect Spec v2 (#938, #957).
 
 Server-side per-pixel effect renderer. The SPEC is the SPA implementation in
 ``desktop/shared/spa/js/pixel_renderer.js``; this module is its Python twin and
@@ -31,7 +31,21 @@ EFFECT_SPEC_VERSION in BOTH this file and pixel_renderer.js.
 
 import math
 
-EFFECT_SPEC_VERSION = 1
+EFFECT_SPEC_VERSION = 2
+
+# Spec v2 (#957): a colour channel's default applies only when the channel is
+# MISSING (absent/None), never when it is 0. v1 mirrored JS `p.r || default`,
+# so pure red {r:255,g:0,b:0} chased as (255,200,255) and no effect could show
+# a colour with a zero channel. Timing/shape params (speedMs, spacing, tailLen,
+# barWidth, periodMs, dutyPct, ...) keep the falsy rule on purpose: 0 there is
+# invalid and takes the default. Performers (main/ChildLED.cpp) use the r/g/b
+# bytes exactly as sent, which v2 now matches.
+
+
+def _c(v, default):
+    """Colour-channel default: JS ``_c(v, d)`` — missing takes the default,
+    0 is kept."""
+    return default if v is None else v
 
 # Action type constants (mirrors the SPA's `pc.t`).
 FADE, BREATHE, CHASE, RAINBOW = 2, 3, 4, 5
@@ -116,8 +130,13 @@ def pixel(action_type, params, di, dot_count, elapsed_ms):
 
     def pv(key, default):
         # JS `p.x || default` — falsy (0, None, missing) takes the default.
+        # Timing/shape params only; colour channels use cv() (#957).
         got = p.get(key)
         return default if not got else got
+
+    def cv(key, default):
+        # JS `_c(p.x, default)` — only a missing channel takes the default.
+        return _c(p.get(key), default)
 
     if t == RAINBOW:
         spd = pv("speedMs", 50)
@@ -141,7 +160,7 @@ def pixel(action_type, params, di, dot_count, elapsed_ms):
         off = (e // spd) % spc
         idx = (dot_count - 1 - di) if direction in (2, 3) else di
         if (idx + off) % spc == 0:
-            return [pv("r", 100), pv("g", 200), pv("b", 255)]
+            return [cv("r", 100), cv("g", 200), cv("b", 255)]
         return [0, 0, 0]
 
     if t == COMET:
@@ -158,11 +177,11 @@ def pixel(action_type, params, di, dot_count, elapsed_ms):
         if head >= dot_count:
             return [0, 0, 0]
         if dist == 0:
-            return [pv("r", 255), pv("g", 255), pv("b", 255)]
+            return [cv("r", 255), cv("g", 255), cv("b", 255)]
         if dist <= tail:
             f = 1 - dist / tail
-            return [_jsround(pv("r", 255) * f), _jsround(pv("g", 255) * f),
-                    _jsround(pv("b", 255) * f)]
+            return [_jsround(cv("r", 255) * f), _jsround(cv("g", 255) * f),
+                    _jsround(cv("b", 255) * f)]
         return [0, 0, 0]
 
     if t == WIPE:
@@ -174,7 +193,7 @@ def pixel(action_type, params, di, dot_count, elapsed_ms):
         filling = filled < dot_count
         cnt = filled if filling else (dot_count * 2 - filled)
         idx = (dot_count - 1 - di) if direction in (2, 3) else di
-        colour = [pv("r", 255), pv("g", 128), p.get("b") or 0]
+        colour = [cv("r", 255), cv("g", 128), cv("b", 0)]
         if idx < cnt:
             return colour if filling else [0, 0, 0]
         return [0, 0, 0] if filling else colour
@@ -192,7 +211,7 @@ def pixel(action_type, params, di, dot_count, elapsed_ms):
         if pos >= travel:
             pos = cyc - pos
         if pos <= di < pos + bar:
-            return [pv("r", 255), p.get("g") or 0, p.get("b") or 0]
+            return [cv("r", 255), cv("g", 0), cv("b", 0)]
         return [0, 0, 0]
 
     if t == FADE:
@@ -213,14 +232,14 @@ def pixel(action_type, params, di, dot_count, elapsed_ms):
         min_b = (p.get("minBri") or 0) / 100
         phase = (e % per) / per * 2 * math.pi
         bri = min_b + (1 - min_b) * (0.5 + 0.5 * math.sin(phase))
-        return [_jsround(pv("r", 200) * bri), _jsround(pv("g", 100) * bri),
-                _jsround(pv("b", 255) * bri)]
+        return [_jsround(cv("r", 200) * bri), _jsround(cv("g", 100) * bri),
+                _jsround(cv("b", 255) * bri)]
 
     if t == STROBE:
         per = pv("periodMs", 100)
         duty = pv("dutyPct", 50)
         if e % per < per * duty / 100:
-            return [pv("r", 255), pv("g", 255), pv("b", 255)]
+            return [cv("r", 255), cv("g", 255), cv("b", 255)]
         return [0, 0, 0]
 
     if t == FIRE:
@@ -236,15 +255,15 @@ def pixel(action_type, params, di, dot_count, elapsed_ms):
         seed = (di * 2654435761 + e // 80) % 4294967296
         bri = (seed >> 8) & 0xFF
         if bri > 180:
-            return [_jsround(pv("r", 200) * bri / 255), _jsround(pv("g", 200) * bri / 255),
-                    _jsround(pv("b", 255) * bri / 255)]
+            return [_jsround(cv("r", 200) * bri / 255), _jsround(cv("g", 200) * bri / 255),
+                    _jsround(cv("b", 255) * bri / 255)]
         return [0, 0, 0]
 
     if t == SPARKLE:
         seed = (di * 2654435761 + e // 50) % 4294967296
         if ((seed >> 16) & 0xFF) > 230:
             return [255, 255, 255]
-        return [pv("r", 180), pv("g", 180), pv("b", 220)]
+        return [cv("r", 180), cv("g", 180), cv("b", 220)]
 
     if t == GRADIENT:
         frac = di / (dot_count - 1) if dot_count > 1 else 0
@@ -321,15 +340,14 @@ def _render_string_vectorised(action_type, params, n, elapsed_ms):
             bri = (seed >> 8) & 0xFF
             hit = bri > 180
             if hit.any():
-                pr_, pg_, pb_ = (params or {}).get("r") or 200, \
-                                (params or {}).get("g") or 200, \
-                                (params or {}).get("b") or 255
+                pr_, pg_, pb_ = _c(p.get("r"), 200), _c(p.get("g"), 200), \
+                                _c(p.get("b"), 255)
                 bh = bri[hit].astype(_np.float64)
                 out[hit, 0] = _np.floor(pr_ * bh / 255 + 0.5)
                 out[hit, 1] = _np.floor(pg_ * bh / 255 + 0.5)
                 out[hit, 2] = _np.floor(pb_ * bh / 255 + 0.5)
         else:
-            base = [p.get("r") or 180, p.get("g") or 180, p.get("b") or 220]
+            base = [_c(p.get("r"), 180), _c(p.get("g"), 180), _c(p.get("b"), 220)]
             out[:] = base
             out[((seed >> 16) & 0xFF) > 230] = (255, 255, 255)
         return out.tobytes()

@@ -87,6 +87,11 @@ function saveTimeline(btn){
   });
 }
 
+// #957 — a 0 colour channel is a real value, not "missing": `a.g||100`
+// drew a red action's clip swatch pink. Default only when absent.
+function _clipRgb(o){function c(v,d){return(v===undefined||v===null)?d:v;}
+  return rgb2h(c(o.r,100),c(o.g,100),c(o.b,255));}
+
 function renderTimeline(){
   if(!_curTl)return;
   var dur=_curTl.durationS||60;
@@ -153,9 +158,9 @@ function renderTimeline(){
       var w=clip.durationS*_tlPxPerSec;
       var fxn=clip.name||'',fxcol=color;
       if(clip.actionId!=null){
-        _acts.forEach(function(a){if(a.id===clip.actionId){fxn='\u25b6 '+a.name;if(!trk.color)fxcol=rgb2h(a.r||100,a.g||100,a.b||255);}});
+        _acts.forEach(function(a){if(a.id===clip.actionId){fxn='\u25b6 '+a.name;if(!trk.color)fxcol=_clipRgb(a);}});
       } else if(clip.effectId!=null){
-        _spatialFx.forEach(function(f){if(f.id===clip.effectId){fxn=f.name;if(!trk.color)fxcol=rgb2h(f.r||100,f.g||100,f.b||255);}});
+        _spatialFx.forEach(function(f){if(f.id===clip.effectId){fxn=f.name;if(!trk.color)fxcol=_clipRgb(f);}});
       }
       var op=audible?'1':'0.3';
       var clickHandler=locked

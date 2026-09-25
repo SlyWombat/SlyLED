@@ -1,5 +1,6 @@
 """
-sACN (E1.31) Engine — Streaming ACN multicast output at 40Hz.
+sACN (E1.31) Engine — Streaming ACN output at 40Hz: unicast to a
+universe's route when one is set (#959), E1.31 multicast otherwise.
 
 Wire format reference (ANSI E1.31-2018):
   - Root Layer: ACN packet header with CID
@@ -142,10 +143,11 @@ def parse_sacn_data(data):
 # ── sACN Engine ──────────────────────────────────────────────────────────────
 
 class sACNEngine:
-    """sACN E1.31 output engine with 40Hz multicast output."""
+    """sACN E1.31 output engine at 40Hz — unicast per universe route,
+    multicast otherwise (#959)."""
 
     def __init__(self, source_name="SlyLED", priority=DEFAULT_PRIORITY, bind_ip="0.0.0.0",
-                 frame_rate=40,
+                 frame_rate=40, unicast_targets=None,
                  get_global_brightness=None, get_intensity_offsets=None,
                  gamma_lut=None):
         """
@@ -154,6 +156,10 @@ class sACNEngine:
             priority: sACN priority level (0-200, higher wins)
             bind_ip: IP to bind the send socket to
             frame_rate: output frame rate in Hz (default 40)
+            unicast_targets: dict of universe→ip (#959). A routed universe
+                is sent unicast to its destination only; an unrouted one
+                goes to its E1.31 multicast group. Same shape ArtNetEngine
+                takes, fed from the same ``universeRoutes`` setting.
             get_global_brightness: callable() → int 0..255. Snapshotted per
                 send so the #853 master grand-master scales sACN output the
                 same way it already scaled Art-Net. Default returns 255.
@@ -170,6 +176,7 @@ class sACNEngine:
         self._source_name = source_name
         self._priority = priority
         self._bind_ip = bind_ip
+        self._unicast = unicast_targets or {}
         self._frame_rate = max(1, min(44, frame_rate))
         self._frame_interval = 1.0 / self._frame_rate
         self._cid = uuid.uuid4().bytes  # 16-byte component identifier
@@ -189,8 +196,12 @@ class sACNEngine:
             get_intensity_offsets or (lambda _u: ()))
         self._gamma_lut = gamma_lut
 
-    def configure(self, source_name=None, priority=None, bind_ip=None, frame_rate=None):
-        """Update configuration. Takes effect on next start()."""
+    def configure(self, source_name=None, priority=None, bind_ip=None, frame_rate=None,
+                  unicast_targets=None):
+        """Update configuration. Takes effect on next start(); routes
+        (``unicast_targets``) take effect on the next frame."""
+        if unicast_targets is not None:
+            self._unicast = unicast_targets
         if source_name is not None:
             self._source_name = source_name[:63]
         if priority is not None:
@@ -296,11 +307,29 @@ class sACNEngine:
                 time.sleep(sleep_time)
 
     def _send_all_universes(self):
-        """Send sACN data only for dirty universes."""
+        """Send dirty universes + keep-alive retransmit every ~1s.
+
+        #959 — without the keep-alive a static look (solid colour, held
+        cue) went out as one packet and then nothing; E1.31 receivers
+        declare data loss after 2.5 s (E1.31_NETWORK_DATA_LOSS_TIMEOUT)
+        and drop the output. Same cadence ArtNetEngine uses.
+        """
+        now = time.monotonic()
         for uni_num in list(self._universes.keys()):
             uni = self._universes.get(uni_num)
-            if uni and uni.dirty:
+            if not uni:
+                continue
+            if uni.dirty or (now - getattr(uni, "_last_send", 0)) >= 1.0:
                 self._send_universe(uni_num)
+                uni._last_send = now
+
+    def destination(self, uni_num):
+        """#959 — (ip, port) a universe is sent to: its unicast route if
+        one is registered, otherwise its E1.31 multicast group."""
+        target = self._unicast.get(uni_num)
+        if target:
+            return (target, SACN_PORT)
+        return (multicast_addr(uni_num), SACN_PORT)
 
     def _send_universe(self, uni_num, blackout=False):
         """Send one sACN data packet for a universe."""
@@ -331,7 +360,7 @@ class sACNEngine:
             self._cid, self._source_name,
             uni_num, seq, self._priority, data
         )
-        dest = (multicast_addr(uni_num), SACN_PORT)
+        dest = self.destination(uni_num)
         try:
             self._sock.sendto(pkt, dest)
         except Exception:
@@ -350,7 +379,9 @@ class sACNEngine:
             "universes": list(self._universes.keys()),
             "multicastAddresses": {
                 u: multicast_addr(u) for u in self._universes
+                if not self._unicast.get(u)
             },
+            "unicastTargets": self._unicast,
             "bindIp": self._bind_ip,
             "frameRate": self._frame_rate,
         }

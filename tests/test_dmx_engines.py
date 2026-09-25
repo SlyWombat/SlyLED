@@ -19,6 +19,7 @@ def run():
     test_artnet_packets()
     test_artnet_stop_blackout()
     test_sacn_packets()
+    test_sacn_unicast_routes()
     test_api()
 
     passed = sum(1 for _, v, _ in results if v)
@@ -357,6 +358,89 @@ def test_sacn_packets():
     # Constants
     ok('sACN port is 5568', SACN_PORT == 5568)
     ok('Default priority 100', DEFAULT_PRIORITY == 100)
+
+
+# ── sACN unicast routing (#959) ──────────────────────────────────────────────
+
+def test_sacn_unicast_routes():
+    """A universe with a route is sent unicast to it; an unrouted one goes
+    to its multicast group; a static buffer is re-sent (keep-alive) so an
+    E1.31 receiver never hits its 2.5 s data-loss timeout (#959)."""
+    import socket
+    from dmx_sacn import sACNEngine, parse_sacn_data, multicast_addr, SACN_PORT
+
+    # Real loopback receiver on 127.0.0.1:5568 where the port is free, so
+    # the packet is proven to arrive, not just proven to be addressed.
+    rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        rx.bind(("127.0.0.1", SACN_PORT))
+        rx.settimeout(1.0)
+    except OSError:
+        rx.close()
+        rx = None
+
+    eng = sACNEngine(unicast_targets={1: "127.0.0.1"})
+    ok('sACN route destination is unicast',
+       eng.destination(1) == ("127.0.0.1", SACN_PORT), eng.destination(1))
+    ok('sACN unrouted destination is multicast',
+       eng.destination(2) == (multicast_addr(2), SACN_PORT), eng.destination(2))
+
+    eng.start()
+    captured = []
+    real_sock = eng._sock
+    class _SockProxy:
+        def sendto(self, data, addr):
+            captured.append((bytes(data), addr))
+            try:
+                return real_sock.sendto(data, addr)
+            except OSError:
+                return 0
+        def __getattr__(self, name):
+            return getattr(real_sock, name)
+    eng._sock = _SockProxy()
+    try:
+        eng.get_universe(1).set_channel(1, 255)
+        eng.get_universe(2).set_channel(1, 128)
+        time.sleep(0.2)
+        got = None
+        if rx is not None:
+            try:
+                data, _ = rx.recvfrom(1024)
+                got = parse_sacn_data(data)
+            except OSError:
+                got = None
+        # Hold the look static long enough for a keep-alive resend.
+        n_before = sum(1 for d, a in captured if a[0] == "127.0.0.1")
+        time.sleep(1.3)
+        n_after = sum(1 for d, a in captured if a[0] == "127.0.0.1")
+        st = eng.status()
+    finally:
+        eng.stop()
+        if rx is not None:
+            rx.close()
+
+    u1 = [a for d, a in captured if parse_sacn_data(d)["universe"] == 1]
+    u2 = [a for d, a in captured if parse_sacn_data(d)["universe"] == 2]
+    ok('sACN routed universe 1 sent unicast only',
+       u1 and all(a == ("127.0.0.1", SACN_PORT) for a in u1), u1[:3])
+    ok('sACN unrouted universe 2 sent multicast',
+       u2 and all(a == (multicast_addr(2), SACN_PORT) for a in u2), u2[:3])
+    ok('sACN static universe re-sent within ~1 s (keep-alive)',
+       n_after > n_before, f'{n_before} -> {n_after}')
+    ok('sACN status reports unicastTargets',
+       st.get("unicastTargets") == {1: "127.0.0.1"}, st.get("unicastTargets"))
+    ok('sACN status multicastAddresses omits routed universe',
+       1 not in st.get("multicastAddresses", {}), st.get("multicastAddresses"))
+    if rx is not None:
+        ok('sACN unicast packet arrives on 127.0.0.1:5568',
+           got is not None and got["universe"] == 1 and got["dmxData"][0] == 255,
+           got and (got["universe"], got["dmxData"][:1]))
+
+    # configure() swaps routes on a live engine.
+    eng2 = sACNEngine()
+    eng2.configure(unicast_targets={7: "10.0.0.9"})
+    ok('sACN configure() sets routes',
+       eng2.destination(7) == ("10.0.0.9", SACN_PORT), eng2.destination(7))
 
 
 # ── API integration tests ────────────────────────────────────────────────────

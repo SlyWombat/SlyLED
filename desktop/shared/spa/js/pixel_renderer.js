@@ -1,4 +1,4 @@
-// pixel_renderer.js — SlyLED Effect Spec v1 (#938)
+// pixel_renderer.js — SlyLED Effect Spec v2 (#938, #957)
 //
 // The canonical per-pixel effect renderer. This file is the SPEC: the Python
 // twin (desktop/shared/pixel_renderer.py) must produce byte-identical output
@@ -17,7 +17,16 @@
 // If you change pixel maths here you MUST regenerate the corpus and update
 // EFFECT_SPEC_VERSION in BOTH this file and pixel_renderer.py.
 
-var EFFECT_SPEC_VERSION = 1;
+var EFFECT_SPEC_VERSION = 2;
+
+// Spec v2 (#957): a colour channel's default applies only when the channel
+// is MISSING (undefined/null), never when it is 0. v1 used `p.r||default`,
+// so pure red {r:255,g:0,b:0} chased as (255,200,255) and no effect could
+// show a colour with a zero channel. Timing/shape params (speedMs, spacing,
+// tailLen, barWidth, periodMs, dutyPct, ...) keep `||` on purpose: 0 there is
+// invalid and takes the default. Performers (main/ChildLED.cpp) use the
+// r/g/b bytes exactly as sent, which v2 now matches.
+function _c(v,d){return(v===undefined||v===null)?d:v;}
 
 // -- Per-pixel colour helpers (mirror firmware ChildLED.cpp) ----------------
 function _hsvToRgb(h,s,v){
@@ -69,7 +78,7 @@ function _emuPixel(pc,di,dotCount,elapsedMs){
     var dir=p.direction||0;
     var off=Math.floor(e/spd)%spc;
     var idx=(dir===2||dir===3)?(dotCount-1-di):di;
-    return((idx+off)%spc===0)?[p.r||100,p.g||200,p.b||255]:[0,0,0];
+    return((idx+off)%spc===0)?[_c(p.r,100),_c(p.g,200),_c(p.b,255)]:[0,0,0];
   }
   if(t===7){// COMET
     var spd=p.speedMs||40;if(spd<1)spd=1;
@@ -79,8 +88,8 @@ function _emuPixel(pc,di,dotCount,elapsedMs){
     var pos=(dir===2||dir===3)?(dotCount-1-head%dotCount):(head%dotCount);
     var dist=Math.abs(di-pos);
     if(head>=dotCount)return[0,0,0];
-    if(dist===0)return[p.r||255,p.g||255,p.b||255];
-    if(dist<=tail){var f=1-dist/tail;return[Math.round((p.r||255)*f),Math.round((p.g||255)*f),Math.round((p.b||255)*f)];}
+    if(dist===0)return[_c(p.r,255),_c(p.g,255),_c(p.b,255)];
+    if(dist<=tail){var f=1-dist/tail;return[Math.round(_c(p.r,255)*f),Math.round(_c(p.g,255)*f),Math.round(_c(p.b,255)*f)];}
     return[0,0,0];
   }
   if(t===10){// WIPE
@@ -90,7 +99,7 @@ function _emuPixel(pc,di,dotCount,elapsedMs){
     var filling=filled<dotCount;
     var cnt=filling?filled:(dotCount*2-filled);
     var idx=(dir===2||dir===3)?(dotCount-1-di):di;
-    return(idx<cnt)?(filling?[p.r||255,p.g||128,p.b||0]:[0,0,0]):(filling?[0,0,0]:[p.r||255,p.g||128,p.b||0]);
+    return(idx<cnt)?(filling?[_c(p.r,255),_c(p.g,128),_c(p.b,0)]:[0,0,0]):(filling?[0,0,0]:[_c(p.r,255),_c(p.g,128),_c(p.b,0)]);
   }
   if(t===11){// SCANNER
     var spd=p.speedMs||30;if(spd<1)spd=1;
@@ -98,7 +107,7 @@ function _emuPixel(pc,di,dotCount,elapsedMs){
     var travel=Math.max(dotCount-bar,1);
     var cyc=travel*2;
     var pos=Math.floor(e/spd)%cyc;if(pos>=travel)pos=cyc-pos;
-    if(di>=pos&&di<pos+bar)return[p.r||255,p.g||0,p.b||0];
+    if(di>=pos&&di<pos+bar)return[_c(p.r,255),_c(p.g,0),_c(p.b,0)];
     return[0,0,0];
   }
   if(t===2){// FADE (ping-pong)
@@ -114,11 +123,11 @@ function _emuPixel(pc,di,dotCount,elapsedMs){
     var minB=(p.minBri||0)/100;
     var phase=(e%per)/per*2*Math.PI;
     var bri=minB+(1-minB)*(0.5+0.5*Math.sin(phase));
-    return[Math.round((p.r||200)*bri),Math.round((p.g||100)*bri),Math.round((p.b||255)*bri)];
+    return[Math.round(_c(p.r,200)*bri),Math.round(_c(p.g,100)*bri),Math.round(_c(p.b,255)*bri)];
   }
   if(t===9){// STROBE
     var per=p.periodMs||100;var duty=p.dutyPct||50;
-    return(e%per<per*duty/100)?[p.r||255,p.g||255,p.b||255]:[0,0,0];
+    return(e%per<per*duty/100)?[_c(p.r,255),_c(p.g,255),_c(p.b,255)]:[0,0,0];
   }
   if(t===6){// FIRE (deterministic pseudo-random from position)
     var heat=Math.max(0,Math.min(255,128+Math.round(80*Math.sin(di*0.7+e*0.003))+Math.round(40*Math.sin(di*1.3+e*0.007))));
@@ -129,13 +138,13 @@ function _emuPixel(pc,di,dotCount,elapsedMs){
   if(t===8){// TWINKLE
     var seed=(di*2654435761+Math.floor(e/80))>>>0;
     var bri=((seed>>8)&0xFF);
-    if(bri>180)return[Math.round((p.r||200)*bri/255),Math.round((p.g||200)*bri/255),Math.round((p.b||255)*bri/255)];
+    if(bri>180)return[Math.round(_c(p.r,200)*bri/255),Math.round(_c(p.g,200)*bri/255),Math.round(_c(p.b,255)*bri/255)];
     return[0,0,0];
   }
   if(t===12){// SPARKLE
     var seed=(di*2654435761+Math.floor(e/50))>>>0;
     if(((seed>>16)&0xFF)>230)return[255,255,255];
-    return[p.r||180,p.g||180,p.b||220];
+    return[_c(p.r,180),_c(p.g,180),_c(p.b,220)];
   }
   if(t===13){// GRADIENT
     var frac=dotCount>1?di/(dotCount-1):0;
