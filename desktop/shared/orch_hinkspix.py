@@ -1447,6 +1447,110 @@ def api_hinkspix_fixtures_from_ports(cid):
     return jsonify(ok=True, created=created, skipped=skipped)
 
 
+# ── First-time setup guide helpers (#953) ────────────────────────────────────
+
+@bp.post("/api/hinkspix/<int:cid>/identify")
+def api_hinkspix_identify(cid):
+    """Light a port so the operator can see which string it drives.
+
+    Body: ``{"port": 17}`` or ``{"ports": [17, 18]}`` or ``{"all": true}``,
+    ``"pattern": "solid"|"chase"`` (chase = the "Light them all" direction
+    check), ``"color": "red"|"green"|"blue"|"white"``, ``"seconds": 1..30``.
+    ``{"stop": true}`` ends it early. Uses the layout SlyLED holds for the
+    controller, so it lights the right string only once that layout is on the
+    controller (the guide sends it first). Refused while a show is running —
+    the operator's show owns the output.
+    """
+    child, err = _child(cid)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if body.get("stop"):
+        return jsonify(ok=True, stopped=ps._identify_stop(cid))
+    if ps._show_playback.get("running") or ps._settings.get("runnerRunning"):
+        return jsonify(err="a show is running — stop it to identify ports"), 409
+    ports_cfg = [int(p["port"]) for p in ((child.get("hinks") or {}).get("ports") or [])
+                 if p.get("enabled", True) and int(p.get("leds") or 0) > 0]
+    if body.get("all"):
+        ports = ports_cfg
+    elif "ports" in body:
+        try:
+            ports = sorted({int(x) for x in body.get("ports") or []})
+        except (TypeError, ValueError):
+            return jsonify(err="ports must be integers"), 400
+    else:
+        try:
+            ports = [int(body.get("port"))]
+        except (TypeError, ValueError):
+            return jsonify(err="port required"), 400
+    if not ports:
+        return jsonify(err="no ports with a pixel count yet"), 400
+    pattern = body.get("pattern", "solid")
+    if pattern not in ("solid", "chase"):
+        return jsonify(err="pattern must be solid or chase"), 400
+    colour = str(body.get("color", "red")).lower()
+    rgb = ps._IDENTIFY_COLOURS.get(colour)
+    if rgb is None:
+        return jsonify(err="color must be red, green, blue or white"), 400
+    try:
+        seconds = float(body.get("seconds", 8))
+    except (TypeError, ValueError):
+        return jsonify(err="seconds must be a number"), 400
+    seconds = max(1.0, min(30.0, seconds))
+    output, out_err = ps._ensure_output_engine(f"HinksPix {child.get('ip')} identify")
+    if out_err:
+        return jsonify(err=out_err, output=output), 409
+    try:
+        lit = ps._identify_ports(child, ports, pattern, rgb, seconds)
+    except (ValueError, TypeError) as exc:
+        return jsonify(err=str(exc)), 400
+    hinks = child.get("hinks") or {}
+    engine_proto = (ps._dmx_settings.get("protocol") or "artnet").lower()
+    device_proto = (hinks.get("protocol") or "").lower()
+    match = ((device_proto in ("e131", "sacn") and engine_proto == "sacn")
+             or device_proto == engine_proto)
+    return jsonify(ok=True, ports=lit, seconds=seconds, pattern=pattern,
+                   color=colour, output=output, protocolMatch=bool(match),
+                   inSync=bool(hinks.get("configHash")
+                               and hinks["configHash"] == _config_hash(hinks)))
+
+
+@bp.post("/api/hinkspix/<int:cid>/color-order")
+def api_hinkspix_color_order(cid):
+    """Work out a port's colour order from the red/green test and store it.
+
+    Body: ``{"port": 17, "seenRed": "G", "seenGreen": "R"}`` — what the
+    string showed when the guide lit it red, then green. Stores the order in
+    SlyLED's copy (the same validated path as the port editor); it reaches
+    the controller on the next send.
+    """
+    child, err = _child(cid)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    try:
+        port = int(body.get("port"))
+    except (TypeError, ValueError):
+        return jsonify(err="port required"), 400
+    ports = [dict(p) for p in ((child.get("hinks") or {}).get("ports") or [])]
+    row = next((p for p in ports if int(p.get("port") or 0) == port), None)
+    if row is None:
+        return jsonify(err=f"port {port} is not in the port table"), 400
+    try:
+        order = hc.derive_color_order(row.get("colorOrder") or "RGB",
+                                      body.get("seenRed"), body.get("seenGreen"))
+    except ValueError as exc:
+        return jsonify(err=str(exc)), 400
+    was = row.get("colorOrder") or "RGB"
+    row["colorOrder"] = order
+    out = {}
+    rejected = _apply_config_body(child, {"ports": ports}, out)
+    if rejected is not None:
+        return rejected
+    return jsonify(ok=True, port=port, colorOrder=order, was=was,
+                   changed=(order != was), needsSend=(order != was))
+
+
 @bp.post("/api/hinkspix/<int:cid>/defaults-from-fixtures")
 def api_hinkspix_defaults_from_fixtures(cid):
     """Propose a port table from the fixtures already bound to this controller.

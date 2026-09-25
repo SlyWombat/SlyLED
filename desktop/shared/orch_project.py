@@ -378,7 +378,8 @@ def _install_preset_show(preset_id):
         if warnings:
             ps.log.warning("Preset %s prerequisites: %s", preset_id, "; ".join(warnings))
 
-    show = generate_show(preset_id, ps._fixtures, ps._layout, ps._stage, ps._profile_lib)
+    show = generate_show(preset_id, ps._fixtures, ps._layout, ps._stage, ps._profile_lib,
+                         children=ps._children)   # #961 — pixel targets only
     if not show:
         return jsonify(ok=False, err="Failed to generate show"), 500
     # #837 — `generate_show` now returns a {"error", "msg"} dict for
@@ -1140,6 +1141,9 @@ def api_project_import():
         ps._spatial_fx = data.get("spatialEffects", [])
         ps._timelines = data.get("timelines", [])
         ps._objects = data.get("objects", [])
+        # #961 — an older project may still carry a HinksPix controller
+        # placeholder fixture; the controller is hardware now.
+        ps._migrate_controller_placeholders()
         ps._dmx_settings = data.get("dmxSettings", dict(ps._DMX_SETTINGS_DEFAULTS))
         # Reconfigure and restart engine with imported settings (#350)
         if ps._artnet.running:

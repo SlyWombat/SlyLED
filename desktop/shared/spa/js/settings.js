@@ -804,7 +804,11 @@ function dmxEngineStart(){
   var proto=document.querySelector('input[name=dmx-proto]:checked');
   var p=proto?proto.value:'artnet';
   ra('POST','/api/dmx/start',{protocol:p},function(r){
-    document.getElementById('dmx-status').textContent=r&&r.ok?'Engine: running ('+p+')':'Start failed';
+    var t=r&&r.ok?'Engine: running ('+p+')':'Start failed';
+    // #960 — every engine start blinks DMX fixtures + pixel strings.
+    var b=r&&r.blink;
+    if(b&&(b.dmx||b.pixel))t+=' — blinking '+(b.dmx+b.pixel)+' fixture'+((b.dmx+b.pixel)===1?'':'s')+'…';
+    document.getElementById('dmx-status').textContent=t;
   });
 }
 

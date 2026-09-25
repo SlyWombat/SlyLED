@@ -240,7 +240,7 @@ function tlAddTrack(){
   if(!_curTl)return;
   if(!_curTl.tracks)_curTl.tracks=[];
   var opts='<option value="all">All Fixtures (Stage)</option>';
-  _fixtures.forEach(function(f){opts+='<option value="'+f.id+'">'+escapeHtml(f.name||('Fixture '+f.id))+'</option>';});
+  _fixtures.filter(isPickableFixture).forEach(function(f){opts+='<option value="'+f.id+'">'+escapeHtml(f.name||('Fixture '+f.id))+'</option>';});   // #961
   var h='<label>Target</label><select id="trk-fix">'+opts+'</select>';
   h+='<div style="margin-top:.8em"><button class="btn btn-on" onclick="tlAddTrackConfirm()">Add</button></div>';
   document.getElementById('modal-title').textContent='Add Track';

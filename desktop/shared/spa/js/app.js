@@ -623,6 +623,10 @@ function _popModal(){
     document.getElementById('modal-title').textContent=prev.title;
     document.getElementById('modal-body').innerHTML=prev.body;
     _helpModalKey=prev.helpKey||null;
+    // #955 — the restored body is a snapshot from when the sub-dialog opened.
+    // The HinksPix wizard may have learned more since (a device read that
+    // landed while the port editor was up), so repaint it from its state.
+    if(document.getElementById('hpw-root')&&typeof _hwRender==='function')_hwRender();
     return true;
   }
   return false;

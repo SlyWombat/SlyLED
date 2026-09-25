@@ -354,3 +354,50 @@ register_fixture_type(FixtureTypeDescriptor(
     apply_create=_radar_apply_create,
     capabilities={"tracks_people": True, "has_dmx": False, "placeable": True},
 ))
+
+
+# ── Pixel targets (#961) ─────────────────────────────────────────────────────
+# A pixel controller (HinksPix) is HARDWARE, not a fixture: it lives in Setup →
+# Hardware and owns ports; the fixtures are its port-bound LED strings. Every
+# picker (timeline tracks, show generator, layout, Android) asks this one
+# predicate whether a fixture can take pixel effects, so a string-less
+# controller placeholder can never be offered as a target again. The server
+# stamps the answer on each fixture it returns as ``pixelTarget`` so the SPA
+# and Android use the same decision without re-deriving it.
+
+PIXEL_CONTROLLER_TYPES = ("hinkspix",)
+
+
+def _has_pixels(fixture):
+    return any(int((s or {}).get("leds") or 0) > 0
+               for s in (fixture.get("strings") or []))
+
+
+def is_pixel_target(fixture, children_by_id=None):
+    """True when *fixture* is an LED fixture that can light pixels.
+
+    LED fixtures on performers keep their strings on the child, so they are
+    targets as before. An LED fixture bound to a pixel controller is a target
+    only when it carries its own port-bound strings with pixels; a string-less
+    one is a controller placeholder (pre-#961 Setup created one per HinksPix).
+    Groups of LED fixtures are targets. Non-LED fixtures are not pixel targets.
+    """
+    f = fixture or {}
+    if (f.get("fixtureType") or "led") != "led":
+        return False
+    if f.get("type") == "group":
+        return True
+    cid = f.get("childId")
+    child = (children_by_id or {}).get(cid) if cid is not None else None
+    if child is not None and child.get("type") in PIXEL_CONTROLLER_TYPES:
+        return _has_pixels(f)
+    return True
+
+
+def is_controller_placeholder(fixture, children_by_id):
+    """An LED fixture standing in for a pixel controller: bound to one and
+    carrying no pixels. The #961 migration removes these."""
+    f = fixture or {}
+    return ((f.get("fixtureType") or "led") == "led"
+            and f.get("type") != "group"
+            and not is_pixel_target(f, children_by_id))

@@ -1360,7 +1360,7 @@ def _generate_bar_array_show(theme, fixtures, layout_positions, bounds):
     }
 
 
-def generate_show(theme_id, fixtures, layout, stage, profile_lib=None):
+def generate_show(theme_id, fixtures, layout, stage, profile_lib=None, children=None):
     """Generate a complete show from a theme and the user's actual fixtures.
 
     Args:
@@ -1369,6 +1369,9 @@ def generate_show(theme_id, fixtures, layout, stage, profile_lib=None):
         layout: layout dict with "children" positions
         stage: stage dict with w/h/d
         profile_lib: optional ProfileLibrary instance for DMX profile lookup
+        children: optional child list; LED fixtures that aren't pixel targets
+            (a string-less pixel-controller placeholder, #961) are dropped
+            via the shared ``fixture_types.is_pixel_target`` predicate
 
     Returns:
         {
@@ -1385,6 +1388,13 @@ def generate_show(theme_id, fixtures, layout, stage, profile_lib=None):
     theme = THEMES.get(theme_id)
     if not theme:
         return None
+
+    # #961 — never put a track on something that can't light pixels.
+    from fixture_types import is_pixel_target
+    by_id = {c.get("id"): c for c in (children or [])}
+    fixtures = [f for f in fixtures
+                if (f.get("fixtureType") or "led") != "led"
+                or is_pixel_target(f, by_id)]
 
     # Filter to non-group fixtures only
     real_fixtures = [f for f in fixtures if f.get("type") != "group"]

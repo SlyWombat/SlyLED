@@ -137,8 +137,10 @@ function _renderSetup(){
       // Gyro children get their own dedicated row later — never treat them
       // as generic "standalone hardware" even if their fixture isn't yet
       // linked, otherwise they render twice.
+      // #961 — a HinksPix controller is hardware: it always gets its own
+      // Hardware row (like gyros), whether or not port fixtures link to it.
       var standaloneHw=(children||[]).filter(function(c){
-        return !linkedChildIds.has(c.id) && c.type!=='gyro';
+        return !linkedChildIds.has(c.id) && c.type!=='gyro' && c.type!=='hinkspix';
       });
 
       var h='<div style="margin-bottom:.6em">'
@@ -167,7 +169,8 @@ function _renderSetup(){
       });
       var camNodes=Object.values(camNodeMap);
       var gyroChildren=(children||[]).filter(function(c){return c.type==='gyro';});
-      var hasHw=standaloneHw.length||camNodes.length||gyroChildren.length;
+      var hinksChildren=(children||[]).filter(function(c){return c.type==='hinkspix';});
+      var hasHw=standaloneHw.length||camNodes.length||gyroChildren.length||hinksChildren.length;
       if(hasHw){
         h+='<h3 style="font-size:.9em;color:#94a3b8;margin:.8em 0 .3em">Hardware</h3>'
           +'<table class="tbl"><tr><th>Device</th><th>Type</th><th>IP</th><th>Status</th><th>Firmware</th><th>Actions</th></tr>';
@@ -230,6 +233,9 @@ function _renderSetup(){
           acts+=' <button class="btn" onclick="_gyroConfigModal('+c.id+')" style="background:#312e81;color:#a5b4fc;font-size:.8em">Configure</button>';
           h+='<tr><td><b>'+escapeHtml(primaryName)+'</b>'+secondaryName+'</td><td>'+typeBadge+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+st+'</td><td>'+fwHtml+'</td><td>'+acts+'</td></tr>';
         });
+        // #961 — HinksPix controllers: hardware rows carrying Configure,
+        // status, firmware, the ports/universes summary (#953) and rename.
+        hinksChildren.forEach(function(c){h+=_hinksHwRow(c);});
         // Camera nodes as hardware rows
         camNodes.forEach(function(node){
           var typeBadge='<span class="badge" style="background:#0e7490;color:#fff">Camera Node</span>';
@@ -320,6 +326,7 @@ function _renderSetup(){
             }
             var boardColors={'ESP32':'#2563eb','D1 Mini':'#7c3aed','Giga':'#059669','WLED':'#f59e0b','HinksPix':'#dc2626'};
             conn=escapeHtml(ch.ip)+' <span class="badge" style="background:'+(boardColors[board]||'#446')+';color:#fff;font-size:.75em">'+board+'</span>';
+            if(ch.type==='hinkspix')conn=escapeHtml(ch.name||ch.ip)+' <span class="badge" style="background:#dc2626;color:#fff;font-size:.75em">HinksPix</span>';
             var rssi=ch.rssi||0;
             var rssiHtml='';
             if(ch.status===1&&rssi){
@@ -349,8 +356,8 @@ function _renderSetup(){
           // the port editor. One entry point covers both: the wizard says what
           // the controller holds now and what the last push verified, which is
           // the context an edit needs to be safe.
-          if(ch&&ch.type==='hinkspix')actions+=' <button class="btn" onclick="hinksConfig('+f.childId+')" style="background:#dc2626;color:#fff" title="Port table, universes, push, verify, snapshots">Configure</button>'
-            +' <button class="btn" onclick="window.open(\'http://'+escapeHtml(ch.ip)+'/\',\'_blank\')" style="background:#335;color:#fff" title="Controller web UI">Web UI</button>';
+          // #961 — Configure lives on the controller's Hardware row now; a
+          // port fixture row names its controller instead.
           if(ch&&ch.type!=='hinkspix')actions+=' <button class="btn" onclick="showDetails('+f.childId+')" style="background:#335;color:#fff">Test</button>'
             +' <button class="btn btn-on" onclick="refreshChild('+f.childId+')">Refresh</button>'
             +' <button class="btn" onclick="rebootChild('+f.childId+')" style="background:#654;color:#fff">Reboot</button>';
@@ -1340,7 +1347,7 @@ function _toggleAddFixFields(){
     if(mel&&!mel.innerHTML){
       ra('GET','/api/fixtures',null,function(fxs){
         var h='';(fxs||[]).forEach(function(f){
-          if(f.type==='group')return;
+          if(f.type==='group'||!isPickableFixture(f))return;   // #961
           var badge=f.fixtureType==='dmx'?'<span style="color:#a78bfa;font-size:.75em">DMX</span>':f.fixtureType==='camera'?'<span style="color:#22d3ee;font-size:.75em">CAM</span>':'<span style="color:#4ade80;font-size:.75em">LED</span>';
           h+='<label style="display:block;padding:.15em 0;font-size:.82em"><input type="checkbox" value="'+f.id+'" class="af-member-cb"> '+escapeHtml(f.name)+' '+badge+'</label>';
         });
@@ -1585,8 +1592,10 @@ function _submitAddFixture(){
         // DMX bridges and gyro controllers belong in Hardware only — their
         // downstream DMX devices / mover assignments are added as separate
         // fixtures (childId:null) via the DMX / Gyro tabs of this modal.
-        if(r.type==='dmx'||r.type==='gyro'){
-          var label=r.type==='dmx'?'DMX bridge':'gyro controller';
+        // #961 — a HinksPix controller is hardware too: no fixture; its
+        // ports become fixtures from Configure.
+        if(r.type==='dmx'||r.type==='gyro'||r.type==='hinkspix'){
+          var label=r.type==='dmx'?'DMX bridge':r.type==='gyro'?'gyro controller':'HinksPix controller';
           document.getElementById('hs').textContent=(r.duplicate?'Already registered ':'Added ')+label+': '+cname;
           setTimeout(loadSetup,2000);
           return;
@@ -1872,11 +1881,15 @@ function addDiscovered(ip){
         document.getElementById('hs').textContent='Added gyro fixture: '+cname;
         setTimeout(loadSetup,2000);
       });
+    }else if(ctype==='hinkspix'){
+      // #961 — hardware only: the controller shows in Setup → Hardware; its
+      // ports become fixtures from Configure.
+      document.getElementById('hs').textContent=(r.duplicate?'Already registered ':'Added ')+'HinksPix controller: '+cname+' — see Hardware → Configure';
+      setTimeout(loadSetup,1000);
     }else{
-      // LED fixture — auto-create fixture. A HinksPix (#949) gets the same
-      // linear fixture the manual Add path creates; ports bind in Configure.
+      // LED fixture — auto-create fixture.
       ra('POST','/api/fixtures',{name:cname,fixtureType:'led',type:'linear',childId:cid},function(){
-        document.getElementById('hs').textContent=(ctype==='hinkspix'?'Added HinksPix controller: ':'Added LED fixture: ')+cname;
+        document.getElementById('hs').textContent='Added LED fixture: '+cname;
         setTimeout(loadSetup,2000);
       });
     }
@@ -2782,7 +2795,10 @@ function removeFixture(id,name){
   // For LED fixtures, also find and remove the linked child
   var fix=null;(_fixtures||[]).forEach(function(f){if(f.id===id)fix=f;});
   ra('DELETE','/api/fixtures/'+id,null,function(r){
-    if(fix&&(fix.fixtureType||'led')==='led'&&fix.childId!=null){
+    // #961 — a HinksPix port fixture belongs to a controller that is
+    // hardware in its own right; removing one port must not remove it.
+    var fixChild=fix&&fix.childId!=null?(_setupChildren||[]).find(function(c){return c.id===fix.childId;}):null;
+    if(fix&&(fix.fixtureType||'led')==='led'&&fix.childId!=null&&!(fixChild&&fixChild.type==='hinkspix')){
       ra('DELETE','/api/children/'+fix.childId,null,function(){
         document.getElementById('hs').textContent=(r&&r.ok)?'Fixture removed':'Remove failed';
         loadFixtures();loadSetup();
@@ -2792,6 +2808,58 @@ function removeFixture(id,name){
       loadFixtures();loadSetup();
     }
   });
+}
+
+// #961 / #953 — a HinksPix controller's Setup → Hardware row.
+function _hinksSummaryText(c){
+  var s=c.hinksSummary||{};
+  var p=s.portsConfigured||0, u=s.universes||0;
+  if(!p)return'no ports configured yet';
+  var t=p+' port'+(p===1?'':'s')+' configured &middot; '+u+' universe'+(u===1?'':'s');
+  if(s.firstUniverse!=null)t+=' ('+s.firstUniverse+(s.lastUniverse!==s.firstUniverse?'&ndash;'+s.lastUniverse:'')+')';
+  return t+' &middot; '+(s.pixels||0)+'px';
+}
+function _hinksHwRow(c){
+  var typeBadge='<span class="badge" style="background:#dc2626;color:#fff">HinksPix</span>';
+  var st=c.status===1?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
+  var h=c.hinks||{};
+  var fw=h.firmware||h.fwVersion||c.fwVersion||'—';
+  var model=h.model?'<span style="color:#64748b;font-size:.75em">'+escapeHtml(h.model)+'</span><br>':'';
+  var nm=escapeHtml(c.name||c.ip);
+  // #953 — "Set up" is the first-time guide (plain words, identify, colour
+  // test); "Configure" is the five-step push view for re-pushes.
+  var firstTime=!((c.hinksSummary||{}).portsConfigured);
+  var acts='<button class="btn" onclick="hinksGuide('+c.id+')" style="background:'+(firstTime?'#16a34a':'#335')+';color:#fff" title="Guided setup: find your strings, name them, send, check">Set up</button>'
+    +' <button class="btn" onclick="hinksConfig('+c.id+')" style="background:#dc2626;color:#fff" title="Advanced: read, edit, review, apply, verify">Configure</button>'
+    +' <button class="btn" onclick="_hinksRename('+c.id+')" style="background:#446;color:#fff">Rename</button>'
+    +' <button class="btn btn-on" onclick="refreshChild('+c.id+')">Refresh</button>'
+    +' <button class="btn" onclick="window.open(\'http://'+escapeHtml(c.ip)+'/\',\'_blank\')" style="background:#335;color:#fff" title="Controller web UI">Web UI</button>'
+    +' <button class="btn btn-off" onclick="_hinksRemove('+c.id+')">Remove</button>';
+  return '<tr data-hinks-hw="'+c.id+'"><td><b>'+nm+'</b><br><span class="hinks-summary" style="color:#94a3b8;font-size:.75em">'+_hinksSummaryText(c)+'</span></td>'
+    +'<td>'+typeBadge+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+st+'</td><td>'+model+escapeHtml(String(fw))+'</td><td>'+acts+'</td></tr>';
+}
+function _hinksRename(cid){
+  var c=(_setupChildren||[]).find(function(x){return x.id===cid;})||{};
+  var n=prompt('Name for this HinksPix controller',c.name||c.ip||'');
+  if(n==null)return;n=n.trim();if(!n)return;
+  ra('PUT','/api/children/'+cid,{name:n},function(r){
+    document.getElementById('hs').textContent=(r&&r.ok)?'Renamed to '+n:'Rename failed: '+((r&&r.err)||'unknown');
+    loadSetup();
+  });
+}
+function _hinksRemove(cid){
+  var c=(_setupChildren||[]).find(function(x){return x.id===cid;})||{};
+  var ports=(_fixtures||[]).filter(function(f){return f.childId===cid;});
+  var msg='Remove HinksPix controller "'+(c.name||c.ip)+'"'
+    +(ports.length?' and its '+ports.length+' port fixture'+(ports.length===1?'':'s')+'?':'?');
+  if(!confirm(msg))return;
+  var left=ports.length;
+  function done(){ra('DELETE','/api/children/'+cid,null,function(r){
+    document.getElementById('hs').textContent=(r&&r.ok)?'Controller removed':'Remove failed';
+    loadFixtures();loadSetup();
+  });}
+  if(!left){done();return;}
+  ports.forEach(function(f){ra('DELETE','/api/fixtures/'+f.id,null,function(){if(--left===0)done();});});
 }
 
 function removeChildDevice(id){

@@ -27,7 +27,8 @@ function renderFixturesSidebar(){
       +'</div>';
   }
   // Unplaced fixtures first (draggable)
-  var unplaced=_fixtures.filter(function(f){return !_isFixturePlaced(f);});
+  // #961 — a pixel controller placeholder is not placeable (isPickableFixture).
+  var unplaced=_fixtures.filter(function(f){return isPickableFixture(f)&&!_isFixturePlaced(f);});
   if(unplaced.length){
     h+='<div style="color:#64748b;font-size:.75em;margin-bottom:.3em">Drag to place:</div>';
     unplaced.forEach(function(f){
@@ -39,7 +40,7 @@ function renderFixturesSidebar(){
     });
   }
   // Placed fixtures
-  var placed=_fixtures.filter(_isFixturePlaced);
+  var placed=_fixtures.filter(function(f){return isPickableFixture(f)&&_isFixturePlaced(f);});
   if(placed.length){
     if(unplaced.length)h+='<div style="border-top:1px solid #1e293b;margin:.4em 0"></div>';
     h+='<div style="color:#64748b;font-size:.75em;margin-bottom:.3em">On stage:</div>';

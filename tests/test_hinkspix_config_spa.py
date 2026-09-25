@@ -181,10 +181,16 @@ STUB_JS = """
                            counts: {}, items: []};
       }
     }
-    return Promise.resolve({
+    var resp = {
       status: 200,
       json: function () { return Promise.resolve(body); }
-    });
+    };
+    // #955 — a slow controller read (the real one takes 2-6 s).
+    if (u.indexOf('/device-config') >= 0 && window._devDelayMs) {
+      var ms = window._devDelayMs;
+      return new Promise(function (res) { setTimeout(function () { res(resp); }, ms); });
+    }
+    return Promise.resolve(resp);
   };
   return true;
 }
@@ -288,6 +294,36 @@ def main():
            page.query_selector("#hpw-root") is not None
            and page.query_selector(".hp-leds") is None,
            "the editor is still up")
+
+        section("#955 — a late device read never wipes the port editor")
+        page.evaluate("() => { window._devDelayMs = 1500; window._fetches = []; }")
+        page.evaluate(f"() => hinksConfig({CID})")          # starts the slow read
+        time.sleep(0.2)
+        page.evaluate("() => _hwGo(2)")                     # step click: no re-read
+        page.evaluate("() => _hwOpenEditor()")
+        time.sleep(0.5)
+        ok("the port editor is up while the read is still in flight",
+           page.query_selector(".hp-leds") is not None, "no port rows")
+        time.sleep(1.6)                                     # the read lands now
+        ok("…and is still up after the read lands (not re-rendered over)",
+           page.query_selector(".hp-leds") is not None
+           and page.query_selector("#hpw-root") is None,
+           body_text(page)[:120].replace("\n", " | "))
+        reads = [u for u in page.evaluate("() => window._fetches")
+                 if "/device-config" in u]
+        ok("one controller read for open + step click (no read per step)",
+           len(reads) == 1, reads)
+        page.evaluate("() => closeModal()")
+        time.sleep(0.3)
+        ok("closing the editor returns to the wizard's Edit step",
+           page.query_selector("#hpw-root") is not None
+           and "controller keeps running what it has" in body_text(page),
+           body_text(page)[:120].replace("\n", " | "))
+        page.evaluate("() => _hwGo(1)")
+        time.sleep(0.2)
+        ok("the read that landed meanwhile is shown on Read",
+           "On the controller" in body_text(page), body_text(page)[:120])
+        page.evaluate("() => { window._devDelayMs = 0; }")
 
         section("Review shows the real requests, and the gate")
         page.evaluate(f"() => hinksConfig({CID}, 3)")

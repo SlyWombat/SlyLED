@@ -341,6 +341,17 @@ The primary design and control interface. Full-featured 7-tab SPA with 2D/3D lay
 **Launch:** `powershell -File desktop\windows\run.ps1` or run `SlyLED.exe`
 **Install:** Run `SlyLED-Setup.exe` (includes system tray icon)
 
+### Linux (headless controller)
+The same orchestrator as a background service on a rack or bench machine with no display — a Raspberry Pi 4/5, a NUC, or any Ubuntu 22.04+ / Debian Bookworm+ host (x86_64 or aarch64). Operate it from a browser on another machine or from the Android app.
+
+**Install:** from a copy of the SlyLED source, run `sudo bash desktop/linux/install.sh`. It installs the code to `/opt/slyled` with its own Python environment, creates the `slyled` service account (member of `dialout`, so the Firmware tab can flash USB boards), and starts the `slyled` service on port 8080. Then open `http://<host>:8080`.
+**Data:** projects, settings and logs are kept in `/var/lib/slyled/SlyLED/data`; downloaded firmware in `/var/lib/slyled/SlyLED/firmware`.
+**Logs:** `journalctl -u slyled -f`
+**Upgrade:** run the installer again from the newer source; your data is kept.
+**Remove:** `sudo bash desktop/linux/install.sh --uninstall` (keeps data; add `--purge` to delete it and the service account).
+**Firewall:** when ufw or firewalld is active the installer opens TCP 8080 and UDP 4210, 4211, 5568 and 6454.
+**Network:** discovery, Art-Net and the camera scan use every physical network interface; Docker/VM bridges and VPN tunnels are skipped.
+
 ### Android App
 Live operator tool for running shows from your phone. Connects to the desktop server over WiFi. As of v1.8.1 the Control tab is rebuilt as a **Command Surface** — see #888 / `docs/design/mobile_ui_redesign.md`.
 
@@ -415,6 +426,20 @@ Click **+ DMX Fixture** on the Setup tab to launch the 3-step wizard:
 1. **Choose Fixture**: Search the Open Fixture Library (700+ fixtures) or create a custom fixture
 2. **Set Address**: Universe, start address, and name — with real-time conflict detection
 3. **Confirm**: Review all settings, click "Create Fixture"
+
+### Setting up a HinksPix controller
+A HinksPix PRO is a **pixel controller**: SlyLED streams colour to it over the network (sACN or Art-Net) and it drives the light strings plugged into its ports. The controller itself is **hardware, not a fixture** — it appears in **Setup → Hardware**. Each string on one of its ports is an LED fixture you place, target and program like any other.
+
+1. **Add it.** Setup → **Discover** finds HinksPix controllers on your network (or **+ Add** with its IP). It appears as a row in **Hardware** with its status, firmware and a summary such as *1 port configured · 2 universes (1–2) · 200px*. **Rename** gives it a friendly name.
+2. **Set up** (the green button on that row) opens the first-time guide:
+   - **Your controller** — what SlyLED found, in plain words: the model and firmware, and what each board is. *Long-Range* boards need a receiver box at the far end of each cable; *Local SPI* boards take pixels directly. It also warns if SlyLED's DMX protocol (Settings → DMX) and the controller's input protocol don't match — they must, or nothing lights.
+   - **Your layout** — **Import from my xLights show folder** (fastest if you use xLights: choose the folder with `xlights_networks.xml` and `xlights_rgbeffects.xml`, review, accept), or **Set up by hand**.
+   - **Your strings** — for each port with a string, enter its pixel count (or its length and pixels-per-metre, then **=**) and a name such as *Garage eaves*. A port holds up to 680 RGB pixels on a PRO V1/V2; the guide refuses more and says why. Pixel type is WS2811, the only type a PRO V1/V2 drives. Saving creates one LED fixture per port, named as you typed. Nothing is sent to the controller yet.
+   - **Send** — a plain summary (*Port 17 → Garage eaves, 200 pixels, WS2811, RGB, universes 1–2*) and **Send to the controller…**, which opens the push view: SlyLED snapshots the controller first (so it can always be put back), writes the layout, reboots it and reads it back to verify.
+   - **Check** — walk to your strings. **Identify** lights one port red for 8 seconds. **Colour test** lights it red, then green, and asks what you saw; SlyLED works out the string's colour order from your answers and saves it (send again to apply). **Light them all** runs a slow chase on every string so you can confirm direction and full length.
+3. **Nothing lit?** Check the layout has been sent, that the DMX protocol matches the controller (step 1 warns), and that the DMX engine is running (Settings → DMX; a show or Identify starts it automatically). If a string still stays dark it may be on another port — Identify the next one — or use the controller's own Test page (**Web UI** on its Hardware row).
+
+**Configure** on the Hardware row opens the full five-step push view (Read · Edit · Review · Apply · Verify) for re-pushes, snapshots and restores; **Setup guide** in that view brings you back here.
 
 ### DMX Monitor
 Settings → DMX → **DMX Monitor** opens a real-time 512-channel grid per universe. Click any cell to set a value. Color-coded by intensity.

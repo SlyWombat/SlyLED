@@ -1801,3 +1801,36 @@ def _serial_diffs(now, want):
              ("DDP_DMX_START", now.ddp_start, want.ddp_start),
              ("DDP_DMX_CHAN_CNT", now.ddp_channels, want.ddp_channels))
     return [(k, n, w) for k, n, w in pairs if n != w]
+
+
+# ── Colour-order test (#953 first-time setup guide) ─────────────────────────
+
+def derive_color_order(current, seen_for_red, seen_for_green):
+    """The strip's colour order, from what the operator saw.
+
+    The guide lights a port pure red, then pure green, with the port set to
+    ``current``, and asks which colour the string showed each time. The
+    controller writes logical channel ``current[i]`` into wire slot ``i``; the
+    strip shows slot ``i`` as colour ``S[i]``. So red showed ``S[current.index
+    ('R')]``, green showed ``S[current.index('G')]``, and the last slot is the
+    remaining colour. Setting the port to ``S`` makes red look red.
+
+    3-channel orders only (RGB/RBG/GRB/GBR/BRG/BGR): a 4-channel RGBW strip
+    has a white channel this two-question test cannot place. Raises
+    ValueError on anything it cannot answer.
+    """
+    cur = str(current or "RGB").upper()
+    if len(cur) != 3 or sorted(cur) != ["B", "G", "R"]:
+        raise ValueError(f"colour-order test needs a 3-colour order, not {current!r}")
+    r = str(seen_for_red or "").upper()[:1]
+    g = str(seen_for_green or "").upper()[:1]
+    if r not in "RGB" or g not in "RGB" or not r or not g:
+        raise ValueError("answer with R, G or B for each test")
+    if r == g:
+        raise ValueError("red and green can't both have shown the same colour — "
+                         "run the test again")
+    s = [None, None, None]
+    s[cur.index("R")] = r
+    s[cur.index("G")] = g
+    s[cur.index("B")] = ({"R", "G", "B"} - {r, g}).pop()
+    return "".join(s)

@@ -272,7 +272,16 @@ data class Fixture(
     val calibrated: Boolean = false,
     val moverCalibrated: Boolean = false,
     val rangeCalibrated: Boolean = false,
+    // #961 — stamped by the server from fixture_types.is_pixel_target: false
+    // for a pixel-controller (HinksPix) placeholder, which is hardware and
+    // must never be offered as a target. Null from an older server = target.
+    val pixelTarget: Boolean? = null,
 )
+
+/** #961 — the one filter every fixture picker / stage view uses: non-LED
+ *  fixtures pass through, LED fixtures must be pixel targets. Twin of the
+ *  SPA's `isPickableFixture`. */
+fun Fixture.isPickable(): Boolean = fixtureType != "led" || pixelTarget != false
 
 @Serializable
 data class DmxProfile(

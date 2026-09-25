@@ -618,6 +618,13 @@ function hinksXlightsApply() {
 // patched in place.
 function hinksXlightsDone() {
   closeModal();                       // pops the port table back
+  // #953 — started from the first-time setup guide: go back to it, on the
+  // Send step, rather than into the advanced port table.
+  if (window._hgReturnAfterXlights === _hxi.cid && typeof hinksGuide === 'function') {
+    window._hgReturnAfterXlights = null;
+    hinksGuide(_hxi.cid, 4);
+    return;
+  }
   if (typeof hinksConfigure === 'function') hinksConfigure(_hxi.cid, true);
 }
 

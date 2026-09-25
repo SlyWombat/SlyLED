@@ -1192,3 +1192,17 @@ function fixtureTypeDesc(f){
   var key=(typeof f==='string')?(f||'led'):fixtureTypeKey(f);
   return FIXTURE_TYPES[key]||_ftUnknown(key);
 }
+// #961 — can this fixture take pixel effects? A pixel controller (HinksPix)
+// is hardware, not a fixture; its string-less placeholder must never be a
+// track / layout / show target. The decision is the server's
+// (fixture_types.is_pixel_target), stamped on every fixture it returns as
+// `pixelTarget`; a record without the stamp (older server) counts as a target.
+function isPixelTarget(f){
+  if(fixtureTypeKey(f)!=='led')return false;
+  return !(f&&f.pixelTarget===false);
+}
+// Every fixture picker's filter: non-LED fixtures pass through unchanged,
+// LED fixtures must be pixel targets.
+function isPickableFixture(f){
+  return fixtureTypeKey(f)!=='led'||isPixelTarget(f);
+}

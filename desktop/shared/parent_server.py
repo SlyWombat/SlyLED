@@ -367,6 +367,58 @@ _timelines  = _load("timelines",  [])
 _show_playlist = _load("show_playlist", {"order": [], "loopAll": False})  # {order: [tid,...], loopAll: bool}
 _actions = _load("actions", [])
 
+
+def _migrate_controller_placeholders():
+    """#961 — one-off: a pixel controller (HinksPix) is hardware, not a
+    fixture. Pre-#961 Setup created a string-less LED fixture per controller
+    to carry its Configure button; remove those, carry an operator-given
+    name onto the controller (when the controller still has its IP as its
+    name), and drop layout positions / timeline tracks that pointed at them.
+    Port fixtures (strings with pixels) are untouched."""
+    global _fixtures
+    by_id = {c.get("id"): c for c in _children}
+    doomed = [f for f in _fixtures
+              if fixture_types.is_controller_placeholder(f, by_id)]
+    if not doomed:
+        return 0
+    ids = {f["id"] for f in doomed}
+    for f in doomed:
+        child = by_id.get(f.get("childId"))
+        name = (f.get("name") or "").strip()
+        if child is not None and name and child.get("name") in (None, "", child.get("ip")):
+            child["name"] = name
+    _fixtures = [f for f in _fixtures if f["id"] not in ids]
+    _layout["children"] = [p for p in _layout.get("children", [])
+                           if p.get("id") not in ids]
+    tl_changed = False
+    for tl in _timelines:
+        tracks = tl.get("tracks") or []
+        kept = [t for t in tracks if t.get("fixtureId") not in ids]
+        if len(kept) != len(tracks):
+            tl["tracks"] = kept
+            tl_changed = True
+    _save("fixtures", _fixtures)
+    _save("children", _children)
+    _save("layout", _layout)
+    if tl_changed:
+        _save("timelines", _timelines)
+    print(f"#961: removed {len(ids)} pixel-controller placeholder fixture(s) "
+          f"{sorted(ids)}; the controller lives in Setup \u2192 Hardware",
+          file=sys.stderr)
+    return len(ids)
+
+
+_migrate_controller_placeholders()
+
+
+def _fixture_view(f, children_by_id=None):
+    """#961 — fixture record as the API returns it: stamped with
+    `pixelTarget` from the shared predicate, so the SPA and Android
+    pickers use the server's decision instead of re-deriving it."""
+    if children_by_id is None:
+        children_by_id = {c.get("id"): c for c in _children}
+    return {**f, "pixelTarget": fixture_types.is_pixel_target(f, children_by_id)}
+
 # #841 — one-shot migration: strip stale `colorWheel` from any non-type-17
 # action. Pre-fix, the DMX Scene / PT-Move / Gobo Select editors all wrote
 # `colorWheel: 0` into the action body even when the user never touched
@@ -1470,56 +1522,82 @@ def api_diagnostics_restart_udp_listener():
 CHILD_STALE_S = 120   # mark offline if not seen for 2 minutes
 _startup_check_done = False
 
-def _periodic_ping():
-    """Background thread: broadcast PING periodically.  The UDP listener
-    daemon picks up PONGs and updates child records   " no per-child
-    send_recv needed, so there are no port conflicts."""
-    global _startup_check_done
-    # Startup sweep: ping twice with a gap for slow booters
+PING_INTERVAL_S = 30        # periodic status sweep cadence
+_STARTUP_REPING_S = 5       # gap before the startup sweep's second ping
+
+
+def _periodic_ping_once():
+    """One status sweep: broadcast PING (performers answer with PONG via the
+    UDP listener), HTTP-probe every non-performer, then age out stale
+    performers. #956 — each device is probed in its own try so one bad
+    record can't stop the sweep for the rest."""
     _broadcast_ping_all()
-    _startup_check_done = True
-    time.sleep(5)
-    _broadcast_ping_all()
+    for c in list(_children):
+        if _is_performer(c):
+            continue
+        try:
+            # Blocking HTTP probe stays outside _lock; only the status/seen
+            # mutation is locked (#894 — consistent with the performer sweep).
+            info = _probe_child_http(c, timeout=2.0)
+        except Exception:
+            log.exception("status sweep: probe of %s failed", c.get("ip"))
+            info = None
+        with _lock:
+            if info:
+                c["status"] = 1
+                c["seen"] = int(time.time())
+                if c.get("type") == "hinkspix":
+                    c["fwVersion"] = info.get("mcpuRaw")
+                    c.setdefault("hinks", {}).update({
+                        k: info[k] for k in
+                        ("mcpu", "web", "pcpu", "ecpu", "maxU",
+                         "hardwareV3", "uploadSupported", "boards")
+                        if k in info})
+                else:
+                    c["fwVersion"] = info.get("ver")
+            else:
+                c["status"] = 0
+    time.sleep(2)   # allow PONGs to arrive
     with _lock:
-        # Mark children not seen recently as offline
         now = int(time.time())
         for c in _children:
-            if c.get("seen", 0) > 0 and now - c["seen"] > CHILD_STALE_S:
+            if _is_performer(c) and c.get("seen", 0) > 0 and now - c["seen"] > CHILD_STALE_S:
                 c["status"] = 0
         _save("children", _children)
-    # Periodic sweep every 30 seconds
-    while True:
-        time.sleep(30)
+
+
+def _periodic_ping():
+    """Background thread: keep every device's status fresh.
+
+    #956 — started unconditionally at boot (it used to start only when
+    devices already existed, so anything added later was probed once and
+    went Offline after CHILD_STALE_S). Every iteration is guarded: an
+    exception is logged and the loop carries on, instead of silently
+    killing the thread and taking every device's status with it."""
+    global _startup_check_done
+    try:
+        # Startup sweep: ping twice with a gap for slow booters
         _broadcast_ping_all()
-        # Also probe WLED devices via HTTP
-        for c in list(_children):
-            if not _is_performer(c):
-                # Blocking HTTP probe stays outside _lock; only the
-                # status/seen mutation is locked (#894 — keep this
-                # consistent with the locked performer sweep below).
-                info = _probe_child_http(c, timeout=2.0)
-                with _lock:
-                    if info:
-                        c["status"] = 1
-                        c["seen"] = int(time.time())
-                        if c.get("type") == "hinkspix":
-                            c["fwVersion"] = info.get("mcpuRaw")
-                            c.setdefault("hinks", {}).update({
-                                k: info[k] for k in
-                                ("mcpu", "web", "pcpu", "ecpu", "maxU",
-                                 "hardwareV3", "uploadSupported", "boards")
-                                if k in info})
-                        else:
-                            c["fwVersion"] = info.get("ver")
-                    else:
-                        c["status"] = 0
-        time.sleep(2)   # allow PONGs to arrive
+        _startup_check_done = True
+        time.sleep(_STARTUP_REPING_S)
+        _broadcast_ping_all()
         with _lock:
+            # Mark children not seen recently as offline
             now = int(time.time())
             for c in _children:
-                if _is_performer(c) and c.get("seen", 0) > 0 and now - c["seen"] > CHILD_STALE_S:
+                if c.get("seen", 0) > 0 and now - c["seen"] > CHILD_STALE_S:
                     c["status"] = 0
             _save("children", _children)
+    except Exception:
+        log.exception("status loop: startup sweep failed — continuing")
+    finally:
+        _startup_check_done = True
+    while True:
+        time.sleep(PING_INTERVAL_S)
+        try:
+            _periodic_ping_once()
+        except Exception:
+            log.exception("status loop: sweep failed — continuing")
 
 # #771 — UDP listener health, exposed on /api/status so the SPA can render
 # a Setup-tab banner when the listener thread can't own UDP_PORT. The
@@ -2823,10 +2901,8 @@ def start_background_tasks():
     # #862 — second UDP listener for AUTOBRI_PUSH on its own port.
     threading.Thread(target=_udp_autobri_listener, daemon=True).start()
     threading.Thread(target=_heartbeat_loop, daemon=True).start()
-    if _children:
-        threading.Thread(target=_periodic_ping, daemon=True).start()
-    else:
-        _startup_check_done = True
+    # #956 — always: a device added after boot needs the same refresh.
+    threading.Thread(target=_periodic_ping, daemon=True, name="status-loop").start()
     _check_depth_install_marker()
     _check_ollama_install_marker()
     # Boot-time warm-up of any AI helper that's already installed.
@@ -2856,7 +2932,51 @@ def api_children():
         if c.get("status") == 1 and c.get("seen", 0) > 0:
             if now - c["seen"] > CHILD_STALE_S:
                 c["status"] = 0
-    return jsonify([dict(c, startupDone=_startup_check_done) for c in _children])
+    return jsonify([_child_view(c) for c in _children])
+
+
+def _hinks_summary(child):
+    """#953/#961 — the controller row's summary: ports with pixels, the
+    universes they consume (same map streaming uses), total pixels."""
+    hinks = child.get("hinks") or {}
+    ports = [p for p in (hinks.get("ports") or [])
+             if p.get("enabled", True) and int(p.get("leds") or 0) > 0]
+    out = {"portsConfigured": len(ports),
+           "portsTotal": len(hinks.get("ports") or []),
+           "pixels": sum(int(p.get("leds") or 0) for p in ports),
+           "universes": 0, "firstUniverse": None, "lastUniverse": None,
+           "maxUniverses": hinks.get("maxU")}
+    try:
+        unis = pixel_output.PixelOutputMap.build(child).universes
+    except (ValueError, TypeError):
+        unis = []
+    if unis:
+        out.update(universes=len(unis), firstUniverse=min(unis), lastUniverse=max(unis))
+    return out
+
+
+def _child_view(c):
+    v = dict(c, startupDone=_startup_check_done)
+    if c.get("type") == "hinkspix":
+        v["hinksSummary"] = _hinks_summary(c)
+    return v
+
+
+@app.put("/api/children/<int:cid>")
+def api_children_update(cid):
+    """#961 — rename a device from its Setup → Hardware row. Only `name` is
+    editable here; everything else comes from the device itself."""
+    body = request.get_json(silent=True) or {}
+    name = body.get("name")
+    if not isinstance(name, str) or not name.strip() or len(name.strip()) > 64:
+        return jsonify(err="name must be 1-64 characters"), 400
+    with _lock:
+        child = next((c for c in _children if c.get("id") == cid), None)
+        if child is None:
+            return jsonify(err="Not found"), 404
+        child["name"] = name.strip()
+        _save("children", _children)
+    return jsonify(ok=True, id=cid, name=child["name"])
 
 @app.get("/api/children/discover")
 def api_children_discover():
@@ -3141,11 +3261,23 @@ _live_pixel_thread = None
 _live_pixel_stop = threading.Event()
 
 
+def _output_engine():
+    """The engine streamed pixel output should go to: the configured
+    protocol's engine when it is running, else whichever one is, else None.
+    #957 follow-up — a fixed (artnet, sacn) preference sent live pixels to
+    an idle Art-Net engine while the controller listened on sACN."""
+    first = _sacn if _dmx_settings.get("protocol") == "sacn" else _artnet
+    other = _artnet if first is _sacn else _sacn
+    if first.running:
+        return first
+    return other if other.running else None
+
+
 def _live_pixel_loop():
     """40 Hz render loop for ad-hoc pixel actions. Exits when nothing is live."""
     interval = 0.025
     while not _live_pixel_stop.is_set():
-        engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
+        engine = _output_engine()
         with _live_pixel_lock:
             live = list(_live_pixel_actions.values())
         if not live:
@@ -3217,7 +3349,7 @@ def _streamed_child_action(child, act, strings_sel):
 
 def _streamed_child_action_stop(child):
     """Clear ad-hoc actions for *child* and black out its spans."""
-    engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
+    engine = _output_engine()
     cleared = []
     with _live_pixel_lock:
         for fid, entry in list(_live_pixel_actions.items()):
@@ -3235,6 +3367,85 @@ def _streamed_child_action_stop(child):
             except Exception:
                 log.exception("live pixel stop blackout failed")
     return len(cleared)
+
+
+# ── Identify a port (#953 first-time setup guide) ────────────────────────────
+# Lights one port (or every configured port) of a pixel controller for a few
+# seconds, through the same live-pixel ticker ad-hoc actions use, so the
+# operator can walk outside and see which string answers. Entries are keyed
+# "identify:<cid>:<port>" — never a real fixture id — and expire on a timer.
+
+_IDENTIFY_COLOURS = {"red": (255, 0, 0), "green": (0, 255, 0), "blue": (0, 0, 255),
+                     "white": (255, 255, 255)}
+_identify_timers = {}
+
+
+def _identify_key(cid, port):
+    return f"identify:{cid}:{port}"
+
+
+def _identify_stop(cid, ports=None):
+    """End identify entries for *cid* (all ports, or just *ports*) and black
+    out their spans. Returns how many were cleared."""
+    engine = _output_engine()
+    cleared = []
+    with _live_pixel_lock:
+        for key, entry in list(_live_pixel_actions.items()):
+            if not (isinstance(key, str) and key.startswith(f"identify:{cid}:")):
+                continue
+            if ports is not None and entry.get("port") not in ports:
+                continue
+            cleared.append(_live_pixel_actions.pop(key))
+            t = _identify_timers.pop(key, None)
+            if t is not None:
+                t.cancel()
+    if engine is not None:
+        for entry in cleared:
+            try:
+                for spans in entry["map"].fixture_spans(entry["fixture"]):
+                    for span in spans:
+                        buf = engine.get_universe(span["universe"])
+                        buf.all_intensity = True
+                        buf.set_channels(span["uniChannelStart"],
+                                         b"\x00" * span["channels"])
+            except Exception:
+                log.exception("identify blackout failed")
+    return len(cleared)
+
+
+def _identify_ports(child, ports, pattern="solid", rgb=(255, 0, 0), seconds=8.0):
+    """Start identifying *ports* of *child*. Raises ValueError for a port the
+    stored config gives no pixels. Returns the ports lit."""
+    omap = pixel_output.PixelOutputMap.build(child)
+    cid = child.get("id")
+    by_port = {int(p.get("port")): p for p in ((child.get("hinks") or {}).get("ports") or [])
+               if p.get("enabled", True) and int(p.get("leds") or 0) > 0}
+    for port in ports:
+        if port not in by_port:
+            raise ValueError(f"port {port} has no pixel count yet — enter one first")
+    _identify_stop(cid, set(ports))
+    r, g, b = rgb
+    act = ({"type": 4, "r": r, "g": g, "b": b, "speedMs": 120, "spacing": 8,
+            "direction": 0} if pattern == "chase"
+           else {"type": 1, "r": r, "g": g, "b": b})
+    now = time.time()
+    with _live_pixel_lock:
+        for port in ports:
+            leds = int(by_port[port]["leds"])
+            key = _identify_key(cid, port)
+            fixture = {"id": key, "childId": cid, "fixtureType": "led",
+                       "strings": [{"port": port, "leds": leds}]}
+            _live_pixel_actions[key] = {
+                "fid": key, "fixture": fixture, "map": omap, "port": port,
+                "type": act["type"], "params": act, "pixels": leds,
+                "startedAt": now,
+            }
+            t = threading.Timer(seconds, _identify_stop, args=(cid, {port}))
+            t.daemon = True
+            _identify_timers[key] = t
+            t.start()
+    _live_pixel_start()
+    return list(ports)
 
 
 @app.post("/api/children/<int:cid>/action")
@@ -3418,6 +3629,7 @@ def api_layout_get():
             fixture_data["effectiveFovDeg"] = _effective_fov_for_camera(f)
         layout["fixtures"].append({
             **fixture_data,
+            "pixelTarget": fixture_types.is_pixel_target(f, child_map),   # #961
             "x": pos.get("x", 0),
             "y": pos.get("y", 0),
             "z": pos.get("z", 0),
@@ -3532,7 +3744,8 @@ def api_stage_save():
 
 @app.get("/api/fixtures")
 def api_fixtures_get():
-    return jsonify(_fixtures)
+    by_id = {c.get("id"): c for c in _children}
+    return jsonify([_fixture_view(f, by_id) for f in _fixtures])
 
 def _validate_fixture_strings(strings):
     """#864 / #866 — validate optional per-string position (x/y/z) and
@@ -3692,6 +3905,15 @@ def api_fixtures_create():
     err = fixture_types.validate_create(fixture_type, body)
     if err:
         return jsonify(err=err), 400
+    # #961 — a pixel controller is hardware, not a fixture: refuse the
+    # string-less placeholder the pre-#961 Setup flow used to create.
+    if fixture_types.is_controller_placeholder(
+            {"fixtureType": fixture_type, "type": ftype,
+             "childId": body.get("childId"), "strings": body.get("strings")},
+            {c.get("id"): c for c in _children}):
+        return jsonify(err="A HinksPix controller is hardware, not a fixture — "
+                           "it is listed in Setup \u2192 Hardware. Add its ports as "
+                           "fixtures from Configure."), 400
     with _lock:
         f = {
             "id": _nxt_fix, "name": name or f"Fixture {_nxt_fix}",
@@ -13677,12 +13899,18 @@ def api_dmx_start():
                 _drive_movers_to_home(engine)
             except Exception:
                 log.exception("drive-to-home crashed")
-            if (_dmx_settings.get("bootBlinkFixtures", True)
-                    and not _boot_blink_done):
+            # #960 — every engine start blinks (not once per launch);
+            # _run_boot_blink itself refuses during a show.
+            if _dmx_settings.get("bootBlinkFixtures", True):
                 _run_boot_blink(engine)
         import threading as _thr
         _thr.Thread(target=_home_then_blink, daemon=True).start()
-    return jsonify(ok=True, protocol=protocol)
+    blink = None
+    if engine.running and _dmx_settings.get("bootBlinkFixtures", True) \
+            and not _show_is_running():
+        _dfx, _pl = _blink_plan()
+        blink = {"dmx": len(_dfx), "pixel": len(_pl)}
+    return jsonify(ok=True, protocol=protocol, blink=blink)
 
 @app.post("/api/dmx/stop")
 def api_dmx_stop():
@@ -13788,13 +14016,17 @@ def api_dmx_blackout():
 
 @app.post("/api/dmx/blink")
 def api_dmx_blink():
-    """Rainbow-cycle all DMX fixtures (same as boot blink). Engine must be running."""
-    engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
+    """Blink every fixture (same as the engine-start blink): DMX rainbow +
+    pixel strings R/G/B (#960). Engine must be running; refused during a show."""
+    engine = _output_engine()
     if not engine:
         return jsonify(ok=False, err="DMX engine is not running"), 400
-    dmx_count = sum(1 for f in _fixtures if f.get("fixtureType") == "dmx")
-    if dmx_count == 0:
-        return jsonify(ok=False, err="No DMX fixtures defined — add one via Add Fixture"), 400
+    if _show_is_running():
+        return jsonify(ok=False, err="A show is running — stop it to blink"), 409
+    _dfx, _pl = _blink_plan()
+    dmx_count = len(_dfx)
+    if dmx_count == 0 and not _pl:
+        return jsonify(ok=False, err="No DMX fixtures or pixel strings defined"), 400
     # #687 — re-seed Home pose before the manual blink so the rainbow is
     # visibly on-axis (matches auto-start behaviour).
     def _home_then_blink():
@@ -13805,7 +14037,7 @@ def api_dmx_blink():
         _run_boot_blink(engine, True)
     import threading as _thr_blink
     _thr_blink.Thread(target=_home_then_blink, daemon=True).start()
-    return jsonify(ok=True, fixtures=dmx_count)
+    return jsonify(ok=True, fixtures=dmx_count + len(_pl), dmx=dmx_count, pixel=len(_pl))
 
 @app.post("/api/dmx/channel")
 def api_dmx_set_channel():
@@ -13987,8 +14219,16 @@ def api_dmx_monitor(uni):
     wire whenever globalBrightness < 255 — the operator couldn't
     sanity-check 'is the master actually scaling?' from the SPA.
     Now the monitor reads the same scaled view the send loop uses.
+
+    #957 follow-up — read the CONFIGURED protocol's engine first. Show
+    playback writes only to that engine (`_dmx_playback_single`); with
+    Art-Net also running and holding the same universe number, the old
+    fixed (artnet, sacn) order returned Art-Net's idle zeros while sACN
+    streamed the show (QA read 0 lit pixels as the controller's E1.31
+    counters climbed). `engine` in the response says which buffer this is.
     """
-    for engine in (_artnet, _sacn):
+    first = _sacn if _dmx_settings.get("protocol") == "sacn" else _artnet
+    for engine in (first, _sacn if first is _artnet else _artnet):
         if engine.running and uni in engine._universes:
             g_bri = _settings.get("globalBrightness", 255)
             if g_bri < 255:
@@ -13999,9 +14239,10 @@ def api_dmx_monitor(uni):
                 )
             else:
                 data = engine._universes[uni].get_data()
-            return jsonify({"universe": uni, "channels": list(data)})
+            return jsonify({"universe": uni, "channels": list(data),
+                            "engine": "sacn" if engine is _sacn else "artnet"})
     # No engine running or universe not created — return zeros
-    return jsonify({"universe": uni, "channels": [0] * 512})
+    return jsonify({"universe": uni, "channels": [0] * 512, "engine": None})
 
 @app.post("/api/dmx/monitor/<int:uni>/set")
 def api_dmx_monitor_set(uni):
@@ -14159,26 +14400,109 @@ def _drive_movers_to_home(engine, settle_ms=400):
 
 
 # ── Boot blink function (#389) ────────────────────────────────────────────
-_boot_blink_done = False
+_boot_blink_done = False       # kept for callers/tests; no longer a gate (#960)
+_blink_lock = threading.Lock()
+
+
+def _show_is_running():
+    return bool(_show_playback.get("running") or _settings.get("runnerRunning"))
+
+
+def _blink_plan():
+    """What an engine-start blink would light: (dmx fixtures, pixel plans).
+    Pixel plans are streamed-controller fixtures with pixels (#940/#961)."""
+    dmx_fx = [f for f in _fixtures if f.get("fixtureType") == "dmx"]
+    by_id = {c.get("id"): c for c in _children}
+    maps, plans = {}, []
+    for f in _fixtures:
+        child = by_id.get(f.get("childId"))
+        if child is None or child.get("type") != "hinkspix":
+            continue
+        if not fixture_types.is_pixel_target(f, by_id):
+            continue
+        cid = child["id"]
+        if cid not in maps:
+            try:
+                maps[cid] = pixel_output.PixelOutputMap.build(child)
+            except (ValueError, TypeError):
+                maps[cid] = None
+        if maps[cid] is None:
+            continue
+        pixels = sum(int(s.get("leds") or 0) for s in (f.get("strings") or []))
+        if pixels > 0:
+            plans.append({"fixture": f, "map": maps[cid], "pixels": pixels})
+    return dmx_fx, plans
+
+
+def _run_pixel_blink(engine, plans, step_s=0.3):
+    """#960 — pixel strings: dark → red → green → blue → dark (the three
+    colours double as a colour-order check), then put back whatever was on
+    those spans before."""
+    spans = []
+    for plan in plans:
+        for fs in plan["map"].fixture_spans(plan["fixture"]):
+            spans.extend(fs)
+    saved = []
+    for sp in spans:
+        buf = engine.get_universe(sp["universe"])
+        start = sp["uniChannelStart"] - 1
+        saved.append((buf, sp, bytes(buf.get_data()[start:start + sp["channels"]])))
+
+    def paint(rgb):
+        for plan in plans:
+            pixel_output.write_fixture_frame(engine, plan["map"], plan["fixture"],
+                                             bytes(rgb) * plan["pixels"])
+    try:
+        for rgb in ((0, 0, 0), (255, 0, 0), (0, 255, 0), (0, 0, 255), (0, 0, 0)):
+            paint(rgb)
+            time.sleep(step_s)
+    finally:
+        for buf, sp, data in saved:
+            buf.all_intensity = True
+            buf.set_channels(sp["uniChannelStart"], data)
+
 
 def _run_boot_blink(engine, force=False):
-    """Boot sequence for DMX fixtures (#487): hold at layout-forward
-    position (already seeded by _apply_profile_defaults) → brief blackout
-    hold → rainbow cycle → final blackout. The mover never slews —
-    pan/tilt are untouched throughout so the fixture visibly stays on
-    its layout direction while colour and dimmer confirm the pipeline
-    is alive.
+    """Engine-start blink (#389/#487, #960): every DMX fixture holds at its
+    layout-forward position → brief blackout → rainbow cycle → blackout, and
+    every pixel-controller string flashes R, G, B → dark. Movers never slew.
 
-    Runs once on boot unless force=True (manual blink from Settings).
-    """
+    #960 — runs on EVERY engine start (it used to be once per launch, so a
+    stop → start never blinked), and includes streamed pixel strings (it used
+    to be DMX only). Never during a show, and never over a live pixel action
+    (identify / ad-hoc action), so it cannot interrupt anything. `force`
+    (the Settings Blink button) skips nothing else. Returns the counts it
+    blinked, or None when it didn't run."""
     global _boot_blink_done
-    if _boot_blink_done and not force:
-        return
     _boot_blink_done = True
+    if _show_is_running():
+        log.info("Blink skipped: a show is running")
+        return None
+    if not _blink_lock.acquire(blocking=False):
+        log.info("Blink skipped: one is already running")
+        return None
     try:
-        _run_boot_blink_body(engine, force)
-    except Exception:
-        log.exception("Boot blink crashed")
+        dmx_fx, plans = _blink_plan()
+        with _live_pixel_lock:
+            live = bool(_live_pixel_actions)
+        if live:
+            plans = []
+        log.info("Boot blink: %d DMX, %d pixel fixture(s)%s", len(dmx_fx), len(plans),
+                 " (pixel strings busy with a live action)" if live else "")
+        px = None
+        if plans:
+            px = threading.Thread(target=_run_pixel_blink, args=(engine, plans),
+                                  daemon=True, name="pixel-blink")
+            px.start()
+        try:
+            _run_boot_blink_body(engine, force)
+        except Exception:
+            log.exception("Boot blink crashed")
+        if px is not None:
+            px.join(timeout=5)
+        return {"dmx": len(dmx_fx), "pixel": len(plans)}
+    finally:
+        _blink_lock.release()
 
 
 def _run_boot_blink_body(engine, force):
@@ -14349,8 +14673,7 @@ if _dmx_settings.get("autoStartEngine", True) and _dmx_settings.get("universeRou
                     _drive_movers_to_home(_engine)
                 except Exception:
                     log.exception("drive-to-home crashed")
-                if (_dmx_settings.get("bootBlinkFixtures", True)
-                        and not _boot_blink_done):
+                if _dmx_settings.get("bootBlinkFixtures", True):   # #960
                     _run_boot_blink(_engine)
             import threading as _thr
             _thr.Thread(target=_home_then_blink, daemon=True).start()

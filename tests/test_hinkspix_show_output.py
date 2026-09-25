@@ -151,6 +151,31 @@ def main():
             ok("every lit pixel is pure red (255, 0, 0)", lit == {(255, 0, 0)},
                f"lit colours seen: {sorted(lit)[:5]}")
 
+        print("#957 follow-up — /api/dmx/monitor shows what sACN is streaming")
+        from dmx_universe import DMXUniverse
+        time.sleep(0.3)
+        m = c.get(f"/api/dmx/monitor/{BASE_UNI}").get_json() or {}
+        ch = m.get("channels") or []
+        mlit = {tuple(ch[i:i + 3]) for i in range(0, LEDS * 3, 3)} - {(0, 0, 0)}
+        ok("monitor reads the sACN engine", m.get("engine") == "sacn", m.get("engine"))
+        ok("monitor shows lit red pixels", mlit == {(255, 0, 0)}, sorted(mlit)[:5])
+        # Art-Net also running and holding the same universe number (idle
+        # zeros) must not shadow the configured sACN engine. Simulated
+        # without a socket so nothing is sent on the LAN.
+        art = ps._artnet
+        saved = (art._running, dict(art._universes))
+        art._running = True
+        art._universes[BASE_UNI] = DMXUniverse(BASE_UNI)
+        try:
+            m2 = c.get(f"/api/dmx/monitor/{BASE_UNI}").get_json() or {}
+        finally:
+            art._running = saved[0]
+            art._universes.clear()
+            art._universes.update(saved[1])
+        ch2 = m2.get("channels") or []
+        ok("an idle running Art-Net doesn't shadow the sACN show in the monitor",
+           m2.get("engine") == "sacn" and any(ch2[:LEDS * 3]), m2.get("engine"))
+
         stop_everything(c)
 
         print("#958 — timeline start takes the same path")

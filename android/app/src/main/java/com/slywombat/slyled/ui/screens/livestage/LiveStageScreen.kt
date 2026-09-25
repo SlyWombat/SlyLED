@@ -636,6 +636,7 @@ private fun StageCanvas(
         // --- 4. Draw fixtures ---
         projectedPositions.clear()
         for (fixture in fixtures) {
+            if (!fixture.isPickable()) continue   // #961 — controller is hardware
             val lc = posMap[fixture.id]
             val fx = (lc?.x ?: fixture.x).toFloat()
             val fy = (lc?.y ?: fixture.y).toFloat()

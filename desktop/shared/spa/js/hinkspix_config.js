@@ -34,7 +34,8 @@
 //    snapshot puts the device into a state this orchestrator does not describe.
 
 var _hw = {cid: null, step: 1, device: null, plan: null, job: null,
-           backups: [], ack: {}, busy: false, msg: null, poll: null};
+           backups: [], ack: {}, busy: false, msg: null, poll: null,
+           loading: null};
 
 var _HW_STEPS = ['Read', 'Edit', 'Review', 'Apply', 'Verify'];
 
@@ -58,8 +59,20 @@ function hinksConfig(cid, step) {
   _hw.step = step || 1;
   _hw.msg = null;
   _hwPollStop();
-  _hwRender();
+  _hwRender(true);
   _hwLoad().then(function () { _hwRender(); });
+}
+
+// #955 — moving between steps is a view change, not a device read. Reading
+// the controller takes 2-6 s; re-reading on every step click stacked
+// overlapping reads, and each one re-rendered the wizard when it landed —
+// over the port editor if that was open by then. Reads happen on open and on
+// "Read again" only.
+function _hwGo(step, reread) {
+  _hw.step = step;
+  _hw.msg = null;
+  _hwRender();
+  if (reread) _hwLoad().then(function () { _hwRender(); });
 }
 
 function _hwFetch(url, opts) {
@@ -71,8 +84,11 @@ function _hwFetch(url, opts) {
 
 function _hwLoad() {
   // One round: what the device holds, and what this orchestrator thinks of it.
+  // #955 — a read already in flight for this controller is reused, not
+  // duplicated.
   var id = _hw.cid;
-  return Promise.all([_hwFetch('/api/hinkspix/' + id + '/device-config'),
+  if (_hw.loading && _hw.loading.cid === id) return _hw.loading.p;
+  var p = Promise.all([_hwFetch('/api/hinkspix/' + id + '/device-config'),
                       _hwFetch('/api/hinkspix/' + id + '/apply')])
     .then(function (out) {
       var dev = out[0], job = out[1];
@@ -96,6 +112,10 @@ function _hwLoad() {
       }
       _hw.msg = null;
     });
+  var done = function () { if (_hw.loading && _hw.loading.p === p) _hw.loading = null; };
+  p.then(done, done);
+  _hw.loading = {cid: id, p: p};
+  return p;
 }
 
 function _hwSay(text, good) {
@@ -105,9 +125,14 @@ function _hwSay(text, good) {
 
 // ── Rendering ────────────────────────────────────────────────────────────────
 
-function _hwRender() {
+function _hwRender(force) {
   var el = document.getElementById('modal-body');
   if (!el) return;
+  // #955 — async completions (the device read, the apply-job poll) must not
+  // paint over whatever is on screen now: the port editor opened from step 2
+  // shares #modal-body. Paint only while the wizard is showing, or when it is
+  // being opened (force). Closing the editor repaints it (_popModal hook).
+  if (!force && !document.getElementById('hpw-root')) return;
   var body = '<div id="hpw-root" style="font-size:.9em">'
     + _hwStrip() + _hwMsg() + _hwStepBody() + '</div>';
   document.getElementById('modal-title').textContent =
@@ -126,11 +151,17 @@ function _hwStrip() {
   var h = '<div style="display:flex;gap:.4em;margin-bottom:.6em;flex-wrap:wrap">';
   _HW_STEPS.forEach(function (name, i) {
     var n = i + 1, cur = (n === _hw.step);
-    h += '<button class="btn" onclick="hinksConfig(' + _hw.cid + ',' + n + ')"'
+    h += '<button class="btn" onclick="_hwGo(' + n + ')"'
       + ' style="background:' + (cur ? '#2563eb' : '#335') + ';color:#fff;'
       + (cur ? 'font-weight:bold' : 'opacity:.75') + '">'
       + n + '. ' + name + '</button>';
   });
+  // #953 — back to the plain-words first-time guide (identify, colour test).
+  if (typeof hinksGuide === 'function') {
+    h += '<button class="btn" onclick="hinksGuide(' + _hw.cid + ')" style="background:#14532d;'
+      + 'color:#bbf7d0;font-size:.85em" title="First-time setup: find, name and check your strings">'
+      + 'Setup guide</button>';
+  }
   return h + _hwSyncBadge() + '</div>';
 }
 
@@ -224,7 +255,7 @@ function _hwReadStep() {
   }
 
   h += '<div style="margin-top:1em"><button class="btn btn-on" '
-    + 'onclick="hinksConfig(' + _hw.cid + ',2)">Next: edit SlyLED’s copy →</button> '
+    + 'onclick="_hwGo(2)">Next: edit SlyLED’s copy →</button> '
     + '<button class="btn" style="background:#335;color:#fff" onclick="_hwLoad().then(_hwRender)">'
     + 'Read again</button></div>';
   return h;
@@ -285,7 +316,7 @@ function _hwEditStep() {
     + 'come back here. A port’s geometry (length in mm) is stage-mm, never a '
     + 'DMX fraction — correct lengths in the fixture editor, not here.</div>'
     + '<div style="margin-top:1em"><button class="btn" style="background:#2563eb;color:#fff" '
-    + 'onclick="hinksConfig(' + _hw.cid + ',3)">Next: review the requests →</button></div>';
+    + 'onclick="_hwGo(3)">Next: review the requests →</button></div>';
 }
 
 function _hwOpenEditor() {
@@ -308,7 +339,7 @@ function _hwReviewStep() {
       + '<div style="margin-top:1em">'
       + '<button class="btn btn-on" onclick="_hwPlan()">Build the plan</button> '
       + '<button class="btn" style="background:#335;color:#fff" '
-      + 'onclick="hinksConfig(' + _hw.cid + ',2)">← Edit SlyLED’s copy</button>'
+      + 'onclick="_hwGo(2)">← Edit SlyLED’s copy</button>'
       + '</div>';
   }
   var plan = _hw.plan, reqs = plan.requests || [];
@@ -492,7 +523,7 @@ function _hwApplyStep() {
     return '<div style="color:#9ab">No push has run in this session. Review a '
       + 'configuration and push it from step 3.</div>'
       + '<div style="margin-top:1em"><button class="btn" style="background:#335;color:#fff" '
-      + 'onclick="hinksConfig(' + _hw.cid + ',3)">Review the requests →</button></div>';
+      + 'onclick="_hwGo(3)">Review the requests →</button></div>';
   }
 
   var steps = st.steps || [], done = st.stepsDone || [];
@@ -573,7 +604,7 @@ function _hwApplyStep() {
   }
 
   h += '<div style="margin-top:1em"><button class="btn" style="background:#335;color:#fff" '
-    + 'onclick="hinksConfig(' + _hw.cid + ',5)">Verification →</button> '
+    + 'onclick="_hwGo(5)">Verification →</button> '
     + '<button class="btn" style="background:#335;color:#fff" onclick="_hwPollStart()">'
     + 'Refresh progress</button></div>';
   return h;
@@ -637,7 +668,7 @@ function _hwVerifyStep() {
   }
 
   h += '<div style="margin-top:1em"><button class="btn" style="background:#335;color:#fff" '
-    + 'onclick="hinksConfig(' + _hw.cid + ',1)">Read the controller again →</button></div>';
+    + 'onclick="_hwGo(1, true)">Read the controller again →</button></div>';
   return h;
 }
 

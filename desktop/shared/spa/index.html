@@ -509,7 +509,7 @@
     </div>
     <div style='margin-top:.6em;border-top:1px solid #1e293b;padding-top:.5em'>
       <label style='display:flex;align-items:center;gap:.4em;font-size:.82em;cursor:pointer'><input type='checkbox' id='dmx-auto-start' checked onchange='saveDmxBootSettings()'>Auto-start engine on boot</label>
-      <label style='display:flex;align-items:center;gap:.4em;font-size:.82em;cursor:pointer;margin-top:.3em'><input type='checkbox' id='dmx-boot-blink' checked onchange='saveDmxBootSettings()'>Blink fixtures on boot</label>
+      <label style='display:flex;align-items:center;gap:.4em;font-size:.82em;cursor:pointer;margin-top:.3em'><input type='checkbox' id='dmx-boot-blink' checked onchange='saveDmxBootSettings()'><span title='Every time the DMX engine starts: DMX fixtures run a rainbow and pixel-controller strings (HinksPix) flash red, green, blue. Never during a show. Performers (ESP32 / D1 Mini) show their own boot animation instead.'>Blink fixtures when the engine starts</span></label>
     </div>
     <div id='dmx-artnet-opts'>
       <div style='margin-top:.5em;font-size:.85em;font-weight:bold;color:#94a3b8'>Universe Routing</div>
@@ -801,6 +801,7 @@
 <script src="/js/calibration.js"></script>
 <script src="/js/hinkspix.js"></script>
 <script src="/js/hinkspix_config.js"></script>
+<script src="/js/hinkspix_guide.js"></script>
 <script src="/js/settings.js"></script>
 <script src="/js/firmware.js"></script>
 <script src="/js/camera-deploy.js"></script>

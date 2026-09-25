@@ -342,6 +342,17 @@ L'interface principale de conception et de contrôle. SPA complète à 7 onglets
 **Lancement :** `powershell -File desktop\windows\run.ps1` ou exécutez `SlyLED.exe`
 **Installation :** Exécutez `SlyLED-Setup.exe` (inclut l'icône de la barre système)
 
+### Linux (contrôleur sans écran)
+Le même orchestrateur, en service d'arrière-plan sur une machine de baie ou de banc sans écran — un Raspberry Pi 4/5, un NUC ou tout hôte Ubuntu 22.04+ / Debian Bookworm+ (x86_64 ou aarch64). On le pilote depuis un navigateur sur une autre machine ou depuis l'application Android.
+
+**Installation :** depuis une copie des sources SlyLED, exécutez `sudo bash desktop/linux/install.sh`. Le code est installé dans `/opt/slyled` avec son propre environnement Python, le compte de service `slyled` est créé (membre de `dialout`, pour que l'onglet Firmware puisse flasher les cartes USB) et le service `slyled` démarre sur le port 8080. Ouvrez ensuite `http://<hôte>:8080`.
+**Données :** projets, réglages et journaux sont conservés dans `/var/lib/slyled/SlyLED/data` ; le firmware téléchargé dans `/var/lib/slyled/SlyLED/firmware`.
+**Journaux :** `journalctl -u slyled -f`
+**Mise à jour :** relancez l'installateur depuis les sources plus récentes ; vos données sont conservées.
+**Désinstallation :** `sudo bash desktop/linux/install.sh --uninstall` (conserve les données ; ajoutez `--purge` pour les supprimer avec le compte de service).
+**Pare-feu :** si ufw ou firewalld est actif, l'installateur ouvre TCP 8080 et UDP 4210, 4211, 5568 et 6454.
+**Réseau :** la découverte, Art-Net et le balayage des caméras utilisent toutes les interfaces réseau physiques ; les ponts Docker/VM et les tunnels VPN sont ignorés.
+
 ### Application Android
 Outil opérateur en direct pour exécuter des spectacles depuis votre téléphone. Se connecte au serveur de bureau par Wi-Fi. Depuis la version 1.8.1, l'onglet Contrôle est refait en **Surface de commande** — voir #888 / `docs/design/mobile_ui_redesign.md`.
 
@@ -416,6 +427,20 @@ Cliquez sur **+ Projecteur DMX** dans l'onglet Configuration pour lancer l'assis
 1. **Choisir le projecteur** : Recherchez dans l'Open Fixture Library (700+ projecteurs) ou creez un projecteur personnalise
 2. **Definir l'adresse** : Univers, adresse de depart et nom — avec detection de conflits en temps reel
 3. **Confirmer** : Verifiez tous les parametres, cliquez sur "Creer le projecteur"
+
+### Configurer un contrôleur HinksPix
+Un HinksPix PRO est un **contrôleur de pixels** : SlyLED lui envoie les couleurs par le réseau (sACN ou Art-Net) et il pilote les guirlandes branchées sur ses ports. Le contrôleur lui-même est du **matériel, pas un projecteur** — il apparaît dans **Configuration → Matériel**. Chaque guirlande sur un de ses ports est un projecteur LED que vous placez, ciblez et programmez comme les autres.
+
+1. **Ajoutez-le.** Configuration → **Découvrir** trouve les contrôleurs HinksPix du réseau (ou **+ Ajouter** avec son IP). Il apparaît comme une ligne de **Matériel** avec son état, son micrologiciel et un résumé comme *1 port configuré · 2 univers (1–2) · 200px*. **Renommer** lui donne un nom.
+2. **Set up** (le bouton vert de cette ligne) ouvre le guide de première configuration :
+   - **Votre contrôleur** — ce que SlyLED a trouvé, en clair : le modèle, le micrologiciel et le rôle de chaque carte. Les cartes *Long-Range* demandent un récepteur au bout de chaque câble ; les cartes *Local SPI* acceptent les pixels directement. Il avertit aussi si le protocole DMX de SlyLED (Réglages → DMX) et le protocole d'entrée du contrôleur diffèrent — ils doivent correspondre, sinon rien ne s'allume.
+   - **Votre implantation** — **Importer depuis mon dossier de spectacle xLights** (le plus rapide si vous utilisez xLights), ou **Configurer à la main**.
+   - **Vos guirlandes** — pour chaque port occupé, saisissez le nombre de pixels (ou la longueur et les pixels par mètre, puis **=**) et un nom, par exemple *Avant-toit du garage*. Un port accepte jusqu'à 680 pixels RVB sur un PRO V1/V2. L'enregistrement crée un projecteur LED par port. Rien n'est encore envoyé au contrôleur.
+   - **Envoyer** — un résumé en clair puis **Envoyer au contrôleur…** : SlyLED sauvegarde d'abord le contrôleur (pour pouvoir toujours revenir en arrière), écrit l'implantation, le redémarre et relit pour vérifier.
+   - **Vérifier** — **Identifier** allume un port en rouge pendant 8 secondes. **Test des couleurs** l'allume en rouge puis en vert et demande ce que vous avez vu ; SlyLED en déduit l'ordre des couleurs de la guirlande. **Tout allumer** lance une poursuite lente sur chaque guirlande.
+3. **Rien ne s'allume ?** Vérifiez que l'implantation a été envoyée, que le protocole DMX correspond, et que le moteur DMX tourne. Sinon la guirlande est peut-être sur un autre port — ou utilisez la page de test du contrôleur (**Web UI** sur sa ligne de Matériel).
+
+**Configure** sur la ligne de Matériel ouvre la vue complète en cinq étapes (Lire · Modifier · Vérifier · Appliquer · Contrôler) pour les renvois, sauvegardes et restaurations.
 
 ### Moniteur DMX
 Parametres puis DMX puis **Moniteur DMX** ouvre une grille en temps reel de 512 canaux par univers. Cliquez sur n'importe quelle cellule pour definir une valeur. Code couleur par intensite.
