@@ -44,7 +44,25 @@ the operator defaults it ships with, and where each piece lives.
   /api/schedule/resume` clears it.
 * **autoStartShow (#390)** is skipped when the scheduler is enabled.
 
-## Not in Phase 1
+## Phase 2
 
-Fades, HinksPix compile/hand-off (Phase 2), multi-lane targets, brightness
-scheduling.
+* **Compile** (`schedule_compile.compile_week`, pure): the next ≤ 7 local days
+  of winning windows → per-weekday rows (split at midnight; the second half on
+  the next weekday), one `.ply` per offline entry plus `WASH` for idle.
+  `POST /api/schedule/compile/hinkspix/<cid> {deploy, horizonDays}`; deploy
+  reuses the #941 worker (render `.hseq`, upload `.ply`s + seven `.sched`,
+  set the clock). Rows name their own playlist (`hinkspix_files.schedule_text`).
+* **Hand-off policy** `doc.hinkspix.handoff`: `manual` (default — files +
+  clock, never a mode switch), `shutdown` (standalone on clean exit, live on
+  start), `always` (standalone after each send). `nightly` recompiles + sends
+  the listed `controllers` at 03:30 local, which also re-syncs the controller
+  clock (DST).
+* **Fades** `entry.transition {fadeInS, fadeOutS}`: a separate multiplier at
+  the engines' send-time master gate (`_master_with_fade`) — the operator's
+  master value is never written. Fade-in only when coming up from dark;
+  fade-out only ahead of an `off` edge; a manual verb resets it.
+
+## Not built
+
+Multi-lane targets, brightness scheduling, shuffle, the Android Status-tab
+health line.

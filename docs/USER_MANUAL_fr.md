@@ -815,6 +815,11 @@ Compile une Timeline en instructions d'action minimales par Performer :
 
 **Redémarrages.** Si SlyLED redémarre au milieu d'une fenêtre, il reprend le spectacle là où il en serait. Les timelines sont compilées automatiquement avant de démarrer et le moteur DMX est lancé s'il était arrêté. Les transitions se font sans image noire.
 
+**Fondus.** Une entrée peut apparaître en fondu (secondes) quand elle part du noir, et disparaître en fondu juste avant que le programme passe au noir (*off*). Jamais entre deux spectacles ni vers le fond : ceux-là s'enchaînent sans creux. Le fondu s'applique par-dessus le Master, sans déplacer le curseur.
+
+**Continuer sans SlyLED (HinksPix).** Cochez **Offline** sur les entrées que le HinksPix doit jouer seul. Dans **HinksPix — keep playing when SlyLED is off**, cochez le contrôleur puis **Preview compile** ou **Compile & send** : SlyLED rend chaque timeline, copie les spectacles et le fond sur la carte SD avec un programme par jour de semaine, et règle l'horloge. Le contrôleur n'a pas de calendrier : une compilation couvre la semaine à venir ; *recompile + send nightly* la refait à 03:30 (et corrige l'horloge aux changements d'heure). **Hand-off** choisit quand le contrôleur joue depuis la SD : copie seule, autonome quand SlyLED se ferme / direct au démarrage, ou autonome après chaque envoi. La configuration des ports doit d'abord avoir été envoyée (Configure → Apply). Ce qui ne peut pas tourner hors ligne est signalé.
+
+
 
 ---
 

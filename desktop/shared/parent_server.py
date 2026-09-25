@@ -41,6 +41,8 @@ import pixel_renderer          # #938 server-side per-pixel effect renderer
 import pixel_output            # #939 pixel-string -> DMX universe mapping
 import schedule_eval           # #954 show scheduler: pure evaluator
 import show_scheduler          # #954 show scheduler: engine thread
+import schedule_compile        # #954 Phase 2: compile to a HinksPix
+import hinkspix_files          # #941 on-SD formats (compile errors)
 from wled_bridge import (wled_probe, wled_stop,
                          wled_get_effects, wled_get_palettes, wled_get_segments)
 from spatial_engine import (catmull_rom_sample, resolve_fixture,
@@ -828,12 +830,43 @@ _profile_lib = ProfileLibrary(data_dir=str(DATA))
 # construction. The engines's send loops snapshot the master once per
 # frame and apply the gamma-corrected scaling at get-time, eliminating
 # the per-render-path scaling boilerplate that v1.7.82 introduced.
+# #954 Phase 2 — scheduler fades. A separate multiplier at the same send-time
+# gate as the #853 master: the operator's / auto-brightness master VALUE is
+# never touched, the fade just scales on top of it for a few seconds.
+_fade = {"t0": 0.0, "dur": 0.0, "from": 1.0, "to": 1.0}
+
+
+def _fade_factor():
+    f = _fade
+    if f["dur"] <= 0:
+        return f["to"]
+    x = (time.monotonic() - f["t0"]) / f["dur"]
+    if x >= 1.0:
+        return f["to"]
+    return f["from"] + (f["to"] - f["from"]) * max(0.0, x)
+
+
+def _fade_start(frm, to, seconds):
+    _fade.update(t0=time.monotonic(), dur=max(0.0, float(seconds)),
+                 **{"from": float(frm), "to": float(to)})
+
+
+def _fade_reset():
+    _fade.update(t0=0.0, dur=0.0, **{"from": 1.0, "to": 1.0})
+
+
+def _master_with_fade():
+    m = _settings.get("globalBrightness", 255)
+    f = _fade_factor()
+    return m if f >= 1.0 else int(m * f)
+
+
 _artnet = ArtNetEngine(
-    get_global_brightness=lambda: _settings.get("globalBrightness", 255),
+    get_global_brightness=_master_with_fade,
     get_intensity_offsets=lambda uni: _get_intensity_offsets(uni),
 )
 _sacn = sACNEngine(
-    get_global_brightness=lambda: _settings.get("globalBrightness", 255),
+    get_global_brightness=_master_with_fade,
     get_intensity_offsets=lambda uni: _get_intensity_offsets(uni),
 )
 
@@ -848,6 +881,10 @@ def _graceful_dmx_shutdown():
     if _shutdown_blackout_done:
         return
     _shutdown_blackout_done = True
+    try:
+        _schedule_handoff("standalone", "SlyLED is exiting")   # #954 Phase 2
+    except Exception:
+        pass
     for eng in (_artnet, _sacn):
         try:
             if eng.running:
@@ -2929,6 +2966,9 @@ def start_background_tasks():
     # #954 — the show scheduler (idles when disabled). Waits ~5 s so the
     # DMX engine auto-start and the first performer ping land first.
     _scheduler.start(delay_s=5.0)
+    threading.Thread(target=_schedule_nightly_loop, daemon=True, name="schedule-nightly").start()
+    threading.Thread(target=_schedule_handoff, args=("live", "SlyLED started"),
+                     daemon=True, name="schedule-handoff").start()
     _check_depth_install_marker()
     _check_ollama_install_marker()
     # Boot-time warm-up of any AI helper that's already installed.
@@ -17744,6 +17784,10 @@ class _SchedulerActions:
 
     def off(self, decision):
         _stop_show_internal(sweep=True)
+        _fade_reset()
+
+    def fade(self, frm, to, seconds):
+        _fade_start(frm, to, seconds)
 
 
 def _schedule_save_state(state):
@@ -17758,10 +17802,11 @@ _scheduler = show_scheduler.ShowScheduler(
 def _schedule_manual(kind="manual"):
     """#954 — a playback verb that didn't come from the scheduler: when the
     scheduler is on, the operator takes over (override)."""
-    if not _schedule_doc.get("enabled"):
-        return
     body = request.get_json(silent=True) or {}
     if body.get("source") == "schedule":
+        return
+    _fade_reset()               # manual control is never left half-faded
+    if not _schedule_doc.get("enabled"):
         return
     _scheduler.set_override(kind, by=request.remote_addr)
 
@@ -17853,6 +17898,9 @@ def api_schedule_state():
     view = _scheduler.state_view(_schedule_doc)
     names = {t["id"]: t.get("name") for t in _timelines}
     view["timelines"] = names
+    view["hinkspixControllers"] = [{"id": c["id"], "name": c.get("name"), "ip": c.get("ip")}
+                                   for c in _children if c.get("type") == "hinkspix"]
+    view["hinkspix"] = _schedule_state.get("hinkspix") or {}
     view["log"] = list(_scheduler.log_ring)[-20:]
     return jsonify(schedule_eval.to_json(view))
 
@@ -17885,6 +17933,147 @@ def api_schedule_override():
 def api_schedule_resume():
     _scheduler.resume(by=request.remote_addr)
     return jsonify(ok=True)
+
+
+# ── Phase 2: compile to a HinksPix + hand-off ────────────────────────────────
+
+def _timeline_has_pixels_on(tid, cid):
+    """True when timeline *tid* drives pixels on HinksPix *cid* (a track on
+    one of its port fixtures, or a stage-wide track while it has any)."""
+    tl = next((t for t in _timelines if t.get("id") == tid), None)
+    if tl is None:
+        return False
+    by_id = {c.get("id"): c for c in _children}
+    pix = {f["id"] for f in _fixtures
+           if f.get("childId") == cid and fixture_types.is_pixel_target(f, by_id)}
+    if not pix:
+        return False
+    for tr in tl.get("tracks") or []:
+        if not tr.get("clips"):
+            continue
+        if tr.get("allPerformers") or tr.get("fixtureId") in pix:
+            return True
+    return False
+
+
+def _schedule_compile_for(cid, deploy=False, days=7, why="manual"):
+    """Compile the schedule for HinksPix *cid*; optionally send it.
+    Returns (compile_result, deploy_message)."""
+    import orch_hinkspix as _oh
+    child = next((c for c in _children if c.get("id") == cid), None)
+    if child is None or child.get("type") != "hinkspix":
+        raise ValueError(f"child {cid} is not a HinksPix")
+    tz = schedule_eval.tzinfo_for(_schedule_doc)
+    first = datetime.now(tz).date()
+    names = {t["id"]: t.get("name") or f"timeline {t['id']}" for t in _timelines}
+    durs = {t["id"]: t.get("durationS", 60) for t in _timelines}
+    res = schedule_compile.compile_week(
+        _schedule_doc, first, lambda tid: _timeline_has_pixels_on(tid, cid),
+        lambda tid: names.get(tid, f"timeline {tid}"), lambda tid: durs.get(tid, 60), days)
+    msg = None
+    if deploy:
+        policy = ((_schedule_doc.get("hinkspix") or {}).get("handoff") or "manual")
+        hinks = child.get("hinks") or {}
+        reasons = []
+        if not res["playlists"]:
+            reasons.append("nothing to send — no offline entries with pixels on this controller")
+        if child.get("status") != 1:
+            reasons.append("controller is offline")
+        if not hinks.get("uploadSupported"):
+            reasons.append("controller firmware can't take network uploads")
+        if hinks.get("configHash") != _oh._config_hash(hinks):
+            reasons.append("its port config hasn't been pushed yet (Configure → Apply)")
+        if _oh._deploy_state.get(cid, {}).get("running"):
+            reasons.append("a send is already running")
+        if reasons:
+            msg = "not sent: " + "; ".join(reasons)
+        else:
+            cfg = _oh._deploy_cfg()
+            ent = cfg.setdefault(str(cid), {})
+            ent.update({"playlists": res["playlists"], "days": res["days"],
+                        "switchMode": policy == "always",
+                        "compiledFrom": {"from": res["from"], "to": res["to"], "why": why}})
+            _oh._save_deploy_cfg(cfg)
+
+            def _run():
+                for tids in res["playlists"].values():
+                    for tid in tids:
+                        _bake_and_wait(tid)
+                _oh._deploy_state[cid] = {"running": True, "phase": "start",
+                                          "message": "Starting", "ok": None, "cancel": False}
+                _oh._deploy_worker(cid, child, cfg)
+                st = _oh._deploy_state.get(cid) or {}
+                _scheduler._note(f"HinksPix {child.get('name') or child.get('ip')}: offline "
+                                 f"schedule {'sent' if st.get('ok') else 'send FAILED: ' + str(st.get('err'))}")
+            threading.Thread(target=_run, daemon=True, name=f"sched-compile-{cid}").start()
+            msg = "sending" + (" (controller will switch to standalone)" if policy == "always" else "")
+    info = {"compiledAt": datetime.now(tz).isoformat(), "from": res["from"], "to": res["to"],
+            "warnings": res["warnings"], "playlists": res["playlists"], "deploy": msg, "why": why}
+    _schedule_state.setdefault("hinkspix", {})[str(cid)] = info
+    _save("schedule_state", _schedule_state)
+    _scheduler._note(f"compiled the offline schedule for HinksPix {child.get('name') or cid} "
+                     f"({res['from']}–{res['to']}, {why}){'; ' + msg if msg else ''}")
+    return res, msg
+
+
+@app.post("/api/schedule/compile/hinkspix/<int:cid>")
+def api_schedule_compile_hinkspix(cid):
+    body = request.get_json(silent=True) or {}
+    try:
+        days = max(1, min(7, int(body.get("horizonDays", 7))))
+        res, msg = _schedule_compile_for(cid, deploy=bool(body.get("deploy")), days=days)
+    except (ValueError, schedule_eval.ScheduleError, hinkspix_files.HinksPixFileError) as exc:
+        return jsonify(ok=False, err=str(exc)), 400
+    return jsonify(ok=True, compile=schedule_eval.to_json(res), deploy=msg)
+
+
+def _schedule_nightly_loop():
+    """03:30 local: recompile + send for the chosen controllers (Phase 2).
+    Also re-syncs each controller's clock (the deploy sets it), which is what
+    corrects the DST hour on a controller that only knows the weekday."""
+    while True:
+        time.sleep(60)
+        try:
+            hp = _schedule_doc.get("hinkspix") or {}
+            if not (_schedule_doc.get("enabled") and hp.get("nightly") and hp.get("controllers")):
+                continue
+            tz = schedule_eval.tzinfo_for(_schedule_doc)
+            now = datetime.now(tz)
+            today = now.date().isoformat()
+            if (now.hour, now.minute) < (3, 30) or _schedule_state.get("nightlyDone") == today:
+                continue
+            _schedule_state["nightlyDone"] = today
+            _save("schedule_state", _schedule_state)
+            for cid in hp["controllers"]:
+                try:
+                    _schedule_compile_for(int(cid), deploy=True, why="nightly")
+                except Exception as exc:
+                    log.warning("Scheduler: nightly compile for %s failed: %s", cid, exc)
+        except Exception:
+            log.exception("Scheduler: nightly loop failed — continuing")
+
+
+def _schedule_handoff(mode, why):
+    """Hand-off policy "shutdown" (Phase 2): the chosen controllers go to
+    standalone when SlyLED exits cleanly and back to live when it starts, so
+    the SD schedule covers the time the PC is off. Other policies: no-op."""
+    hp = _schedule_doc.get("hinkspix") or {}
+    if hp.get("handoff") != "shutdown" or not hp.get("controllers"):
+        return
+    import hinkspix_bridge as _hb
+    import hinkspix_tcp as _ht
+    for cid in hp["controllers"]:
+        child = next((c for c in _children if c.get("id") == cid), None)
+        if not child or not child.get("ip"):
+            continue
+        try:
+            if mode == "standalone":
+                _ht.HinksPixTcp(child["ip"]).set_mode(_ht.MODE_MASTER)
+            else:
+                _hb.op_mode_ethernet(child["ip"])
+            log.info("Scheduler: HinksPix %s -> %s (%s)", child["ip"], mode, why)
+        except Exception as exc:
+            log.warning("Scheduler: HinksPix %s -> %s failed: %s", child["ip"], mode, exc)
 
 
 @app.get("/api/schedule/log")

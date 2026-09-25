@@ -242,7 +242,8 @@ def _window(doc, sch, ent, day, tz, notes, specificity, exception):
             "startDesc": describe_ref(ent.get("start")),
             "endDesc": describe_ref(end_ref),
             "play": ent.get("play") or {"kind": "off"},
-            "resume": ent.get("resume", "position")}
+            "resume": ent.get("resume", "position"),
+            "transition": ent.get("transition") or None}
 
 
 def _rank(w):
@@ -365,7 +366,8 @@ def evaluate(doc, now_utc, _with_next=True):
            "window": None if win is None else {"startUtc": win["startUtc"],
                                                "endUtc": win["endUtc"],
                                                "startDesc": win["startDesc"],
-                                               "endDesc": win["endDesc"]},
+                                               "endDesc": win["endDesc"],
+                                               "transition": win.get("transition")},
            "reason": reason,
            "candidates": [{"scheduleId": c["scheduleId"], "entryId": c["entryId"],
                            "name": _label(c), "priority": c["priority"],

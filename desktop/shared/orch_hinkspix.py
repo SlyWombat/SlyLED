@@ -2124,8 +2124,23 @@ def _deploy_worker(cid, child, cfg):
     tcp = htcp.HinksPixTcp(child["ip"])
     playlist_name = hf.short_name(entry.get("playlistName") or "SHOW")
     items = entry.get("items") or []
+    # #954 Phase 2 — a compiled show schedule deploys several playlists
+    # (the wash and each offline entry) with per-day rows that name their
+    # own playlist. The hand-edited standalone config keeps its one list.
+    compiled = entry.get("playlists")
+    if compiled:
+        playlists = {hf.short_name(k): [int(t) for t in v] for k, v in compiled.items()}
+        order = []
+        for tids in playlists.values():
+            for t in tids:
+                if t not in order:
+                    order.append(t)
+        items = [{"timelineId": t} for t in order]
+    else:
+        playlists = {playlist_name: [i.get("timelineId") for i in items]}
     manifest = []
     taken = set()
+    seq_for = {}
 
     try:
         # ── render ──────────────────────────────────────────────────
@@ -2150,6 +2165,7 @@ def _deploy_worker(cid, child, cfg):
             sha = _hashlib.sha256(open(path, "rb").read()).hexdigest()[:16]
             rendered.append({"name": name, "path": path, "bytes": written,
                              "sha256": sha, "frames": n_frames})
+            seq_for[tid] = name
             manifest.append({"name": f"{name}.hseq", "bytes": written,
                              "sha256": sha, "ack": False})
 
@@ -2165,14 +2181,21 @@ def _deploy_worker(cid, child, cfg):
             manifest[i]["ack"] = True
 
         # ── playlist + seven schedules ──────────────────────────────
-        _set_progress(cid, phase="playlist", message="Uploading playlist")
-        ply = hf.playlist_text([{"hseq": f"{r['name']}.hseq"} for r in rendered])
-        tcp.upload(f"{playlist_name}.ply", ply.encode("ascii"))
-        manifest.append({"name": f"{playlist_name}.ply", "bytes": len(ply),
-                         "ack": True})
+        for pl_name, tids in playlists.items():
+            _set_progress(cid, phase="playlist", message=f"Uploading {pl_name}.ply")
+            ply = hf.playlist_text([{"hseq": f"{seq_for[t]}.hseq"} for t in tids
+                                    if t in seq_for])
+            tcp.upload(f"{pl_name}.ply", ply.encode("ascii"))
+            manifest.append({"name": f"{pl_name}.ply", "bytes": len(ply),
+                             "ack": True})
 
         rows_by_day = {d: [] for d in hf.DAYS}
-        for row in entry.get("schedule") or []:
+        if entry.get("days"):
+            # Compiled (#954): rows already grouped by weekday name, each
+            # naming its own playlist.
+            for d in hf.DAYS:
+                rows_by_day[d] = list((entry.get("days") or {}).get(d) or [])
+        for row in ([] if entry.get("days") else (entry.get("schedule") or [])):
             for day in (row.get("days") or []):
                 key = str(day).upper()
                 # accept MON/MONDAY
@@ -2191,20 +2214,24 @@ def _deploy_worker(cid, child, cfg):
         # ── clock, then standalone ──────────────────────────────────
         _set_progress(cid, phase="clock", message="Setting controller clock")
         tcp.set_time()
-        _set_progress(cid, phase="mode", message="Switching to standalone")
-        tcp.set_mode(htcp.MODE_MASTER)
+        # #954 — a compiled schedule under the "manual" / "shutdown" hand-off
+        # policy copies the files but leaves the controller in live mode.
+        switch = entry.get("switchMode", True)
+        if switch:
+            _set_progress(cid, phase="mode", message="Switching to standalone")
+            tcp.set_mode(htcp.MODE_MASTER)
 
         with ps._lock:
             cfg.setdefault(str(cid), {})["lastDeploy"] = {
                 "at": int(time.time()), "ok": True, "files": manifest,
-                "mode": "G", "clockSetAt": int(time.time()),
-                "playlist": playlist_name,
+                "mode": "G" if switch else "live", "clockSetAt": int(time.time()),
+                "playlist": ",".join(playlists) if compiled else playlist_name,
             }
             _save_deploy_cfg(cfg)
         _set_progress(cid, running=False, ok=True, phase="done",
                       message=f"Deployed {len(rendered)} sequence(s)")
-        ps.log.info("HinksPix %s: deployed %d sequences, standalone mode",
-                    child["ip"], len(rendered))
+        ps.log.info("HinksPix %s: deployed %d sequences, %s mode",
+                    child["ip"], len(rendered), "standalone" if switch else "live")
     except (htcp.HinksPixError, hf.HinksPixFileError, OSError) as exc:
         _set_progress(cid, running=False, ok=False, err=str(exc))
         with ps._lock:

@@ -234,6 +234,10 @@ def schedule_text(rows, playlist_name):
     Only enabled rows are written, sorted by start time — matching
     ``Schedule::saveAsFile``. An empty list produces ``[]``, which is how a day
     with no playback is expressed (and how a stale schedule gets cleared).
+
+    A row may name its own ``playlist`` (#954 — the compiled show schedule puts
+    the wash and the show in different ``.ply`` files); rows without one use
+    ``playlist_name``.
     """
     out = []
     enabled = [r for r in rows or [] if r.get("enabled", True)]
@@ -245,7 +249,7 @@ def schedule_text(rows, playlist_name):
         sh, sm = _hhmm(row.get("start"))
         eh, em = _hhmm(row.get("end"))
         out.append('{"S":"%02d%02d","E":"%02d%02d","P":"%s.ply","Q":%d}'
-                   % (sh, sm, eh, em, short_name(playlist_name),
+                   % (sh, sm, eh, em, short_name(row.get("playlist") or playlist_name),
                       int(row.get("repeat") or 0)))
     return "[" + ",".join(out) + "]"
 

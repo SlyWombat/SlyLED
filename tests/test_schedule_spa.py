@@ -51,6 +51,9 @@ def main():
 
     ps._timelines[:] = [{"id": 31, "name": "Eaves show", "durationS": 60, "tracks": []},
                         {"id": 32, "name": "Wash", "durationS": 60, "tracks": []}]
+    # A HinksPix, so the Phase 2 "keep playing when SlyLED is off" section shows.
+    ps._children[:] = [{"id": 5, "type": "hinkspix", "ip": "192.0.2.6", "name": "Kazoo",
+                        "sc": 0, "strings": [], "status": 1, "hinks": {"ports": []}}]
     threading.Thread(target=lambda: ps.app.run(host="127.0.0.1", port=PORT, threaded=True,
                                                use_reloader=False), daemon=True).start()
     time.sleep(1.5)
@@ -88,6 +91,13 @@ def main():
         page.fill(".sc-s-name", "Christmas")
         page.select_option(".sc-play-tl", "31")
         page.select_option("#sc-idle-tl", "32")
+        # Phase 2 controls
+        page.fill(".sc-e-fin", "3")
+        page.fill(".sc-e-fout", "8")
+        page.check(".sc-e-offline")
+        ok("HinksPix offline section offered", page.query_selector("#sc-hp-policy") is not None)
+        page.evaluate("() => { document.querySelector('.sc-hp-ctl').checked = true; }")
+        page.evaluate("() => { document.getElementById('sc-hp-policy').value = 'shutdown'; }")
         n_before = len(puts)
         page.evaluate("() => _scSave()")
         time.sleep(1.2)
@@ -99,6 +109,12 @@ def main():
            sch)
         ok("idle wash saved", ps._schedule_doc["idle"] == {"kind": "timeline", "timelineId": 32},
            ps._schedule_doc["idle"])
+        e0 = sch[0]["entries"][0] if sch else {}
+        ok("fades saved", e0.get("transition") == {"fadeInS": 3, "fadeOutS": 8}, e0.get("transition"))
+        ok("offline flag saved", (e0.get("hinkspix") or {}).get("compile") is True, e0.get("hinkspix"))
+        hpdoc = ps._schedule_doc.get("hinkspix") or {}
+        ok("hand-off policy + controller saved",
+           hpdoc.get("handoff") == "shutdown" and hpdoc.get("controllers") == [5], hpdoc)
         time.sleep(0.8)
         ok("week grid rendered 7 days", len(page.query_selector_all(".sc-day")) == 7)
         ok("the entry is drawn in the grid (legend)",

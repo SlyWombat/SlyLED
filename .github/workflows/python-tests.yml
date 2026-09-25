@@ -151,7 +151,8 @@ jobs:
         # test_schedule_spa.py, runs with chromium below.
         run: |
           for f in tests/test_solar.py tests/test_schedule_eval.py \
-                   tests/test_schedule_engine.py tests/test_schedule_routes.py; do
+                   tests/test_schedule_engine.py tests/test_schedule_routes.py \
+                   tests/test_schedule_compile.py tests/test_schedule_offline.py; do
             echo "== $f"
             SLYLED_DATA=$(mktemp -d) python3 -X utf8 "$f"
           done

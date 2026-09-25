@@ -176,6 +176,19 @@ class ShowScheduler:
             play = decision["play"]
             cur = self.current
             if cur is not None and cur["key"] == decision["key"]:
+                # Phase 2 — fade out ahead of an 'off' edge (never into
+                # another show: that would put a dark dip in a hand-off).
+                tr = (decision.get("window") or {}).get("transition") or {}
+                fo = float(tr.get("fadeOutS") or 0)
+                if fo > 0 and nxt and (nxt.get("play") or {}).get("kind") == "off" \
+                        and not cur.get("fadingOut") and hasattr(self._actions, "fade"):
+                    edge = nxt["atUtc"].timestamp()
+                    if now >= edge - fo:
+                        self._actions.fade(1.0, 0.0, max(0.5, edge - now))
+                        cur["fadingOut"] = True
+                        self._note(f"fading out over {int(edge - now)} s before going dark")
+                    else:
+                        wait = min(wait, edge - fo - now + 0.2)
                 return wait
             if cur is not None and same_content(cur["play"], play) \
                     and play.get("kind") != "off":
@@ -195,6 +208,8 @@ class ShowScheduler:
     def _apply(self, decision, now):
         play = decision["play"]
         kind = play.get("kind")
+        prev_dark = self.current is None or \
+            (self.current.get("play") or {}).get("kind") == "off"
         old = self._what({"entry": None, "source": "nothing"}) if self.current is None \
             else self.current.get("what")
         what = self._what(decision)
@@ -205,6 +220,11 @@ class ShowScheduler:
                 self._actions.play(play, pos, decision)
             else:
                 self._actions.idle(play, decision)
+            # Phase 2 — fade in, only when coming up from dark.
+            tr = (decision.get("window") or {}).get("transition") or {}
+            fi = float(tr.get("fadeInS") or 0)
+            if fi > 0 and prev_dark and hasattr(self._actions, "fade"):
+                self._actions.fade(0.0, 1.0, fi)
         elif kind == "hold":
             self._actions.idle(play, decision)
         else:
