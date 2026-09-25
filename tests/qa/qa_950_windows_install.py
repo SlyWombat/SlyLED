@@ -138,7 +138,11 @@ def step_fetch(a):
 
 def step_install(a):
     print("\n== install (silent; approve the UAC prompt on the desktop)")
-    ok("nothing SlyLED installed beforehand", uninstall_entry() is None, uninstall_entry())
+    prev = uninstall_entry()
+    if a.upgrade:
+        print(f"  upgrading in place over: {prev and prev.get('DisplayName')}")
+    else:
+        ok("nothing SlyLED installed beforehand", prev is None, prev)
     setup = WORK / "SlyLED-Setup.exe"
     log = WORK / "install.log"
     code, out, err = ps(
@@ -319,6 +323,18 @@ def step_verify(a):
     s, st = http("/api/show/status")
     show_before = isinstance(st, dict) and st.get("running")
 
+    # Bakes live in memory only, so after an install/upgrade restart the show is
+    # unbaked; the SPA's Start auto-bakes (show-runtime.js:271), so do the same.
+    for tid in order:
+        http(f"/api/timelines/{tid}/bake", "POST", {})
+    for _ in range(60):
+        s, pl = http("/api/show/playlist")
+        if isinstance(pl, dict) and all(i.get("baked") for i in pl.get("items", [])):
+            break
+        time.sleep(0.5)
+    ok("show baked (as the SPA does before Start)",
+       isinstance(pl, dict) and all(i.get("baked") for i in pl.get("items", [])), pl)
+
     print("\n  -- #958: start the show with the engine stopped")
     http("/api/show/stop", "POST", {})
     http("/api/dmx/stop", "POST", {})
@@ -403,6 +419,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("step", choices=["fetch", "install", "check", "live", "verify", "uninstall"])
     ap.add_argument("--tag")
+    ap.add_argument("--upgrade", action="store_true", help="install over an existing version")
     ap.add_argument("--sha-setup")
     ap.add_argument("--sha-exe")
     ap.add_argument("--rgb", default="0,0,255")
