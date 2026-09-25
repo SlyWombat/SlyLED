@@ -15,5 +15,6 @@ Everything here may talk to **real devices on the house LAN**: the HinksPix PRO 
 | `qa_943_hinkspix.py` | Wire protocol vs a strict socket fake; `--hw-read` / `--hw-apply` on the unit |
 | `qa_945_947_bench.py` | Import → apply → change → apply → restore on the unit (writes, reboots it) |
 | `qa_948_linux_bench.py` | Install + verify the headless Linux service on kdocker3 |
+| `qa_950_windows_install.py` | Install / check / live sACN / uninstall of a Windows dist build on davebook-5 (UAC prompts; run with the Windows QA venv) |
 | `qa_sacn_solid.py` | Solid colour over unicast E1.31 (run from Windows Python on davebook-5: WSL blocks UDP) |
 | `hinkspix_ms160_capture_2026_09_23/` | Factory config captured from the unit, the restore point |
