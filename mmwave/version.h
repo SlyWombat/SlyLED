@@ -10,7 +10,7 @@
 #define MMW_VERSION_H
 
 #define MMW_MAJOR 0
-#define MMW_MINOR 1
+#define MMW_MINOR 2
 #define MMW_PATCH 0
 
 #endif  // MMW_VERSION_H

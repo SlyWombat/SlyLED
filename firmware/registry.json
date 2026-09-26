@@ -6,18 +6,18 @@
             "description": "WS2812B / WS2811 / APA102 LED strip controller with 14 effects + OTA",
             "board": "esp32",
             "fqbn": "esp32:esp32:esp32",
-            "version": "7.5.18",
-            "releaseTag": "esp32-v7.5.18",
+            "version": "7.6.0",
+            "releaseTag": "esp32-v7.6.0",
             "file": "esp32/main.ino.merged.bin",
             "releaseAsset": "esp32-firmware-merged.bin",
             "otaAsset": "esp32-firmware-app.bin",
-            "sha256": "bfce40508f2d21550905a0af0751ede92925e07d24f9e4df080846ec2fd111d1",
+            "sha256": "b18d0f7fa2ca0bc823c4b6a2f938695a77852c5f587dea57e46c69b31e5f96af",
             "flashMethod": "esptool",
             "buildDefines": [
                 "BOARD_ESP32"
             ],
-            "sourceHash": "a6517fcdf44ecc1efd3ffe8b91df728897fd833bd3b8cd11a30402ee59be3938",
-            "otaSha256": "aba1acf3f4b4ba28842c84d009a1c97ccb0ecac63cfd9669f7bdddb6e1b12393",
+            "sourceHash": "909f3e65e7c5a61411562cc47a413161e7674282ad0e29499119bd2fdc06241d",
+            "otaSha256": "a8ea7de78c7d24c5b4d52f2ab091ec3aea41e4ee864dcd7592ec61ea9b270bd0",
             "autoBuild": true,
             "sketch": "main",
             "hashPaths": [
@@ -32,16 +32,16 @@
             "description": "WS2812B / WS2811 / APA102 LED strip controller with 14 effects + OTA",
             "board": "d1mini",
             "fqbn": "esp8266:esp8266:d1_mini",
-            "version": "7.5.17",
-            "releaseTag": "d1mini-v7.5.17",
+            "version": "7.6.0",
+            "releaseTag": "d1mini-v7.6.0",
             "file": "d1mini/main.ino.bin",
             "releaseAsset": "d1mini-firmware.bin",
-            "sha256": "9b440881424f98fcf9f7b0a3b498f45fec04ee2ec7b3309134c501e61031efdc",
+            "sha256": "7be08c414a3e5164bec89c74245aa83c5a5a729250829c10894d762d8ea4f5f6",
             "flashMethod": "esptool",
             "buildDefines": [
                 "BOARD_D1MINI"
             ],
-            "sourceHash": "a6517fcdf44ecc1efd3ffe8b91df728897fd833bd3b8cd11a30402ee59be3938",
+            "sourceHash": "909f3e65e7c5a61411562cc47a413161e7674282ad0e29499119bd2fdc06241d",
             "autoBuild": true,
             "sketch": "main",
             "hashPaths": [
@@ -56,25 +56,26 @@
             "description": "DMX-512 output via RS-485 transceiver — receives SlyLED actions, outputs DMX frames at 40Hz",
             "board": "esp32",
             "fqbn": "esp32:esp32:esp32",
-            "version": "7.5.20",
-            "releaseTag": "esp32-dmx-bridge-v7.5.20",
+            "version": "7.6.0",
+            "releaseTag": "esp32-dmx-bridge-v7.6.0",
             "file": "esp32-dmx/main.ino.merged.bin",
             "releaseAsset": "esp32-dmx-bridge-firmware.bin",
             "otaAsset": "esp32-dmx-bridge-firmware-app.bin",
-            "sha256": "d8c2e67d8fa0c4f0ae3881133dc8c65923fe78e029b13f59b69fb972a63740f1",
+            "sha256": "147e6f8a3f204bc6e09b2dc59772c0a681fb9f8003213cbcd0e966bee02dd614",
             "flashMethod": "esptool",
             "buildDefines": [
                 "DMX_BRIDGE"
             ],
             "buildFlags": "-DDMX_BRIDGE",
-            "otaSha256": "9f62c45ff793b4eb06f667261804e683155f7243fd0082f8e1ecc92f1a88a95d",
+            "otaSha256": "fc54bda64df77796b3caccf601b11ed71b539dc6cad1d5c1abf0a0616d9b095f",
             "autoBuild": true,
             "sketch": "main",
             "hashPaths": [
                 "main",
                 "libraries"
             ],
-            "versionFile": "main/version.h"
+            "versionFile": "main/version.h",
+            "sourceHash": "909f3e65e7c5a61411562cc47a413161e7674282ad0e29499119bd2fdc06241d"
         },
         {
             "id": "child-led-giga",
@@ -82,11 +83,11 @@
             "description": "Onboard RGB LED performer — 1 pixel, all 14 effects",
             "board": "giga",
             "fqbn": "arduino:mbed_giga:giga",
-            "version": "7.5.2",
-            "releaseTag": "giga-child-v7.5.2",
+            "version": "7.6.0",
+            "releaseTag": "giga-child-v7.6.0",
             "file": "giga/child-led.bin",
             "releaseAsset": "giga-child-firmware.bin",
-            "sha256": "f3b0798b5c261bd08398cd76de846fc2e9e4180ae042b41a8b6a9a8a41ca296c",
+            "sha256": "9d54911975ed259fa44ee81b3b2bba344763522749b2a77f8f432d178a8a088e",
             "flashMethod": "dfu",
             "buildDefines": [
                 "GIGA_CHILD"
@@ -117,11 +118,11 @@
             "description": "Giga R1 with RS-485 shield — Art-Net receiver, DMX-512 output",
             "board": "giga",
             "fqbn": "arduino:mbed_giga:giga",
-            "version": "7.5.20",
-            "releaseTag": "giga-dmx-bridge-v7.5.20",
+            "version": "7.6.0",
+            "releaseTag": "giga-dmx-bridge-v7.6.0",
             "file": "giga/dmx-bridge.bin",
             "releaseAsset": "giga-dmx-bridge-firmware.bin",
-            "sha256": "d86dd941c689f2f07bd016bee58d00184e533e3330b3557fb818d89880fa08a5",
+            "sha256": "144f2395c916b1d29a5322a0938e883cbbc0ad8d16a0f7c405b1ae84763087e0",
             "flashMethod": "dfu",
             "buildDefines": [
                 "GIGA_DMX"
@@ -134,19 +135,19 @@
             "description": "Waveshare ESP32-S3 1.28inch round LCD — orientation controller for DMX moving heads",
             "board": "esp32s3",
             "fqbn": "esp32:esp32:esp32s3",
-            "version": "1.2.14",
-            "releaseTag": "gyro-v1.2.14",
+            "version": "1.3.0",
+            "releaseTag": "gyro-v1.3.0",
             "file": "esp32s3/main.ino.merged.bin",
             "releaseAsset": "esp32s3-gyro-firmware.bin",
             "otaAsset": "esp32s3-gyro-firmware-app.bin",
-            "sha256": "ee4349495aaef76b71a14904248ca17985dbd9fa953ad632d298a0a343df7698",
+            "sha256": "60ec684a006fe8eba7dacce12302ff01cab340558de3678f1c469cf6af91327c",
             "flashMethod": "esptool",
             "buildDefines": [
                 "GYRO_BOARD"
             ],
             "buildFlags": "-DGYRO_BOARD",
-            "sourceHash": "a6517fcdf44ecc1efd3ffe8b91df728897fd833bd3b8cd11a30402ee59be3938",
-            "otaSha256": "1cce7bb807046e6f9a744b99f003f3544c0ac547d974a2b322bc47e0107e7363",
+            "sourceHash": "909f3e65e7c5a61411562cc47a413161e7674282ad0e29499119bd2fdc06241d",
+            "otaSha256": "829b45e8576f30929641ab75971efc99983e57b52d382e80edbc13d03c927dcf",
             "autoBuild": true,
             "sketch": "main",
             "hashPaths": [
@@ -161,7 +162,7 @@
             "description": "Rd-03D mmWave radar presence node — ESP32-C61-DevKitC-1, isolated arduino-esp32 toolchain (arduino-cli-mmwave.yaml)",
             "board": "ESP32-C61-DevKitC-1 (MMwave radar node)",
             "fqbn": "esp32:esp32:esp32c61:FlashSize=8M,PartitionScheme=default_8MB",
-            "version": "0.1.0",
+            "version": "0.2.0",
             "file": "esp32c61-mmwave/mmwave.bin",
             "flashMethod": "esptool",
             "autoBuild": true,
@@ -170,18 +171,19 @@
                 "mmwave"
             ],
             "versionFile": "mmwave/version.h",
-            "arduinoConfigFile": "arduino-cli-mmwave.yaml"
+            "arduinoConfigFile": "arduino-cli-mmwave.yaml",
+            "sourceHash": "862cb5fab144609172380061d73a30b24abb6312ab80b19b9dcf2dfc66a0f0e1"
         },
         {
             "id": "camera-node",
             "name": "Camera Node (Linux SBC)",
             "description": "USB V4L2 camera node — Flask + UDP discovery, runs on any Debian/Ubuntu SBC (Orange Pi, Raspberry Pi)",
             "board": "camera",
-            "version": "1.6.6",
-            "releaseTag": "cam-v1.6.6",
+            "version": "1.7.0",
+            "releaseTag": "cam-v1.7.0",
             "file": "orangepi/camera_server.py",
-            "releaseAsset": "camera-firmware-v1.6.6.zip",
-            "sha256": "7adf0e10e3a08a435c9643f9f83ebe0200f1abd4765db5c6c9ccff964b740471",
+            "releaseAsset": "camera-firmware-v1.7.0.zip",
+            "sha256": "250bfa02ece024e7d74f867fbd59d71873d62f03a475c9e43a34724dbdc5c9ee",
             "flashMethod": "ssh",
             "autoBuild": false
         }
