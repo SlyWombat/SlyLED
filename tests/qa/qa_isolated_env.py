@@ -21,6 +21,8 @@ containers and networks (Ollama, Homepage, …) are never touched.
   python tests/qa/qa_isolated_env.py smoke
   python tests/qa/qa_isolated_env.py suites [--commit SHA] [--only substr]
       server-spawning test suites, run inside the isolated net (operator rule)
+  python tests/qa/qa_isolated_env.py peer966 [--commit SHA]
+      #966 acceptance: two orchestrators built from source, both must alert
   python tests/qa/qa_isolated_env.py down
 """
 import argparse
@@ -234,6 +236,117 @@ def suites(commit, only):
         ok(f"{name}: {res[:90]}", good)
 
 
+ORCH_SRC_IMG = "slyled-qa-orch:src"
+
+
+def _fetch_and_build(commit):
+    """Fetch the commit on kdocker3 and build the orchestrator image from the
+    repo's own Dockerfile (#962) plus the test-runner image (Playwright)."""
+    sha = subprocess.run(["git", "-C", str(QA.parent.parent), "rev-parse", commit],
+                         capture_output=True, text=True, check=True).stdout.strip()
+    rc, out, _ = ssh(f"test -f {REMOTE}/.pre_images.json && echo have")
+    if "have" not in out:
+        _, imgs, _ = ssh("docker images --format '{{.Repository}}:{{.Tag}}'")
+        ssh(f"mkdir -p {REMOTE} && cat > {REMOTE}/.pre_images.json", stdin=json.dumps(sorted(set(imgs.split()))))
+    rc, _, e = ssh(f"cd {REMOTE} && (sudo -n rm -rf src || rm -rf src) && mkdir src && cd src && git init -q && "
+                   f"git fetch -q --depth 1 https://github.com/SlyWombat/SlyLED.git {sha} && git checkout -q FETCH_HEAD",
+                   timeout=900)
+    ok(f"source {sha[:7]} fetched", rc == 0, e[-200:])
+    rc, _, e = ssh(f"cd {REMOTE}/src && docker build -q -t {ORCH_SRC_IMG} .", timeout=2400)
+    ok("orchestrator image built from the repo Dockerfile", rc == 0, e[-300:])
+    rc, _, e = ssh(f"cd {REMOTE} && cat > Dockerfile.tests && docker build -q -t {TEST_IMG} -f Dockerfile.tests .",
+                   timeout=1800, stdin=DOCKERFILE)
+    ok("test-runner image built", rc == 0, e[-300:])
+    return sha
+
+
+def peer966(commit):
+    """#966 acceptance: two orchestrators on one network must each alert."""
+    sha = _fetch_and_build(commit)
+    print(f"== #966 peer detection at {sha[:7]} (isolated net)")
+    rc, out, _ = ssh(f"docker network ls --format '{{{{.Name}}}}' | grep -c '^{NET}$'")
+    if out.strip() != "1":
+        ssh(f"docker network create --internal --subnet {SUBNET} {NET}")
+    for name in ("orch-a", "orch-b"):
+        rc, _, e = ssh(f"docker rm -f slyled-qa-{name} >/dev/null 2>&1; docker run -d --name slyled-qa-{name} "
+                       f"--hostname qa-{name} --network {NET} --ip {IPS[name]} -e TZ=America/Toronto {ORCH_SRC_IMG}")
+        ok(f"{name} started", rc == 0, e[-200:])
+    probe = r'''
+import json, sys, time, urllib.request
+from playwright.sync_api import sync_playwright
+A, B = "http://10.250.0.10:8080", "http://10.250.0.11:8080"
+phase = sys.argv[1]
+def st(u):
+    try:
+        with urllib.request.urlopen(u + "/status", timeout=5) as r: return json.loads(r.read())
+    except Exception as e: return {"_err": str(e)}
+def peers(u): return st(u).get("peerOrchestrators") or []
+def banner(u):
+  try:
+    with sync_playwright() as p:
+        b = p.chromium.launch(); pg = b.new_page()
+        # The SPA polls continuously, so it never reaches "networkidle".
+        pg.goto(u + "/", wait_until="load", timeout=60000); pg.wait_for_timeout(17000)
+        r = pg.evaluate("(() => {const e=document.getElementById('peer-banner'); return e ? {shown: getComputedStyle(e).display!=='none', text: e.innerText} : {missing: true};})()")
+        b.close(); return r
+  except Exception as e:
+    return {"_err": str(e)[:200]}
+t0 = time.time(); out = {"phase": phase}
+if phase == "both":
+    while time.time() - t0 < 90:
+        pa, pb = peers(A), peers(B)
+        if pa and pb: break
+        time.sleep(3)
+    out.update(secs=round(time.time() - t0), a_sees=pa, b_sees=pb, a_banner=banner(A), b_banner=banner(B))
+elif phase == "b_stopped":
+    while time.time() - t0 < 200:
+        pa = peers(A)
+        if not pa: break
+        time.sleep(5)
+    out.update(secs=round(time.time() - t0), a_sees=pa, a_banner=banner(A))
+elif phase == "b_back":
+    while time.time() - t0 < 90:
+        pa = peers(A)
+        if pa: break
+        time.sleep(3)
+    out.update(secs=round(time.time() - t0), a_sees=pa)
+print(json.dumps(out))
+'''
+    ssh(f"mkdir -p {REMOTE}/probe && cat > {REMOTE}/probe/p966.py", stdin=probe)
+
+    def run(phase):
+        rc, out, e = ssh(f"docker run --rm --network {NET} --ip {IPS['runner']} -v $(cd {REMOTE}/probe && pwd):/p:ro "
+                         f"{TEST_IMG} python /p/p966.py {phase}", timeout=600)
+        try:
+            return json.loads(out.strip().splitlines()[-1])
+        except Exception:
+            return {"_err": (out + e)[-400:]}
+
+    r = run("both")
+    print("  " + json.dumps(r)[:900])
+    a, b = r.get("a_sees") or [], r.get("b_sees") or []
+    ok("orch-a lists orch-b in /status.peerOrchestrators", any(p.get("ip") == IPS["orch-b"] for p in a), a)
+    ok("orch-b lists orch-a in /status.peerOrchestrators", any(p.get("ip") == IPS["orch-a"] for p in b), b)
+    ok("detected within one announce interval (<= 45 s)", (r.get("secs") if r.get("secs") is not None else 999) <= 45, r.get("secs"))
+    ok("peer entry identifies the other (hostname + version + port)",
+       all(p.get("hostname") and p.get("version") and p.get("port") and p.get("instanceId") for p in a + b), a + b)
+    for side in ("a", "b"):
+        bn = r.get(f"{side}_banner") or {}
+        ok(f"orch-{side} SPA shows the conflict banner", bn.get("shown") and "Another SlyLED orchestrator" in (bn.get("text") or ""), bn)
+    ok("orch-a banner names orch-b", "qa-orch-b" in ((r.get("a_banner") or {}).get("text") or "") or IPS["orch-b"] in ((r.get("a_banner") or {}).get("text") or ""), r.get("a_banner"))
+
+    ssh("docker stop -t 20 slyled-qa-orch-b")
+    r = run("b_stopped")
+    print("  " + json.dumps(r)[:500])
+    ok("after orch-b stops, orch-a's peer list clears (<= ~120 s)", r.get("a_sees") == [] and (r.get("secs") if r.get("secs") is not None else 999) <= 130, (r.get("secs"), r.get("a_sees")))
+    ok("orch-a banner hidden once the peer is gone", (r.get("a_banner") or {}).get("shown") is False, r.get("a_banner"))
+
+    ssh("docker start slyled-qa-orch-b")
+    r = run("b_back")
+    print("  " + json.dumps(r)[:400])
+    ok("orch-b restarted → orch-a sees it again (<= 45 s)", bool(r.get("a_sees")) and (r.get("secs") if r.get("secs") is not None else 999) <= 45, (r.get("secs"), r.get("a_sees")))
+
+
 def down():
     print("== down")
     code, out, _ = ssh(f"cat {REMOTE}/.pre_images.json 2>/dev/null || echo '[]'")
@@ -245,7 +358,7 @@ def down():
     ssh(f"docker network rm {NET} 2>/dev/null")
     code, out, _ = ssh("docker images --format '{{.Repository}}:{{.Tag}}'")
     for img in set(out.split()) - pre:
-        if img.startswith(("ghcr.io/slywombat/slyled:", "python:3.12-slim", "python:3.11-slim", "slyled-qa-tests")):
+        if img.startswith(("ghcr.io/slywombat/slyled:", "python:3.12-slim", "python:3.11-slim", "slyled-qa-")):
             ssh(f"docker image rm {img}")
     # Containers run as root and write into the mounted tree, so plain rm fails.
     ssh(f"sudo -n rm -rf {REMOTE} || rm -rf {REMOTE}")
@@ -257,12 +370,12 @@ def down():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("step", choices=["up", "smoke", "suites", "down"])
+    ap.add_argument("step", choices=["up", "smoke", "suites", "peer966", "down"])
     ap.add_argument("--tag", default="2.2.0")
     ap.add_argument("--commit", default="origin/main")
     ap.add_argument("--only", default="", help="substring filter on the suite list")
     a = ap.parse_args()
-    {"up": lambda: up(a.tag), "smoke": smoke, "suites": lambda: suites(a.commit, a.only),
+    {"up": lambda: up(a.tag), "smoke": smoke, "suites": lambda: suites(a.commit, a.only), "peer966": lambda: peer966(a.commit),
      "down": down}[a.step]()
     print(f"\n{_p} passed, {_f} failed out of {_p + _f} tests")
     sys.exit(1 if _f else 0)
