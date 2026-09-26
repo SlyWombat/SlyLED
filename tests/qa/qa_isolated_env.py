@@ -424,8 +424,12 @@ if phase == "main":
     out["status"] = call("/api/ollama-runtime/status")
     out["models"] = call("/api/ollama-runtime/models")
     out["install"] = call("/api/ollama-runtime/install", "POST", {"force": False})
-    out["pull_default"] = call("/api/ollama-runtime/pull", "POST", {"name": "moondream"})
+    out["pull_default"] = call("/api/ollama-runtime/pull", "POST", {"model": "moondream"})
+    out["pull_confirmed_but_disabled"] = call("/api/ollama-runtime/pull", "POST", {"model": "moondream", "confirm": True})
     t0 = time.time(); out["gen"] = call("/api/ai/ollama/test", "POST", {}, t=300); out["gen_s"] = round(time.time() - t0, 1)
+    # Same round-trip with the model named explicitly (what the auto-tune evaluator does),
+    # so a failure of the SPA Test button (no model passed) is told apart from the remote path.
+    t0 = time.time(); out["gen_model"] = call("/api/ollama-runtime/test", "POST", {"model": "qwen2.5vl:7b"}, t=300); out["gen_model_s"] = round(time.time() - t0, 1)
 elif phase == "down":
     out["status"] = call("/api/ollama-runtime/status")
     out["install"] = call("/api/ollama-runtime/install", "POST", {"force": False})
@@ -453,9 +457,13 @@ print(json.dumps(out))
     ok("status says remote and running (not 'not installed')", st.get("remote") is True and st.get("running") is True, st)
     ok("models list comes from the Mac (qwen2.5vl:7b / qwen3-vl:8b)", "qwen2.5vl:7b" in json.dumps(s("models")[1]), s("models"))
     ok("Install is refused/no-op in remote mode (no local Ollama)", s("install")[0] != 200 or not s("install")[1].get("started", False), s("install"))
-    ok("pull onto the remote refused by default (remote pulls disabled)", s("pull_default")[0] in (403, 409), s("pull_default"))
+    ok("pull onto the remote refused by default (remote pulls disabled)", s("pull_default")[0] == 403, s("pull_default"))
+    ok("pull refused even with confirm while remote pulls are disabled", s("pull_confirmed_but_disabled")[0] == 403, s("pull_confirmed_but_disabled"))
+    gm = s("gen_model")[1]
+    ok(f"generate round-trip via the Mac with the model named ({r.get('gen_model_s')} s)",
+       s("gen_model")[0] == 200 and gm.get("ok") is True, gm)
     gen = s("gen")[1]
-    ok(f"AI test round-trip generates via the Mac ({r.get('gen_s')} s)", s("gen")[0] == 200 and gen.get("ok") is not False and "_err" not in gen, gen)
+    ok(f"SPA 'Test' button path (POST /api/ai/ollama/test, no model) uses the active model", gen.get("ok") is True, gen)
 
     ssh("docker stop -t 5 slyled-qa-relay")
     r = run("down")
