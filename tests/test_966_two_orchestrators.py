@@ -99,9 +99,11 @@ def main():
         ok("A lists B", bool(pa), peers_of(ha))
         ok("B lists A", bool(pb), peers_of(hb))
         if pa:
+            # The announce caps the hostname at 64 bytes (CI runner names run long).
             ok("A's entry for B links to B's HTTP port and names it",
                pa[0]["port"] == hb and pa[0]["url"].endswith(f":{hb}")
-               and pa[0]["hostname"] == sb["hostname"] and pa[0]["version"] == sb["version"], pa)
+               and pa[0]["hostname"] and sb["hostname"].startswith(pa[0]["hostname"])
+               and pa[0]["version"] == sb["version"], (pa, sb["hostname"]))
         ok("neither lists itself",
            all(p.get("instanceId") != sa["instanceId"] for p in peers_of(ha))
            and all(p.get("instanceId") != sb["instanceId"] for p in peers_of(hb)))

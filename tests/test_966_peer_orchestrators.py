@@ -4,7 +4,7 @@
 No sockets are opened toward the LAN: packets are fed to the real UDP
 dispatch handlers (`_UDP_DISPATCH`), and the only datagrams sent (the
 announce reply to a new peer) go to loopback. Covers:
-  * CMD_ORCH_ANNOUNCE (0x72) build/parse round-trip + malformed input
+  * CMD_ORCH_ANNOUNCE (0x80) build/parse round-trip + malformed input
   * a PING from a foreign address → peer; from our own / loopback → ignored
   * an announce names the peer (hostname, port, version, link); our own
     instance id is ignored; the ping-only entry for that IP is merged
@@ -43,11 +43,13 @@ def main():
     ok("round-trip", po.parse_announce(pkt) == {"instanceId": 0xDEADBEEF, "port": 8080,
                                                 "version": "2.2.0", "hostname": "kdocker3"},
        po.parse_announce(pkt))
-    ok("header carries cmd 0x72 and the current UDP version",
-       pkt[3] == 0x72 and pkt[2] == ps.UDP_VERSION, pkt[:8])
+    ok("header carries cmd 0x80 and the current UDP version",
+       pkt[3] == 0x80 and pkt[2] == ps.UDP_VERSION and ps.CMD_ORCH_ANNOUNCE == po.CMD_ORCH_ANNOUNCE,
+       pkt[:8])
     ok("truncated datagram → None", po.parse_announce(pkt[:12]) is None)
-    ok("long names are capped at 32 bytes",
-       len(po.parse_announce(po.build_announce(hdr, 1, 1, "v" * 50, "h" * 50))["hostname"]) == 32)
+    long_ = po.parse_announce(po.build_announce(hdr, 1, 1, "v" * 90, "h" * 90))
+    ok("version capped at 32 bytes, hostname at 64",
+       len(long_["version"]) == 32 and len(long_["hostname"]) == 64, long_)
     ok("registered in the dispatch table",
        ps._UDP_DISPATCH[ps.CMD_ORCH_ANNOUNCE][1] is ps._handle_orch_announce
        and ps._UDP_DISPATCH[ps.CMD_PING][1] is ps._handle_ping)

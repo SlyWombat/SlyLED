@@ -17,6 +17,10 @@ the suite if they drift again:
 The payload/direction columns are free-form documentation and are NOT
 checked — the table may carry doc-only annotations there.
 
+Orchestrator↔orchestrator codes (0x80+, #966) never reach firmware, so they
+live in desktop/shared/peer_orchestrators.py, not the headers; rows for them
+are checked against that file instead.
+
 Pure text parsing — no compiler needed. Run:
     python3 tests/test_parity_protocol_doc.py
 """
@@ -51,6 +55,15 @@ def parse_headers():
     return cmds
 
 
+ORCH_ONLY = ROOT / "desktop" / "shared" / "peer_orchestrators.py"
+ORCH_RE = re.compile(r"^CMD_(\w+)\s*=\s*(0x[0-9A-Fa-f]{2})\s*$", re.M)
+
+
+def parse_orch_only():
+    """{name: code} for orchestrator-only commands (#966)."""
+    return {n: int(c, 16) for n, c in ORCH_RE.findall(ORCH_ONLY.read_text(encoding="utf-8"))}
+
+
 def parse_table():
     """{name: code} from CLAUDE.md's protocol table rows."""
     text = CLAUDE_MD.read_text(encoding="utf-8")
@@ -70,7 +83,15 @@ def parse_table():
 def main():
     cmds = parse_headers()
     rows = parse_table()
+    orch = parse_orch_only()
     failures = []
+    for name, code in orch.items():
+        if code < 0x80:
+            failures.append(f"orchestrator-only CMD_{name} (0x{code:02X}) must be in 0x80+")
+        if code in cmds.values():
+            failures.append(f"orchestrator-only CMD_{name} (0x{code:02X}) collides with a firmware code")
+        if rows.get(name) != code:
+            failures.append(f"orchestrator-only CMD_{name} (0x{code:02X}) missing/wrong in CLAUDE.md table")
 
     # 1. Header constant → table row, matching hex.
     for name, code in sorted(cmds.items(), key=lambda kv: kv[1]):
@@ -84,7 +105,7 @@ def main():
 
     # 2. Table row → header constant, matching hex.
     for name, code in sorted(rows.items(), key=lambda kv: kv[1]):
-        if name not in cmds:
+        if name not in cmds and orch.get(name) != code:
             failures.append(
                 f"CLAUDE.md row 0x{code:02X} {name} has no CMD_{name} in the headers")
         # hex mismatch already reported in pass 1 for shared names

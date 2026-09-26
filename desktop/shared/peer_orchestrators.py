@@ -9,7 +9,7 @@ Detection is symmetric by construction:
 * every orchestrator already broadcasts ``CMD_PING`` on UDP 4210 every 30 s
   and listens on 4210 — a PING from an address that isn't one of ours is a
   peer (older orchestrators are caught this way);
-* each orchestrator also broadcasts ``CMD_ORCH_ANNOUNCE`` (0x72) carrying a
+* each orchestrator also broadcasts ``CMD_ORCH_ANNOUNCE`` (0x80) carrying a
   random instance id, its HTTP port, version and hostname. The instance id
   tells two instances on the same host apart, and port + hostname give the
   SPA a link to the other one. Performer / gyro / Giga firmware ignores the
@@ -27,16 +27,20 @@ import struct
 import threading
 import time
 
-CMD_ORCH_ANNOUNCE = 0x72
+# 0x80.. is the orchestrator↔orchestrator range: nothing in the firmware
+# headers (0x7x belongs to mmwave/MmwProtocol.h). Documented in CLAUDE.md's
+# protocol table; tests/test_parity_protocol_doc.py reads it from here.
+CMD_ORCH_ANNOUNCE = 0x80
 _HDR = 8                      # <HBBI magic, version, cmd, epoch>
 MIN_ANNOUNCE_LEN = _HDR + 4 + 2 + 1 + 1
 
 
 def build_announce(header, instance_id, http_port, version, hostname):
     """Payload after the 8-byte header: instanceId(u32) httpPort(u16)
-    verLen(u8) version, hostLen(u8) hostname (each ≤ 32 bytes, UTF-8)."""
+    verLen(u8) version (≤ 32 bytes), hostLen(u8) hostname (≤ 64 bytes),
+    UTF-8 — well inside the listener's 256-byte receive buffer."""
     v = (version or "").encode("utf-8")[:32]
-    h = (hostname or "").encode("utf-8")[:32]
+    h = (hostname or "").encode("utf-8")[:64]
     return (header + struct.pack("<IH", instance_id & 0xFFFFFFFF, int(http_port) & 0xFFFF)
             + bytes([len(v)]) + v + bytes([len(h)]) + h)
 

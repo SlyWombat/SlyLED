@@ -151,7 +151,7 @@ CMD_GYRO_AIM_WIZARD    = 0x6F  # gyro→parent: empirical aim-axis wizard (#869)
 # mmwave/MmwProtocol.h (the node's isolated sketch tree); parity with
 # main/Protocol.h is enforced by tests/test_mmwave_wire_parity.py.
 CMD_MMW_TARGETS = 0x70  # radar node→parent: MmwTargetsPayload — seq(u16) count(u8) flags(u8, bit0 = radar parse healthy) + 3 × {xMm i16, yMm i16, speedCms i16, resMm u16} = 28 bytes; unused slots zeroed. Sent on fresh frames with targets (≤25 Hz) + 1 Hz empty keepalive.
-CMD_ORCH_ANNOUNCE = 0x72  # orchestrator→broadcast (#966): instanceId(u32) httpPort(u16) verLen(u8)+version hostLen(u8)+hostname. Peer detection; performer/gyro/Giga firmware ignores it, UDP_VERSION stays 5.
+CMD_ORCH_ANNOUNCE = 0x80  # orchestrator→broadcast (#966): instanceId(u32) httpPort(u16) verLen(u8)+version hostLen(u8)+hostname. Peer detection; performer/gyro/Giga firmware ignores it, UDP_VERSION stays 5. Mirrors peer_orchestrators.CMD_ORCH_ANNOUNCE.
 CMD_MMW_CONFIG  = 0x71  # parent→node: reserved (mode switch / report-rate cap) — deliberately NOT implemented in v1 (design doc §4.3).
 
 # #825 — uiState codes carried in CMD_GYRO_HEARTBEAT_REP.
