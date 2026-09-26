@@ -192,6 +192,21 @@ def main():
     es = c.get("/api/cameras/settings/evaluator-status").get_json()["modes"]["ai"]
     ok("evaluator-status points at the remote", es["available"] and es["url"] == REMOTE and es["remote"], es)
 
+    print("#968 — AI Engines Test uses the active model")
+    ps._settings["aiAutoTuneModel"] = "qwen2.5vl:3b"
+    ok("no env default model in this test", orr.OLLAMA_MODEL == "")
+    r = c.post("/api/ai/ollama/test", json={}).get_json()
+    ok("POST /api/ai/ollama/test {} succeeds with the selected model",
+       r.get("ok") and r.get("model") == "qwen2.5vl:3b", r)
+    st = c.get("/api/ollama-runtime/status").get_json()
+    ok("status.model is the active model, envModel the env default",
+       st["model"] == "qwen2.5vl:3b" and st["envModel"] == "" and st["activeModel"] == "qwen2.5vl:3b", st)
+    ps._settings.pop("aiAutoTuneModel", None)
+    r = c.post("/api/ai/ollama/test", json={}).get_json()
+    ok("no model selected anywhere → a clear 'pick one' message",
+       not r.get("ok") and "Settings" in (r.get("err") or ""), r)
+    ps._settings["aiAutoTuneModel"] = "qwen2.5vl:3b"
+
     print("Remote down")
     srv.shutdown()
     srv.server_close()

@@ -7712,6 +7712,7 @@ try:
     # #965 — Settings → AI Runtime (local / remote) is read fresh on every
     # call, so edits and project imports apply without a restart.
     _ollama_rt.set_config_provider(lambda: _settings.get("aiRuntime") or {})
+    _ollama_rt.set_model_provider(lambda: _settings.get("aiAutoTuneModel"))   # #968
 except Exception as _e:  # pragma: no cover
     _ollama_rt = None
     log.warning("ollama_runtime not importable: %s", _e)
@@ -7719,7 +7720,7 @@ except Exception as _e:  # pragma: no cover
 
 def _ai_model():
     """The model auto-tune uses: Settings (aiAutoTuneModel) else the env default."""
-    return _settings.get("aiAutoTuneModel") or (_ollama_rt.OLLAMA_MODEL if _ollama_rt else "")
+    return _ollama_rt.active_model() if _ollama_rt else (_settings.get("aiAutoTuneModel") or "")
 
 
 def _ai_runtime_view():

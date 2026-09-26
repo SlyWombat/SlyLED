@@ -60,6 +60,7 @@ _ENV_MODE = (os.environ.get("SLYLED_OLLAMA_MODE") or "").strip().lower() or None
 OLLAMA_URL = _ENV_URL or DEFAULT_LOCAL_URL
 
 _config_provider = None   # callable → settings.aiRuntime dict (parent_server)
+_model_provider = None    # callable → the operator's active model (settings.aiAutoTuneModel)
 
 
 def set_config_provider(fn):
@@ -68,6 +69,27 @@ def set_config_provider(fn):
     project imports apply immediately, no restart)."""
     global _config_provider
     _config_provider = fn
+
+
+def set_model_provider(fn):
+    """#968 — parent_server hands us ``lambda: _settings.get("aiAutoTuneModel")``
+    so every caller resolves the model the same way."""
+    global _model_provider
+    _model_provider = fn
+
+
+def active_model():
+    """The model auto-tune, Test and warm-up use: the operator's selection in
+    Settings → AI Runtime, else the SLYLED_OLLAMA_MODEL env default (#968 —
+    the AI Engines Test button used the empty env default and failed)."""
+    if _model_provider is not None:
+        try:
+            m = _model_provider()
+            if m:
+                return m
+        except Exception:
+            pass
+    return OLLAMA_MODEL
 
 
 def _host_of(url):
@@ -196,8 +218,8 @@ def is_ollama_running(timeout=1.5):
 
 
 def has_model(name=None, timeout=2.0):
-    """True when the requested model (or OLLAMA_MODEL by default) is pulled."""
-    name = name or OLLAMA_MODEL
+    """True when the requested model (or the active model by default) is pulled."""
+    name = name or active_model()
     base = name.split(":")[0]
     try:
         req = urllib.request.Request(f"{current_url()}/api/tags", method="GET")
@@ -298,7 +320,8 @@ def status():
     return {
         "running": running,
         "hasModel": model,
-        "model": OLLAMA_MODEL,
+        "model": active_model(),        # #968 — what Test / auto-tune will use
+        "envModel": OLLAMA_MODEL,       # the SLYLED_OLLAMA_MODEL default, if any
         "url": cfg["url"],
         "mode": cfg["mode"],
         "remote": cfg["mode"] == "remote",
@@ -469,7 +492,7 @@ def warmup(timeout_s: float = 120.0, model: str | None = None):
         return False
     chosen = model
     if chosen is None:
-        for cand in (OLLAMA_MODEL, INSTALLER_MODEL):
+        for cand in (active_model(), INSTALLER_MODEL):
             if has_model(cand):
                 chosen = cand
                 break
@@ -508,7 +531,9 @@ def run_test(prompt: str = "Reply with the single word: pong",
     `model` overrides the env-default ``OLLAMA_MODEL`` so the SPA's
     Settings → AI Engines Test button exercises whichever model the
     operator selected for auto-tune (#685 follow-up)."""
-    chosen = model or OLLAMA_MODEL
+    chosen = model or active_model()
+    if not chosen:
+        return {"ok": False, "err": "no vision model selected — pick one in Settings → AI Runtime"}
     if not (is_ollama_running() and has_model(chosen)):
         return {"ok": False, "err": f"Ollama service or model {chosen!r} not ready"}
     t0 = time.time()
