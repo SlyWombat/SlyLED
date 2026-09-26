@@ -135,6 +135,7 @@ function _scRender() {
     + '<div id="sc-sim" style="margin-top:.4em">' + _scSimHtml() + '</div>'
     + _scLogHtml();
   el.innerHTML = h;
+  _scGateAll();
 }
 
 function _scHeadHtml() {
@@ -180,11 +181,11 @@ function _scSettingsHtml() {
   var idleSel = idle.kind || 'timeline';
   return '<details style="margin-top:.6em" open><summary style="cursor:pointer;color:#94a3b8;font-size:.82em">Between entries &amp; manual control</summary>'
     + '<div style="display:flex;flex-wrap:wrap;gap:1em;align-items:center;font-size:.82em;margin-top:.4em">'
-    + '<label>Idle <select id="sc-idle-kind" onchange="_scDirty()">'
+    + '<label>Idle <select id="sc-idle-kind" onchange="_scDirty();_scGateAll()">'
     + '<option value="timeline"' + (idleSel === 'timeline' ? ' selected' : '') + '>play the wash</option>'
     + '<option value="hold"' + (idleSel === 'hold' ? ' selected' : '') + '>hold the last frame</option>'
     + '<option value="off"' + (idleSel === 'off' ? ' selected' : '') + '>off (dark)</option></select></label>'
-    + '<label>Wash <select id="sc-idle-tl" onchange="_scDirty()"><option value="">— choose —</option>'
+    + '<label>Wash <select id="sc-idle-tl" onchange="_scDirty();_scGateAll()"><option value="">— choose —</option>'
     + _scTimelineOptions(idle.timelineId) + '</select></label>'
     + '<label>Quiet hours <input type="time" id="sc-q-start" value="' + (q.start || '') + '" onchange="_scDirty()"> – '
     + '<input type="time" id="sc-q-end" value="' + (q.end || '') + '" onchange="_scDirty()"></label>'
@@ -197,6 +198,57 @@ function _scSettingsHtml() {
 
 // ── Phase 2: HinksPix offline hand-off ──────────────────────────────────────
 
+// #963 — a show can play offline only when it lights nothing but one
+// HinksPix's pixels; the server says which timelines qualify and why not.
+function _scTlOffline(tid) {
+  var e = (_sc.state && _sc.state.offlineEligibility) || {};
+  return e[tid] || e[String(tid)] || {eligible: false, reason: 'unknown timeline'};
+}
+
+// {ok, reason} for an entry's play (a timeline, or the show playlist).
+function _scOfflineGate(play) {
+  play = play || {};
+  var tids = play.kind === 'timeline' ? [play.timelineId]
+    : play.kind === 'playlist' ? (play.order || []) : [];
+  tids = tids.filter(function (t) { return t !== null && t !== undefined && t !== ''; });
+  if (!tids.length) return {ok: false, reason: play.kind === 'off' ? 'nothing plays in this entry' : 'choose a timeline first'};
+  for (var i = 0; i < tids.length; i++) {
+    var r = _scTlOffline(tids[i]);
+    if (!r.eligible) return {ok: false, reason: r.reason || 'needs SlyLED running'};
+  }
+  return {ok: true, reason: null};
+}
+
+function _scOfflineCell(play, checked) {
+  var g = _scOfflineGate(play);
+  if (g.ok) return '<input type="checkbox" class="sc-e-offline" ' + (checked ? 'checked' : '') + ' onchange="_scDirty()" title="Also play from the HinksPix SD card when SlyLED is off">';
+  // Ineligible: not offered. One ticked before the show changed stays
+  // untickable-only, with the reason — the compile refuses it anyway.
+  return '<input type="checkbox" class="sc-e-offline"' + (checked ? ' checked onchange="_scDirty();_scGateAll()"' : ' disabled')
+    + ' title="' + escapeHtml(g.reason) + '">'
+    + '<span class="sc-e-offline-why" title="' + escapeHtml(g.reason) + '" style="color:' + (checked ? '#f87171' : '#64748b') + ';cursor:help;margin-left:.2em">'
+    + (checked ? '⚠' : 'ⓘ') + '</span>';
+}
+
+// Re-gate every entry's Offline box from what its Play selectors say now.
+function _scGateAll() {
+  document.querySelectorAll('.sc-entry').forEach(function (row) {
+    var kind = row.querySelector('.sc-play-kind').value;
+    var tl = row.querySelector('.sc-play-tl').value;
+    var play = kind === 'timeline' ? {kind: 'timeline', timelineId: tl ? parseInt(tl, 10) : null}
+      : kind === 'playlist' ? {kind: 'playlist', order: _scPlaylistOrder()} : {kind: kind};
+    var cell = row.querySelector('.sc-e-offline').parentNode;
+    cell.innerHTML = _scOfflineCell(play, row.querySelector('.sc-e-offline').checked);
+  });
+  var idleBox = document.getElementById('sc-hp-idle');
+  if (idleBox) {
+    var ik = document.getElementById('sc-idle-kind'), it = document.getElementById('sc-idle-tl');
+    var g = (ik && ik.value === 'timeline' && it && it.value) ? _scOfflineGate({kind: 'timeline', timelineId: parseInt(it.value, 10)}) : {ok: true};
+    idleBox.disabled = !g.ok && !idleBox.checked;
+    idleBox.title = g.ok ? '' : g.reason;
+  }
+}
+
 function _scHinksHtml() {
   var ctls = (_sc.state && _sc.state.hinkspixControllers) || [];
   if (!ctls.length) return '';
@@ -205,9 +257,12 @@ function _scHinksHtml() {
   var pol = hp.handoff || 'manual';
   var compiled = (_sc.state && _sc.state.hinkspix) || {};
   var h = '<details style="margin-top:.6em"' + (sel.length ? ' open' : '') + '><summary style="cursor:pointer;color:#94a3b8;font-size:.82em">'
-    + 'HinksPix — keep playing when SlyLED is off</summary><div style="font-size:.82em;margin-top:.4em">'
-    + '<div style="color:#94a3b8;margin-bottom:.3em">Entries ticked <b>Offline</b> (and the wash) are compiled into the controller\'s own weekday schedule '
-    + 'and copied to its SD card. The controller has no calendar, so one compile covers the coming week; SlyLED recompiles nightly while it runs.</div>';
+    + 'HinksPix standalone — shows that only use this controller\'s lights '
+    + '<span style="color:#fbbf24;font-size:.9em">(not yet verified on hardware)</span></summary><div style="font-size:.82em;margin-top:.4em">'
+    + '<div style="color:#94a3b8;margin-bottom:.3em">A show that lights <b>nothing but</b> one HinksPix\'s pixels can be ticked <b>Offline</b>: it is compiled into the '
+    + 'controller\'s own weekday schedule and copied to its SD card, so the controller can play it by itself. Shows that also drive DMX fixtures, performers or another '
+    + 'controller need SlyLED running — they can\'t be ticked (hover ⓘ for why). The controller has no calendar, so one compile covers the coming week; '
+    + 'SlyLED recompiles nightly while it runs.</div>';
   ctls.forEach(function (c) {
     var info = compiled[String(c.id)] || {};
     h += '<div style="display:flex;gap:.6em;align-items:center;flex-wrap:wrap;margin:.2em 0">'
@@ -280,11 +335,11 @@ function _scRefKind(sel) {
 function _scPlayHtml(play) {
   play = play || {kind: 'timeline'};
   var k = play.kind || 'timeline';
-  return '<select class="sc-play-kind" onchange="_scDirty()">'
+  return '<select class="sc-play-kind" onchange="_scDirty();_scGateAll()">'
     + '<option value="timeline"' + (k === 'timeline' ? ' selected' : '') + '>timeline</option>'
     + '<option value="playlist"' + (k === 'playlist' ? ' selected' : '') + '>show playlist</option>'
     + '<option value="off"' + (k === 'off' ? ' selected' : '') + '>off (dark)</option></select> '
-    + '<select class="sc-play-tl" onchange="_scDirty()">' + _scTimelineOptions(play.timelineId) + '</select>';
+    + '<select class="sc-play-tl" onchange="_scDirty();_scGateAll()">' + _scTimelineOptions(play.timelineId) + '</select>';
 }
 
 function _scSchedulesHtml() {
@@ -301,7 +356,7 @@ function _scSchedulesHtml() {
       + '<span style="flex:1"></span>'
       + '<button class="btn" style="font-size:.75em;background:#335;color:#fff" onclick="_scAddEntry(' + si + ')">+ Entry</button>'
       + '<button class="btn btn-off" style="font-size:.75em" onclick="_scDelSchedule(' + si + ')">Delete</button></div>'
-      + '<table class="tbl" style="margin-top:.4em;font-size:.8em"><tr><th>Entry</th><th>Days</th><th>Start</th><th>End</th><th>Play</th><th title="Fade in from dark / fade out to dark, seconds">Fade in/out</th><th>Join late</th><th title="Also play on the HinksPix from its SD card when SlyLED is off (compiled nightly)">Offline</th><th></th></tr>';
+      + '<table class="tbl" style="margin-top:.4em;font-size:.8em"><tr><th>Entry</th><th>Days</th><th>Start</th><th>End</th><th>Play</th><th title="Fade in from dark / fade out to dark, seconds">Fade in/out</th><th>Join late</th><th title="Also play from the HinksPix SD card when SlyLED is off — only for shows that light nothing but that controller\'s pixels">Offline</th><th></th></tr>';
     (s.entries || []).forEach(function (e, ei) {
       var days = e.days || [];
       h += '<tr class="sc-entry" data-ei="' + ei + '"><td><input class="sc-e-name" value="' + escapeHtml(e.name || '') + '" style="width:9em" onchange="_scDirty()"></td><td style="white-space:nowrap">';
@@ -316,7 +371,7 @@ function _scSchedulesHtml() {
         + '<td style="white-space:nowrap"><input type="number" min="0" max="60" class="sc-e-fin" value="' + ((e.transition || {}).fadeInS || 0) + '" style="width:3.5em" onchange="_scDirty()"> / '
         + '<input type="number" min="0" max="60" class="sc-e-fout" value="' + ((e.transition || {}).fadeOutS || 0) + '" style="width:3.5em" onchange="_scDirty()"></td>'
         + '<td title="Restarting SlyLED mid-window joins the show where it would be by now"><input type="checkbox" class="sc-e-resume" ' + (e.resume === 'start' ? '' : 'checked') + ' onchange="_scDirty()"></td>'
-        + '<td><input type="checkbox" class="sc-e-offline" ' + ((e.hinkspix || {}).compile ? 'checked' : '') + ' onchange="_scDirty()"></td>'
+        + '<td style="white-space:nowrap">' + _scOfflineCell(e.play, (e.hinkspix || {}).compile) + '</td>'
         + '<td><button class="btn btn-off" style="font-size:.75em;padding:.05em .4em" onclick="_scDelEntry(' + si + ',' + ei + ')">✕</button></td></tr>';
     });
     h += '</table></div>';

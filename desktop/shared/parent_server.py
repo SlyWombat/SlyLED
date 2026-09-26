@@ -17910,6 +17910,10 @@ def api_schedule_state():
     view["hinkspixControllers"] = [{"id": c["id"], "name": c.get("name"), "ip": c.get("ip")}
                                    for c in _children if c.get("type") == "hinkspix"]
     view["hinkspix"] = _schedule_state.get("hinkspix") or {}
+    # #963 — which timelines can play offline, and why not, so the Offline
+    # tick box is only offered where the compile would accept it.
+    view["offlineEligibility"] = {
+        t["id"]: schedule_compile.offline_summary(t, _fixtures, _children) for t in _timelines}
     view["log"] = list(_scheduler.log_ring)[-20:]
     return jsonify(schedule_eval.to_json(view))
 
@@ -17946,23 +17950,13 @@ def api_schedule_resume():
 
 # ── Phase 2: compile to a HinksPix + hand-off ────────────────────────────────
 
-def _timeline_has_pixels_on(tid, cid):
-    """True when timeline *tid* drives pixels on HinksPix *cid* (a track on
-    one of its port fixtures, or a stage-wide track while it has any)."""
+def _offline_check(tid, cid):
+    """#963: can timeline *tid* play offline on HinksPix *cid*? Only when it
+    lights that controller's pixels and nothing else (schedule_compile)."""
     tl = next((t for t in _timelines if t.get("id") == tid), None)
     if tl is None:
-        return False
-    by_id = {c.get("id"): c for c in _children}
-    pix = {f["id"] for f in _fixtures
-           if f.get("childId") == cid and fixture_types.is_pixel_target(f, by_id)}
-    if not pix:
-        return False
-    for tr in tl.get("tracks") or []:
-        if not tr.get("clips"):
-            continue
-        if tr.get("allPerformers") or tr.get("fixtureId") in pix:
-            return True
-    return False
+        return {"eligible": False, "uses": False, "reason": f"timeline {tid} doesn't exist"}
+    return schedule_compile.offline_check(tl, cid, _fixtures, _children)
 
 
 def _schedule_compile_for(cid, deploy=False, days=7, why="manual"):
@@ -17977,7 +17971,7 @@ def _schedule_compile_for(cid, deploy=False, days=7, why="manual"):
     names = {t["id"]: t.get("name") or f"timeline {t['id']}" for t in _timelines}
     durs = {t["id"]: t.get("durationS", 60) for t in _timelines}
     res = schedule_compile.compile_week(
-        _schedule_doc, first, lambda tid: _timeline_has_pixels_on(tid, cid),
+        _schedule_doc, first, lambda tid: _offline_check(tid, cid),
         lambda tid: names.get(tid, f"timeline {tid}"), lambda tid: durs.get(tid, 60), days)
     msg = None
     if deploy:
@@ -17985,7 +17979,7 @@ def _schedule_compile_for(cid, deploy=False, days=7, why="manual"):
         hinks = child.get("hinks") or {}
         reasons = []
         if not res["playlists"]:
-            reasons.append("nothing to send — no offline entries with pixels on this controller")
+            reasons.append("nothing to send — no offline entries that run only on this controller")
         if child.get("status") != 1:
             reasons.append("controller is offline")
         if not hinks.get("uploadSupported"):
@@ -18017,7 +18011,8 @@ def _schedule_compile_for(cid, deploy=False, days=7, why="manual"):
             threading.Thread(target=_run, daemon=True, name=f"sched-compile-{cid}").start()
             msg = "sending" + (" (controller will switch to standalone)" if policy == "always" else "")
     info = {"compiledAt": datetime.now(tz).isoformat(), "from": res["from"], "to": res["to"],
-            "warnings": res["warnings"], "playlists": res["playlists"], "deploy": msg, "why": why}
+            "warnings": res["warnings"], "refused": res.get("refused") or [],
+            "playlists": res["playlists"], "deploy": msg, "why": why}
     _schedule_state.setdefault("hinkspix", {})[str(cid)] = info
     _save("schedule_state", _schedule_state)
     _scheduler._note(f"compiled the offline schedule for HinksPix {child.get('name') or cid} "

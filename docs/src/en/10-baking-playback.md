@@ -10,7 +10,8 @@ Compiles a timeline into minimal action instructions per performer:
 - **Action segments**: Sequences of the 19 action types (14 classic + 5 DMX/spatial)
 - **LSQ files**: Raw per-pixel RGB data at 40Hz (downloadable as ZIP)
 - **Preview data**: 1 color per string per second for emulator
-
+
+
 ### Scheduling shows (sunset, weekly, seasons)
 **Runtime → Schedule** plays shows by themselves — "the Christmas show from 15 minutes before sunset until 11 pm, every night from Nov 20 to Jan 6" — and puts the wash on between them.
 
@@ -25,7 +26,7 @@ Compiles a timeline into minimal action instructions per performer:
 
 **Fades.** An entry can fade in (seconds) when it comes up from dark, and fade out when the schedule is about to go dark (*off*). Fades never apply between two shows or into the wash — those hand over without a dip. Fades scale the output on top of your Master; the Master slider itself doesn't move.
 
-**Keep playing when SlyLED is off (HinksPix).** Tick **Offline** on the entries the HinksPix should play by itself. In **HinksPix — keep playing when SlyLED is off**, tick the controller, then **Preview compile** (shows the week's rows) or **Compile & send**: SlyLED renders each timeline, copies the shows and the wash to the controller's SD card with a weekday schedule, and sets its clock. The controller has no calendar, so one compile covers the coming week; tick *recompile + send nightly* and SlyLED redoes it at 03:30 while it runs (which also corrects the clock across daylight-saving changes). **Hand-off** decides when the controller plays from SD: *copy files only* (you switch modes yourself), *standalone when SlyLED exits, live when it starts*, or *standalone after every send*. The controller's port config must have been pushed first (Configure → Apply). Things that can't run offline are listed as warnings: fades, *hold the last frame*, exceptions beyond the compiled week, and timelines with no pixels on that controller.
+**HinksPix standalone — shows that only use one controller's lights** *(not yet verified on hardware)*. A show that lights **nothing but** one HinksPix's pixels can also be played by that controller from its SD card. Tick **Offline** on such entries: the box is only offered for them (hover ⓘ on the others for the reason). **A show that also drives DMX fixtures, performers or another controller's pixels needs SlyLED running** — it can't be ticked, and if a ticked show is later edited to use more lights, the compile refuses that entry with the reason instead of sending part of it. In **HinksPix standalone**, tick the controller, then **Preview compile** (shows the week's rows) or **Compile & send**: SlyLED renders each eligible timeline, copies the shows and the wash to the controller's SD card with a weekday schedule, and sets its clock. The controller has no calendar, so one compile covers the coming week; tick *recompile + send nightly* and SlyLED redoes it at 03:30 while it runs (which also corrects the clock across daylight-saving changes). **Hand-off** decides when the controller plays from SD: *copy files only* (you switch modes yourself), *standalone when SlyLED exits, live when it starts*, or *standalone after every send*. The controller's port config must have been pushed first (Configure → Apply). Other things the controller can't do on its own are listed as warnings: fades, *hold the last frame*, and exceptions beyond the compiled week. The same rule applies to the controller's **Standalone playback** screen (its port configuration → **Standalone playback →**): only shows that use nothing but its pixels can be added.
 
 
 

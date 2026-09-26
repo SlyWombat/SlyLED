@@ -231,7 +231,11 @@ def main():
     with sync_playwright() as pw:
         browser = pw.chromium.launch()
         page = browser.new_page()
-        page.goto(BASE, wait_until="networkidle", timeout=15000)
+        # Not "networkidle": the dashboard's live 3D view polls several times
+        # a second wherever WebGL renders, so the page never goes idle there.
+        page.goto(BASE, wait_until="domcontentloaded", timeout=15000)
+        page.wait_for_function("typeof showTab === 'function' && typeof hinksConfigure === 'function'",
+                               timeout=15000)
         page.evaluate("window.confirm = () => true")
 
         stub = STUB_JS % (repr(DEVICE).replace("True", "true").replace("False", "false"),

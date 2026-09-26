@@ -829,7 +829,7 @@ function _hxiRender() {
 // Note the controller cannot express a window crossing midnight; the server
 // rejects one and tells you how to split it.
 
-var _hpDeploy = {config: null, progress: null, poll: null, gate: null};
+var _hpDeploy = {config: null, progress: null, poll: null, gate: null, eligibility: []};
 var _HP_DAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
 
 function hinksStandalone(cid) {
@@ -841,6 +841,7 @@ function hinksStandalone(cid) {
       _hpDeploy.config = d.config || {};
       _hpDeploy.progress = d.progress || {};
       _hpDeploy.gate = d.gate || {ok: true};
+      _hpDeploy.eligibility = d.eligibility || [];
       _hpRenderStandalone();
     });
 }
@@ -851,9 +852,13 @@ function _hpRenderStandalone() {
   var last = cfg.lastDeploy;
   var body = '';
 
+  // #963 — only shows that light nothing but this controller's pixels can
+  // play without SlyLED; say so, and don't promise more than that.
   body += '<p style="font-size:.85em;color:#9ab">Sequences are rendered here, uploaded to '
-        + 'the controller\'s SD card, and played against its own clock — SlyLED does not '
-        + 'need to be running.</p>';
+        + 'the controller\'s SD card and played against its own clock, so the controller can '
+        + 'play them by itself. Only shows that light <b>nothing but this controller\'s pixels</b> '
+        + 'can be added — a show that also drives DMX fixtures, performers or another controller '
+        + 'needs SlyLED running. <span style="color:#fbbf24">Not yet verified on hardware.</span></p>';
 
   // Everything on this screen but "Live" is a raw-TCP operation, and the
   // controller drops the connection below its firmware gate — so the server
@@ -874,14 +879,23 @@ function _hpRenderStandalone() {
 
   body += '<div style="margin-bottom:1em"><label style="font-size:.8em;color:#9ab">Sequences</label>'
         + '<div id="hp-items" style="font-size:.85em">';
+  var elig = {};
+  (_hpDeploy.eligibility || []).forEach(function (e) { elig[e.timelineId] = e; });
   (cfg.items || []).forEach(function (it, i) {
-    body += '<div>' + (i + 1) + '. timeline #' + it.timelineId
+    var e = elig[it.timelineId] || {};
+    body += '<div>' + (i + 1) + '. ' + escapeHtml(e.name || ('timeline #' + it.timelineId))
+          + (e.eligible === false ? ' <span class="hp-item-why" style="color:#f87171">⚠ ' + escapeHtml(e.reason || '') + '</span>' : '')
           + ' <button class="btn" style="font-size:.7em;padding:.1em .4em;background:#633;color:#fff" '
           + 'onclick="_hpRemoveItem(' + i + ')">remove</button></div>';
   });
   if (!(cfg.items || []).length) body += '<div style="color:#f88">No sequences selected — add one below.</div>';
-  body += '</div><div style="margin-top:.4em"><input id="hp-addtid" type="number" min="1" '
-        + 'placeholder="timeline id" style="width:9em"> '
+  var opts = (_hpDeploy.eligibility || []).map(function (e) {
+    return '<option value="' + e.timelineId + '"' + (e.eligible ? '' : ' disabled title="' + escapeHtml(e.reason || '') + '"') + '>'
+      + escapeHtml(e.name) + (e.eligible ? '' : ' — needs SlyLED running') + '</option>';
+  }).join('');
+  var anyOk = (_hpDeploy.eligibility || []).some(function (e) { return e.eligible; });
+  body += '</div><div style="margin-top:.4em"><select id="hp-addtid" style="min-width:14em">'
+        + '<option value="">' + (anyOk ? '— choose a show —' : '— no show uses only this controller —') + '</option>' + opts + '</select> '
         + '<button class="btn" style="background:#446;color:#fff" onclick="_hpAddItem()">Add</button></div></div>';
 
   body += '<div style="margin-bottom:1em"><label style="font-size:.8em;color:#9ab">Schedule</label>'
@@ -934,7 +948,7 @@ function _hpRenderStandalone() {
     + '</div><div id="hp-result" style="margin-top:.8em;font-size:.85em"></div>';
 
   _modalStack = [];
-  document.getElementById('modal-title').textContent = 'HinksPix PRO — standalone playback';
+  document.getElementById('modal-title').textContent = 'HinksPix PRO — standalone playback (not yet verified on hardware)';
   document.getElementById('modal-body').innerHTML = body;
   document.getElementById('modal').style.display = 'block';
 }
@@ -1024,6 +1038,7 @@ function _hpPollDeploy() {
         if (!p.running) {
           clearInterval(_hpDeploy.poll); _hpDeploy.poll = null;
           _hpDeploy.config = d.config || _hpDeploy.config;
+          _hpDeploy.eligibility = d.eligibility || _hpDeploy.eligibility;
           _hpDeploy.progress = p;
           _hpRenderStandalone();
         }

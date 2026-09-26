@@ -52,6 +52,19 @@ the operator defaults it ships with, and where each piece lives.
   `POST /api/schedule/compile/hinkspix/<cid> {deploy, horizonDays}`; deploy
   reuses the #941 worker (render `.hseq`, upload `.ply`s + seven `.sched`,
   set the clock). Rows name their own playlist (`hinkspix_files.schedule_text`).
+* **Offline eligibility (#963)** `schedule_compile.offline_check(timeline, cid,
+  fixtures, children)`: a timeline may play offline on controller *cid* only
+  when every output fixture its clip-bearing tracks drive (stage-wide tracks →
+  all fixtures, group tracks → members, as the bake expands them; cameras,
+  remotes and empty placeholders excluded) is one of *cid*'s pixel fixtures.
+  A timeline that doesn't touch *cid* is skipped with a warning; one that
+  touches *cid* **and** anything else (DMX, performers, another controller) is
+  refused with a plain reason, and the compile drops the **whole entry**
+  (`result.refused`) rather than a partial playlist. The #941 standalone
+  deploy refuses such sequences on `PUT` (400) and `POST` (409); the SPA gets
+  `offlineEligibility` on `/api/schedule/state` and `eligibility` on
+  `GET /api/hinkspix/<cid>/deploy` and only offers eligible shows. Not yet
+  verified on hardware (#941/#944 closed without a bench run).
 * **Hand-off policy** `doc.hinkspix.handoff`: `manual` (default — files +
   clock, never a mode switch), `shutdown` (standalone on clean exit, live on
   start), `always` (standalone after each send). `nightly` recompiles + sends

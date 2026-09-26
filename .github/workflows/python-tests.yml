@@ -156,7 +156,8 @@ jobs:
         run: |
           for f in tests/test_solar.py tests/test_schedule_eval.py \
                    tests/test_schedule_engine.py tests/test_schedule_routes.py \
-                   tests/test_schedule_compile.py tests/test_schedule_offline.py; do
+                   tests/test_schedule_compile.py tests/test_schedule_offline.py \
+                   tests/test_963_offline_eligibility.py; do
             echo "== $f"
             SLYLED_DATA=$(mktemp -d) python3 -X utf8 "$f"
           done
@@ -325,7 +326,8 @@ jobs:
         # belong with chromium rather than in the unit job; the other
         # eight suites run there per-PR instead.
         run: |
-          for f in tests/test_hinkspix_*_spa.py tests/test_schedule_spa.py tests/test_880_profiles_spa.py; do
+          for f in tests/test_hinkspix_*_spa.py tests/test_schedule_spa.py tests/test_880_profiles_spa.py \
+                   tests/test_963_offline_spa.py; do
             echo "== $f"
             SLYLED_DATA=$(mktemp -d) python3 -X utf8 "$f"
           done

@@ -2031,6 +2031,22 @@ import hashlib as _hashlib
 import hinkspix_files as hf
 import hinkspix_tcp as htcp
 import pixel_renderer
+import schedule_compile
+
+
+def _offline_check(tid, cid):
+    """#963 — a sequence plays standalone only when its timeline lights this
+    controller's pixels and nothing else (schedule_compile.offline_check)."""
+    tl = next((t for t in ps._timelines if t.get("id") == tid), None)
+    if tl is None:
+        return {"eligible": False, "uses": False, "reason": f"timeline {tid} doesn't exist"}
+    return schedule_compile.offline_check(tl, cid, ps._fixtures, ps._children)
+
+
+def _eligibility(cid):
+    return [dict(schedule_compile.offline_check(t, cid, ps._fixtures, ps._children),
+                 timelineId=t.get("id"), name=t.get("name") or f"timeline {t.get('id')}")
+            for t in ps._timelines]
 
 DEPLOY_STORE = "hinkspix_deploy"
 STEP_MS = 25                       # matches the live loop's 40 Hz tick
@@ -2255,7 +2271,7 @@ def api_hinkspix_deploy_get(cid):
         return err
     cfg = _deploy_cfg().get(str(cid)) or {}
     return jsonify(ok=True, config=cfg, progress=_deploy_state.get(cid, {}),
-                   gate=_gate_payload(child))
+                   gate=_gate_payload(child), eligibility=_eligibility(cid))
 
 
 @bp.put("/api/hinkspix/<int:cid>/deploy")
@@ -2271,9 +2287,15 @@ def api_hinkspix_deploy_put(cid):
     if "playlistName" in body:
         entry["playlistName"] = hf.short_name(body["playlistName"])
     if "items" in body:
-        entry["items"] = [{"timelineId": int(i.get("timelineId"))}
-                          for i in (body["items"] or [])
-                          if i.get("timelineId") is not None]
+        items = [{"timelineId": int(i.get("timelineId"))}
+                 for i in (body["items"] or [])
+                 if i.get("timelineId") is not None]
+        # #963: refuse, don't store, a sequence that also needs SlyLED.
+        bad = [r["reason"] for r in (_offline_check(i["timelineId"], cid) for i in items)
+               if not r["eligible"]]
+        if bad:
+            return jsonify(err="; ".join(bad), reasons=bad), 400
+        entry["items"] = items
     if "schedule" in body:
         rows = []
         for i, row in enumerate(body["schedule"] or []):
@@ -2325,7 +2347,10 @@ def api_hinkspix_deploy(cid):
         reasons.append("no sequences selected")
     for item in entry.get("items") or []:
         tid = item.get("timelineId")
-        if not ps._bake_result.get(tid):
+        chk = _offline_check(tid, cid)
+        if not chk["eligible"]:
+            reasons.append(chk["reason"])      # #963 — edited since it was added
+        elif not ps._bake_result.get(tid):
             reasons.append(f"timeline {tid} is not baked")
     if reasons:
         return jsonify(err="; ".join(reasons), reasons=reasons), 409

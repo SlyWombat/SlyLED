@@ -49,11 +49,18 @@ def main():
 
     import parent_server as ps
 
-    ps._timelines[:] = [{"id": 31, "name": "Eaves show", "durationS": 60, "tracks": []},
-                        {"id": 32, "name": "Wash", "durationS": 60, "tracks": []}]
-    # A HinksPix, so the Phase 2 "keep playing when SlyLED is off" section shows.
+    # A HinksPix with one port fixture, so the Phase 2 "HinksPix standalone"
+    # section shows and both timelines light only its pixels — the Offline box
+    # is only offered for such shows (#963).
     ps._children[:] = [{"id": 5, "type": "hinkspix", "ip": "192.0.2.6", "name": "Kazoo",
                         "sc": 0, "strings": [], "status": 1, "hinks": {"ports": []}}]
+    ps._fixtures[:] = [{"id": 50, "name": "Eaves", "fixtureType": "led", "type": "linear",
+                        "childId": 5, "strings": [{"port": 1, "leds": 50}]}]
+    _clip = [{"actionId": 1, "startS": 0, "durationS": 60}]
+    ps._timelines[:] = [{"id": 31, "name": "Eaves show", "durationS": 60,
+                         "tracks": [{"fixtureId": 50, "clips": _clip}]},
+                        {"id": 32, "name": "Wash", "durationS": 60,
+                         "tracks": [{"fixtureId": 50, "clips": _clip}]}]
     threading.Thread(target=lambda: ps.app.run(host="127.0.0.1", port=PORT, threaded=True,
                                                use_reloader=False), daemon=True).start()
     time.sleep(1.5)
