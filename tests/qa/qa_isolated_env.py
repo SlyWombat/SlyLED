@@ -222,18 +222,24 @@ def suites(commit, only):
     ok("test-runner image built", rc == 0, e[-300:])
     chosen = [s for s in SPAWNING_SUITES if not only or only in s]
     loop = " ".join(chosen)
-    script = (f'for t in {loop}; do [ -f "$t" ] || {{ echo "$t :: MISSING"; continue; }}; '
-              f'r=$(SLYLED_DATA=$(mktemp -d) timeout 900 python -X utf8 "$t" 2>&1 | tail -1); '
-              f'echo "$t :: $r"; done')
+    script = (f'for t in {loop}; do [ -f "$t" ] || {{ echo "$t :: rc=missing :: MISSING"; continue; }}; '
+              f'SLYLED_DATA=$(mktemp -d) timeout 900 python -X utf8 "$t" > /tmp/o.txt 2>&1; rc=$?; '
+              f'sum=$(grep -E "passed|failed|agree|All checks|suites passed" /tmp/o.txt | tail -1); '
+              f'nf=$(grep -cE "\\[FAIL\\]|FAIL " /tmp/o.txt); '
+              f'echo "$t :: rc=$rc fails=$nf :: $sum"; done')
     t0 = time.time()
     rc, out, e = ssh(f"docker run --rm --name slyled-qa-tests --network {NET} "
                      f"-v $(cd {REMOTE}/src && pwd):/src -w /src -e TZ=America/Toronto {TEST_IMG} bash -c '{script}'",
                      timeout=7200)
     print(f"  ({time.time() - t0:.0f}s)")
     for line in out.strip().splitlines():
-        name, _, res = line.partition(" :: ")
-        good = (" 0 failed" in res) or res.startswith("OK") or ("passed" in res and "failed" not in res)
-        ok(f"{name}: {res[:90]}", good)
+        parts = line.split(" :: ")
+        if len(parts) < 3:
+            continue
+        name, meta, res = parts[0], parts[1], parts[2]
+        # Pass = exit 0 and no [FAIL] lines (the last-line text alone misleads).
+        good = meta.startswith("rc=0 ") and meta.endswith("fails=0")
+        ok(f"{name}: {meta} {res[:80]}", good)
 
 
 ORCH_SRC_IMG = "slyled-qa-orch:src"
