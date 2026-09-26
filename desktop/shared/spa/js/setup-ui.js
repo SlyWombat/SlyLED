@@ -2574,6 +2574,8 @@ function _camTuneRunXhr(x, fid, prog, body){
     var after=(r.after||{}).score;
     var iters=(r.history||[]).length-1;
     _camTuneState.lastScore=after;
+    // #965 — a remote AI runtime was down; the CV analyzer stood in.
+    if(r.fallback)toastWarn(r.fallback);
     if(prog)prog.innerHTML='<span style="color:#86efac">✓ '+escapeHtml('Before '+before+' → after '+after+' ('+iters+' iters, '+(r.evaluator||'heuristic')+')')+'</span>';
     var beforeScoreEl=document.getElementById('camtune-compare-before-score');
     if(beforeScoreEl)beforeScoreEl.textContent=before!=null?('score '+before):'';

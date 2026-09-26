@@ -15,7 +15,7 @@ function _setSection(s){
   if(s==='dmx')loadDmxSettings();
   if(s==='profiles')loadDmxProfiles();
   if(s==='cameras')_loadCamCalStatus();
-  if(s==='advanced'){_depthRuntimeRefresh();_ollamaRuntimeRefresh();loadCalTuning();}
+  if(s==='advanced'){_depthRuntimeRefresh();_aiRtConfigLoad();_ollamaRuntimeRefresh();loadCalTuning();}
 }
 function _stageUnitsChange(){
   var imp=parseInt(document.getElementById('s-un').value)===1;
@@ -103,6 +103,7 @@ function loadSettings(){
   });
   loadPatchView();
   _depthRuntimeRefresh();
+  _aiRtConfigLoad();
   _ollamaRuntimeRefresh();
   _aiEnginesRefresh();
   // #615 — populate the Settings → Advanced "Version" card. Endpoint
@@ -248,6 +249,23 @@ function _ollamaRuntimeRefresh(){
         if(rBtn)rBtn.style.display='none';
         return;
       }
+      // #965 — a remote runtime is never installed from here.
+      if(r.remote){
+        if(iBtn)iBtn.style.display='none';
+        if(rBtn)rBtn.style.display='none';
+        var where='<span style="color:#94a3b8;font-family:monospace">'+escapeHtml(r.url||'(no URL)')+'</span>';
+        if(r.state==='ready'){
+          box.innerHTML='<span style="color:#34d399">Remote ready</span> · Ollama at '+where
+            +' · active model <span style="color:#94a3b8;font-family:monospace">'+escapeHtml(r.activeModel||r.model||'(none selected)')+'</span>';
+          _ollamaRuntimeRefreshModelList();
+        }else if(r.state==='remote not configured'){
+          box.innerHTML='<span style="color:#f59e0b">Remote not configured</span> · enter its URL above and Save.';
+        }else{
+          box.innerHTML='<span style="color:#ef4444">Remote unreachable</span> · '+where
+            +' · AI auto-tune uses the CV analyzer until it answers again. Nothing is installed on this machine.';
+        }
+        return;
+      }
       if(r.installed){
         var active=r.activeModel||r.model||'';
         box.innerHTML='<span style="color:#34d399">Installed</span> · '
@@ -339,6 +357,70 @@ function _ollamaRuntimeRefreshModelList(){
       hint.textContent='— '+r.models.length+' pulled · '+visionCount+' vision-capable';
     }
   });
+}
+
+// ── #965 — Local / Remote runtime ────────────────────────────────────────
+function _aiRtConfigLoad(){
+  ra('GET','/api/ai-runtime/config',null,function(c){
+    if(!c||!c.ok)return;
+    var loc=document.getElementById('ai-rt-mode-local'),rem=document.getElementById('ai-rt-mode-remote');
+    if(!loc||!rem)return;
+    var mode=c.source==='environment'?c.mode:c.settingsMode;
+    loc.checked=mode!=='remote';rem.checked=mode==='remote';
+    document.getElementById('ai-rt-url').value=c.source==='environment'?(c.url||''):(c.settingsUrl||'');
+    document.getElementById('ai-rt-allow-pull').checked=!!c.allowRemotePull;
+    var env=document.getElementById('ai-rt-env');
+    var byEnv=c.source==='environment';
+    env.style.display=byEnv?'inline':'none';
+    env.textContent=byEnv?'set by environment (SLYLED_OLLAMA_URL) — edit the service/container to change it':'';
+    ['ai-rt-mode-local','ai-rt-mode-remote','ai-rt-url','ai-rt-save'].forEach(function(id){
+      var el=document.getElementById(id);if(el)el.disabled=byEnv;
+    });
+    _aiRtModeChange();
+  });
+}
+function _aiRtModeChange(){
+  var rem=document.getElementById('ai-rt-mode-remote');
+  var row=document.getElementById('ai-rt-remote-row');
+  if(row)row.style.display=(rem&&rem.checked)?'block':'none';
+}
+function _aiRtSave(){
+  var rem=document.getElementById('ai-rt-mode-remote').checked;
+  var body={mode:rem?'remote':'local',url:document.getElementById('ai-rt-url').value.trim(),
+            allowRemotePull:document.getElementById('ai-rt-allow-pull').checked};
+  ra('PUT','/api/ai-runtime/config',body,function(r){
+    var out=document.getElementById('ai-rt-test');
+    if(!r||!r.ok){if(out)out.innerHTML='<span style="color:#ef4444">'+escapeHtml((r&&r.err)||'save failed')+'</span>';return;}
+    if(out)out.innerHTML='<span style="color:#34d399">Saved — '+(r.mode==='remote'?'remote '+escapeHtml(r.url):'this machine')+'</span>';
+    _ollamaRuntimeRefresh();
+  });
+}
+function _aiRtTest(){
+  var out=document.getElementById('ai-rt-test');
+  var url=document.getElementById('ai-rt-url').value.trim();
+  if(out)out.innerHTML='<span style="color:#94a3b8">Testing…</span>';
+  ra('POST','/api/ai-runtime/test-connection',url?{url:url}:{},function(r){
+    if(!out)return;
+    if(!r||!r.ok){out.innerHTML='<span style="color:#ef4444">'+escapeHtml((r&&r.err)||'unreachable')+'</span>';return;}
+    out.innerHTML='<span style="color:#34d399">Connected</span> · Ollama '+escapeHtml(r.version||'?')+' · '
+      +r.models.length+' models ('+r.visionModels.length+' vision'+(r.visionModels.length?': '+escapeHtml(r.visionModels.slice(0,4).join(', ')):'')+') · '
+      +r.rttMs+' ms';
+  });
+}
+function _ollamaRuntimePull(){
+  var name=(document.getElementById('ollama-rt-pull-name').value||'').trim();
+  if(!name){alert('Enter a model name, e.g. qwen2.5vl:3b');return;}
+  function go(confirmed){
+    ra('POST','/api/ollama-runtime/pull',{model:name,confirm:!!confirmed},function(r){
+      if(r&&r.needsConfirm){
+        if(confirm(r.message+'\n\nThe model is downloaded onto that machine and uses its disk and RAM.'))go(true);
+        return;
+      }
+      if(!r||!r.ok){alert((r&&r.message)||'Pull refused');return;}
+      _ollamaRuntimeRefresh();
+    });
+  }
+  go(false);
 }
 
 function _ollamaRuntimeModelChange(){

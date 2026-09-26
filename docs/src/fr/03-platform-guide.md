@@ -26,6 +26,15 @@ L'orchestrateur existe aussi en image, `ghcr.io/slywombat/slyled:<version>` (x86
 **Pare-feu :** ouvrez TCP 8080 et UDP 4210, 4211, 5568 et 6454 sur l'hôte.
 **Ne le lancez pas à côté du service `slyled`** sur le même port — le second s'arrête avec « already answering on port 8080 ».
 
+### Runtime IA — Ollama local ou distant
+Le réglage automatique des caméras fonctionne sans IA (l'**analyseur** CV par défaut). L'évaluateur **IA** facultatif envoie des images de caméra à un modèle de vision servi par [Ollama](https://ollama.com). **Réglages → Avancé → AI Runtime → Runs on** choisit où tourne Ollama :
+
+- **Cette machine** — SlyLED peut installer Ollama (**Install**) et démarre/arrête le `ollama serve` qu'il a lancé.
+- **Un Ollama distant** — un autre ordinateur du réseau local (p. ex. un Mac mini ou une machine GPU). Saisissez son URL (`http://192.168.10.67:11434`), **Test connection** (version d'Ollama, modèles de vision, temps d'aller-retour), **Save**, puis choisissez un modèle de vision. SlyLED **ne touche pas** au distant : il n'y installe, ne démarre, n'arrête ni ne préchauffe jamais Ollama, et **Install** est masqué. Le téléchargement d'un modèle sur le distant est désactivé par défaut ; cochez *Allow pulling models onto the remote* et SlyLED demande quand même à chaque fois, en nommant l'hôte et la taille. Si le distant ne répond plus, la carte affiche **Remote unreachable** et le réglage automatique utilise l'analyseur CV jusqu'à son retour — rien n'est installé localement.
+
+**Sécurité :** Ollama n'a pas d'authentification. Le distant doit écouter sur le réseau local (`OLLAMA_HOST=0.0.0.0` dans son environnement) et les images des caméras transitent par le réseau — utilisez un hôte du réseau local, jamais exposé à Internet.
+**Sans écran (service Linux, Docker) :** la page Réglages fonctionne de la même façon. Pour le fixer dans le déploiement, définissez `SLYLED_OLLAMA_URL` (et éventuellement `SLYLED_OLLAMA_MODEL`) : `sudo systemctl edit slyled` → `[Service]` / `Environment=SLYLED_OLLAMA_URL=http://192.168.10.67:11434`, ou `environment: SLYLED_OLLAMA_URL: http://192.168.10.67:11434` dans `docker-compose.yml`. L'environnement l'emporte sur les Réglages et la carte affiche *set by environment*. Une URL hors boucle locale signifie distant ; `SLYLED_OLLAMA_MODE=local|remote` force le mode.
+
 ### Application Android
 Outil opérateur en direct pour exécuter des spectacles depuis votre téléphone. Se connecte au serveur de bureau par Wi-Fi. Depuis la version 1.8.1, l'onglet Contrôle est refait en **Surface de commande** — voir #888 / `docs/design/mobile_ui_redesign.md`.
 

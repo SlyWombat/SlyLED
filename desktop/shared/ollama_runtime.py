@@ -18,9 +18,19 @@ What this module handles:
 Install is a single background thread with a status dict the API routes
 poll. Re-entry is safe — concurrent ``start_install()`` calls no-op.
 
-Environment overrides (shared with camera_settings.py):
-    SLYLED_OLLAMA_URL     default ``http://localhost:11434``
-    SLYLED_OLLAMA_MODEL   default ``qwen2.5vl:3b``
+Local or remote (#965): Settings → AI Runtime stores
+``settings.aiRuntime = {mode: "local" | "remote", url, allowRemotePull}``
+(read through ``set_config_provider``). **Remote mode is hands-off**: SlyLED
+never installs, serves, stops or warms up Ollama on a host it doesn't own,
+and pulls a model onto the remote only when the operator has enabled remote
+pulls AND confirmed that pull (host + size named). An unreachable remote is
+reported as "remote unreachable" — never "not installed", never a local
+install.
+
+Environment overrides (win over Settings; shared with camera_settings.py):
+    SLYLED_OLLAMA_URL     the runtime URL; a non-loopback URL means remote
+    SLYLED_OLLAMA_MODE    optional ``local`` / ``remote`` to force the mode
+    SLYLED_OLLAMA_MODEL   default model when none is selected in Settings
 """
 
 from __future__ import annotations
@@ -42,7 +52,83 @@ from pathlib import Path
 
 log = logging.getLogger("slyled.ollama_runtime")
 
-OLLAMA_URL = os.environ.get("SLYLED_OLLAMA_URL", "http://localhost:11434")
+DEFAULT_LOCAL_URL = "http://localhost:11434"
+_ENV_URL = (os.environ.get("SLYLED_OLLAMA_URL") or "").strip() or None
+_ENV_MODE = (os.environ.get("SLYLED_OLLAMA_MODE") or "").strip().lower() or None
+# Back-compat attribute: the env/default URL only. Everything that talks to
+# Ollama goes through current_url(), which also honours Settings (#965).
+OLLAMA_URL = _ENV_URL or DEFAULT_LOCAL_URL
+
+_config_provider = None   # callable → settings.aiRuntime dict (parent_server)
+
+
+def set_config_provider(fn):
+    """parent_server hands us ``lambda: _settings.get("aiRuntime")`` so the
+    effective config is read fresh on every call (Settings edits and
+    project imports apply immediately, no restart)."""
+    global _config_provider
+    _config_provider = fn
+
+
+def _host_of(url):
+    try:
+        from urllib.parse import urlparse
+        return urlparse(url).hostname or ""
+    except Exception:
+        return ""
+
+
+def _is_loopback_url(url):
+    host = _host_of(url)
+    if host in ("localhost", ""):
+        return True
+    try:
+        import ipaddress
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def config():
+    """Effective runtime config: ``{mode, url, host, source, settingsMode,
+    settingsUrl, allowRemotePull, envOverride}``. The environment wins over
+    Settings (headless deployments); ``source`` says which one applied."""
+    s = {}
+    if _config_provider is not None:
+        try:
+            s = dict(_config_provider() or {})
+        except Exception:
+            s = {}
+    s_mode = s.get("mode") if s.get("mode") in ("local", "remote") else "local"
+    s_url = (s.get("url") or "").strip().rstrip("/")
+    if _ENV_URL:
+        url = _ENV_URL.rstrip("/")
+        mode = _ENV_MODE if _ENV_MODE in ("local", "remote") else (
+            "local" if _is_loopback_url(url) else "remote")
+        source = "environment"
+    elif _ENV_MODE in ("local", "remote"):
+        mode, source = _ENV_MODE, "environment"
+        url = s_url if mode == "remote" else DEFAULT_LOCAL_URL
+    else:
+        mode, source = s_mode, "settings"
+        url = s_url if mode == "remote" else DEFAULT_LOCAL_URL
+    return {"mode": mode, "url": url, "host": _host_of(url), "source": source,
+            "settingsMode": s_mode, "settingsUrl": s_url,
+            "allowRemotePull": bool(s.get("allowRemotePull")),
+            "envOverride": {"url": bool(_ENV_URL), "mode": bool(_ENV_MODE),
+                            "model": bool(os.environ.get("SLYLED_OLLAMA_MODEL"))}}
+
+
+def current_url():
+    return config()["url"]
+
+
+def is_remote():
+    return config()["mode"] == "remote"
+
+
+REMOTE_HANDS_OFF = ("SlyLED uses a remote Ollama here and never installs, starts or "
+                    "stops Ollama itself — manage the runtime on {host}.")
 # Post-#685 architecture: the deterministic CV `analyzer` evaluator is
 # the auto-tune default, AI is opt-in, and the orchestrator does NOT
 # bundle or auto-pull any vision model. OLLAMA_MODEL is the fallback
@@ -102,7 +188,7 @@ def progress():
 def is_ollama_running(timeout=1.5):
     """Quick TCP/HTTP probe. Returns True when Ollama is reachable."""
     try:
-        req = urllib.request.Request(f"{OLLAMA_URL}/api/tags", method="GET")
+        req = urllib.request.Request(f"{current_url()}/api/tags", method="GET")
         with urllib.request.urlopen(req, timeout=timeout):
             return True
     except Exception:
@@ -114,7 +200,7 @@ def has_model(name=None, timeout=2.0):
     name = name or OLLAMA_MODEL
     base = name.split(":")[0]
     try:
-        req = urllib.request.Request(f"{OLLAMA_URL}/api/tags", method="GET")
+        req = urllib.request.Request(f"{current_url()}/api/tags", method="GET")
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = json.loads(resp.read().decode())
     except Exception:
@@ -159,7 +245,7 @@ def _is_vision_model(name: str) -> bool:
     return any(p.match(base) for p in _VISION_MODEL_PATTERNS)
 
 
-def list_models(timeout: float = 3.0):
+def list_models(timeout: float = 3.0, url: str | None = None):
     """Return ``[{name, sizeMb, vision, modifiedAt}, ...]`` for every
     model Ollama has pulled locally. Vision flag uses a known-model
     name regex so the SPA can group / annotate the dropdown.
@@ -169,11 +255,15 @@ def list_models(timeout: float = 3.0):
     hint.
     """
     try:
-        req = urllib.request.Request(f"{OLLAMA_URL}/api/tags", method="GET")
+        req = urllib.request.Request(f"{(url or current_url())}/api/tags", method="GET")
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = json.loads(resp.read().decode())
     except Exception:
         return []
+    return _models_from_tags(body)
+
+
+def _models_from_tags(body):
     out = []
     for m in body.get("models") or []:
         name = m.get("name") or ""
@@ -191,16 +281,32 @@ def list_models(timeout: float = 3.0):
 
 
 def status():
-    """Aggregated status for /api/ollama-runtime/status."""
-    running = is_ollama_running()
+    """Aggregated status for /api/ollama-runtime/status.
+
+    ``state`` is the one-word answer the SPA shows: ``ready``,
+    ``not installed`` (local, daemon absent), ``remote unreachable`` or
+    ``remote not configured`` (#965 — a remote is never "not installed")."""
+    cfg = config()
+    running = is_ollama_running() if cfg["url"] else False
     model = has_model() if running else False
     prog = progress()
+    if cfg["mode"] == "remote":
+        state = ("remote not configured" if not cfg["url"]
+                 else "ready" if running else "remote unreachable")
+    else:
+        state = "ready" if running else "not installed"
     return {
         "running": running,
         "hasModel": model,
         "model": OLLAMA_MODEL,
-        "url": OLLAMA_URL,
-        "platform": platform.system().lower(),
+        "url": cfg["url"],
+        "mode": cfg["mode"],
+        "remote": cfg["mode"] == "remote",
+        "host": cfg["host"],
+        "source": cfg["source"],
+        "state": state,
+        "canInstall": cfg["mode"] == "local",
+        "platform": "remote" if cfg["mode"] == "remote" else platform.system().lower(),
         "progress": prog,
         "installed": running and model,
         "warm": _warm_state.get("warm", False),
@@ -256,6 +362,10 @@ def start_serve(wait_seconds: float = 8.0):
     whether to terminate at orchestrator shutdown.
     """
     global _our_serve_proc
+    if is_remote():
+        # #965 — never spawn a local serve that would silently diverge from
+        # the configured remote (and never touch the remote's own daemon).
+        return False
     if _our_serve_proc is not None and _our_serve_proc.poll() is None:
         return True  # we already own a running serve
     if is_ollama_running():
@@ -368,7 +478,7 @@ def warmup(timeout_s: float = 120.0, model: str | None = None):
         return False
     try:
         req = urllib.request.Request(
-            f"{OLLAMA_URL}/api/generate",
+            f"{current_url()}/api/generate",
             data=json.dumps({
                 "model": chosen,
                 "prompt": "ping",
@@ -404,7 +514,7 @@ def run_test(prompt: str = "Reply with the single word: pong",
     t0 = time.time()
     try:
         req = urllib.request.Request(
-            f"{OLLAMA_URL}/api/generate",
+            f"{current_url()}/api/generate",
             data=json.dumps({
                 "model": chosen,
                 "prompt": prompt,
@@ -518,7 +628,7 @@ def _pull_model(name=None):
                   message=f"Pulling {name}")
     payload = json.dumps({"name": name}).encode()
     req = urllib.request.Request(
-        f"{OLLAMA_URL}/api/pull", data=payload,
+        f"{current_url()}/api/pull", data=payload,
         headers={"Content-Type": "application/json"}, method="POST")
     # No outer timeout — model pulls can legitimately take > 10 min on
     # slow links. The overall install thread has its own watchdog above.
@@ -548,6 +658,11 @@ def _pull_model(name=None):
 
 
 def _install_worker(force):
+    if is_remote():
+        _set_progress(phase="error", error=REMOTE_HANDS_OFF.format(host=config()["host"]),
+                      message=REMOTE_HANDS_OFF.format(host=config()["host"]),
+                      finishedAt=time.time())
+        return
     _set_progress(phase="install-ollama", percent=0,
                   message="Starting install",
                   startedAt=time.time(), finishedAt=None, error=None)
@@ -596,6 +711,9 @@ def start_install(force=False):
     ``_depth_runtime.start_install`` contract used by the depth install
     route — returns a dict with ``ok`` + a ``message`` string."""
     global _install_thread
+    if is_remote():
+        return {"ok": False, "remote": True,
+                "message": REMOTE_HANDS_OFF.format(host=config()["host"] or "the remote")}
     if _install_thread is not None and _install_thread.is_alive():
         return {"ok": False, "message": "Install already running",
                  "phase": progress().get("phase")}
@@ -622,9 +740,116 @@ def check_install_marker(install_dir):
             marker.unlink()
         except OSError:
             pass
-        if is_installed():
+        if is_remote() or is_installed():
             return
         log.info("ollama.install-requested marker present — kicking off background install")
         start_install()
     except Exception as e:
         log.warning("ollama install-marker check failed: %s", e)
+
+
+# ── Test connection + explicit pull (#965) ─────────────────────────────
+
+def test_connection(url=None, timeout=5.0):
+    """Probe an Ollama endpoint without changing anything on it:
+    ``/api/version`` + ``/api/tags``. Returns ``{ok, url, host, version,
+    models, visionModels, rttMs, err}``. ``url`` lets Settings test a URL
+    before saving it."""
+    url = (url or current_url() or "").strip().rstrip("/")
+    out = {"ok": False, "url": url, "host": _host_of(url), "version": None,
+           "models": [], "visionModels": [], "rttMs": None, "err": None}
+    if not url:
+        out["err"] = "no URL configured"
+        return out
+    if not url.startswith(("http://", "https://")):
+        out["err"] = "URL must start with http:// or https://"
+        return out
+    t0 = time.time()
+    try:
+        with urllib.request.urlopen(urllib.request.Request(f"{url}/api/tags"),
+                                    timeout=timeout) as resp:
+            tags = json.loads(resp.read().decode())
+        out["rttMs"] = int((time.time() - t0) * 1000)
+    except Exception as e:
+        out["err"] = f"{url} unreachable: {e}"
+        return out
+    try:
+        with urllib.request.urlopen(urllib.request.Request(f"{url}/api/version"),
+                                    timeout=timeout) as resp:
+            out["version"] = json.loads(resp.read().decode()).get("version")
+    except Exception:
+        pass   # very old daemons have no /api/version; tags answered, so OK
+    out["models"] = _models_from_tags(tags)
+    out["visionModels"] = [m["name"] for m in out["models"] if m["vision"]]
+    out["ok"] = True
+    return out
+
+
+def _registry_size_bytes(name, timeout=5.0):
+    """Download size of *name* from the Ollama registry manifest (sum of its
+    layers), or None when it can't be read (offline, unknown model)."""
+    try:
+        repo, _, tag = name.partition(":")
+        tag = tag or "latest"
+        if "/" not in repo:
+            repo = "library/" + repo
+        req = urllib.request.Request(
+            f"https://registry.ollama.ai/v2/{repo}/manifests/{tag}",
+            headers={"Accept": "application/vnd.docker.distribution.manifest.v2+json"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            man = json.loads(resp.read().decode())
+        return sum(int(l.get("size") or 0) for l in man.get("layers") or []) or None
+    except Exception:
+        return None
+
+
+def _fmt_size(n):
+    if not n:
+        return "size unknown"
+    return f"~{n / 1e9:.1f} GB" if n >= 1e9 else f"~{n / 1e6:.0f} MB"
+
+
+_pull_thread = None
+
+
+def start_pull(name, confirm=False):
+    """Pull *name* onto the configured runtime. On a remote this needs
+    ``allowRemotePull`` in Settings (default off → 403) and ``confirm`` for
+    this pull (else 409 with the host and size to show the operator).
+    Returns a dict with ``ok``, ``code`` and a ``message``."""
+    global _pull_thread
+    name = (name or "").strip()
+    if not name:
+        return {"ok": False, "code": 400, "message": "model name required"}
+    cfg = config()
+    if not cfg["url"]:
+        return {"ok": False, "code": 409, "message": "no remote URL configured"}
+    if cfg["mode"] == "remote":
+        if not cfg["allowRemotePull"]:
+            return {"ok": False, "code": 403, "remote": True, "host": cfg["host"],
+                    "message": (f"Pulling models onto the remote {cfg['host']} is disabled. "
+                                f"Pick a model already on it, or enable remote pulls in "
+                                f"Settings → AI Runtime.")}
+        if not confirm:
+            size = _registry_size_bytes(name)
+            return {"ok": False, "code": 409, "needsConfirm": True, "remote": True,
+                    "host": cfg["host"], "model": name, "sizeBytes": size,
+                    "message": f"Pull {name} ({_fmt_size(size)}) onto {cfg['host']}?"}
+    if _pull_thread is not None and _pull_thread.is_alive():
+        return {"ok": False, "code": 409, "message": "a pull is already running"}
+    if _install_thread is not None and _install_thread.is_alive():
+        return {"ok": False, "code": 409, "message": "an install is already running"}
+
+    def _run():
+        _set_progress(startedAt=time.time(), finishedAt=None, error=None)
+        try:
+            _pull_model(name)
+            _set_progress(phase="done", percent=100, message=f"Pulled {name}",
+                          finishedAt=time.time(), error=None)
+        except Exception as e:
+            log.warning("ollama pull %s failed: %s", name, e)
+            _set_progress(phase="error", message=str(e), error=str(e),
+                          finishedAt=time.time())
+    _pull_thread = threading.Thread(target=_run, daemon=True, name="ollama-pull")
+    _pull_thread.start()
+    return {"ok": True, "code": 200, "message": f"Pulling {name} onto {cfg['host'] or 'this host'}"}

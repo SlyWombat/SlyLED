@@ -17,6 +17,8 @@ services:
     environment:
       TZ: America/Toronto
       # SLYLED_PORT: "8080"
+      # AI auto-tune on a remote Ollama (#965; or Settings → AI Runtime):
+      # SLYLED_OLLAMA_URL: "http://192.168.10.67:11434"
     volumes:
       - slyled-data:/var/lib/slyled
     # Optional — flash ESP32 firmware over USB from the Firmware tab:

@@ -485,6 +485,24 @@ def evaluate_frame_analyzer(frame, intent="general", controls_meta=None):
 # poor, so the matrix run found AI mode produced no useful deltas.
 
 _OLLAMA_URL = os.environ.get("SLYLED_OLLAMA_URL", "http://localhost:11434")
+
+
+def _ollama_url():
+    """The effective runtime URL — Settings → AI Runtime (local/remote) or
+    the env override (#965). ``_OLLAMA_URL`` above is the env/default only."""
+    try:
+        import ollama_runtime
+        return ollama_runtime.current_url()
+    except Exception:
+        return _OLLAMA_URL
+
+
+def _ollama_is_remote():
+    try:
+        import ollama_runtime
+        return ollama_runtime.is_remote()
+    except Exception:
+        return False
 # #685 architecture decision (post 2026-04-25 matrix): the deterministic
 # `analyzer` evaluator is now the auto-tune default, AI is opt-in. No
 # model is shipped or auto-pulled. Operators who want an AI evaluator
@@ -531,11 +549,15 @@ def _ollama_available():
     daemon answers — the model-selection error is raised at make_evaluator
     time so the message can name the right Settings panel."""
     try:
-        req = urllib.request.Request(f"{_OLLAMA_URL}/api/tags", method="GET")
+        req = urllib.request.Request(f"{_ollama_url()}/api/tags", method="GET")
         with urllib.request.urlopen(req, timeout=3) as resp:
             tags = json.loads(resp.read().decode())
     except Exception as e:
-        return False, (f"Ollama not reachable at {_OLLAMA_URL} ({e}). "
+        if _ollama_is_remote():
+            return False, (f"remote unreachable: the remote Ollama at {_ollama_url() or '(no URL)'} "
+                           f"didn't answer ({e}). Check the remote, or switch Settings → "
+                           f"AI Runtime to Local.")
+        return False, (f"Ollama not reachable at {_ollama_url()} ({e}). "
                         f"Install Ollama from https://ollama.com, then pull "
                         f"a vision model from USER_MANUAL Appendix D.")
     if not _OLLAMA_MODEL:
@@ -655,7 +677,7 @@ def evaluate_frame_ai(frame, intent="general", controls_meta=None,
         "options": {"temperature": 0.1, "num_predict": 400},
     }
     req = urllib.request.Request(
-        f"{_OLLAMA_URL}/api/generate",
+        f"{_ollama_url()}/api/generate",
         data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"},
         method="POST")
@@ -764,6 +786,18 @@ def make_evaluator(mode, resize_long_side=None, model=None):
         return _run_heuristic
     if mode == "ai":
         ok, err = _ollama_available()
+        if not ok and _ollama_is_remote():
+            # #965 — a remote runtime being down is not a local-install
+            # problem: tune with the deterministic analyzer and say so.
+            log.warning("AI evaluator: %s — falling back to the CV analyzer", err)
+
+            def _run_fallback(frame, controls_meta=None, intent="general"):
+                r = _run_analyzer(frame, controls_meta=controls_meta, intent=intent)
+                r["evaluator"] = "analyzer"
+                r["fallback"] = ("remote unreachable — tuned with the CV analyzer "
+                                 "instead of the AI evaluator")
+                return r
+            return _run_fallback
         if not ok:
             raise RuntimeError(err)
         if not model:
@@ -892,7 +926,7 @@ def auto_tune_loop(camera_ip, cam_idx, intent,
             hint = (f"the AI evaluator says model {_OLLAMA_MODEL!r} is not "
                      f"pulled. Run `ollama pull {_OLLAMA_MODEL}`.")
         elif "not reachable" in cause_lower:
-            hint = (f"the AI evaluator can't reach Ollama at {_OLLAMA_URL}. "
+            hint = (f"the AI evaluator can't reach Ollama at {_ollama_url()}. "
                      "Start the Ollama service (`ollama serve` or system "
                      "service) before retrying.")
         elif "timed out" in cause_lower or "timeout" in cause_lower:
@@ -1079,4 +1113,7 @@ def auto_tune_loop(camera_ip, cam_idx, intent,
         "applied": best_state,
         "history": history,
         "evaluator": before.get("evaluator", "heuristic"),
+        # #965 — set when a remote AI runtime was down and the analyzer
+        # stood in; the SPA shows it as a toast.
+        "fallback": before.get("fallback"),
     }

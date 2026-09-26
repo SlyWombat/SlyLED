@@ -94,7 +94,32 @@ or with the `docker-compose.yml` attached to each release (repo root copy uses
 - **USB flashing (optional):** `--device /dev/ttyUSB0 --group-add <host dialout gid>`
   (`getent group dialout`); install `99-slyled-usb.rules` on the host to keep
   ModemManager off the port. Giga DFU (`arduino-cli`) isn't in the image.
-- Ollama / depth-runtime add-ons aren't bundled.
+- The depth-runtime add-on isn't bundled. For AI auto-tune point SlyLED at an Ollama on
+  another machine — see *AI runtime (remote Ollama)* below.
+
+## AI runtime (remote Ollama)
+
+Camera auto-tune works without AI. The optional AI evaluator needs an Ollama with a vision
+model; on a headless box that is usually **another machine** on the LAN (#965). Set it in
+**Settings → Advanced → AI Runtime → Runs on: a remote Ollama** (URL, *Test connection*,
+*Save*) — or pin it in the deployment, which then wins over Settings:
+
+```bash
+sudo systemctl edit slyled
+#   [Service]
+#   Environment=SLYLED_OLLAMA_URL=http://192.168.10.67:11434
+#   Environment=SLYLED_OLLAMA_MODEL=qwen2.5vl:3b      # optional default model
+sudo systemctl restart slyled
+```
+
+Docker: add `SLYLED_OLLAMA_URL: http://192.168.10.67:11434` under `environment:` in
+`docker-compose.yml` (or `-e SLYLED_OLLAMA_URL=…`).
+
+SlyLED never installs, starts, stops or warms up Ollama on a remote, and pulls a model onto
+it only when Settings allows remote pulls **and** you confirm that pull. The remote must
+listen on the LAN (`OLLAMA_HOST=0.0.0.0`) — Ollama has no authentication and camera frames
+cross the network, so keep it LAN-only. If it stops answering, auto-tune falls back to the
+CV analyzer; nothing is installed locally.
 
 ## Tests
 

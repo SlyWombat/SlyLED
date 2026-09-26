@@ -600,9 +600,30 @@
     <div class='card' id='ollama-runtime-card' style='max-width:560px'>
       <div class='card-title'>AI Runtime (optional)</div>
       <div style='font-size:.82em;color:#94a3b8;margin-bottom:.5em'>
-        Local vision-language runtime (Ollama). Auto-tune defaults to the deterministic CV <b>analyzer</b> evaluator (no AI required); this card lets you opt into a VLM-based AI evaluator. Install only fetches Ollama itself — pull a vision model from <a href='/docs/help/ai-models' target='_blank' style='color:#3b82f6'>USER_MANUAL Appendix D</a> (e.g. <code>ollama pull qwen2.5vl:3b</code>) and select it below.
-        Runs entirely on this machine — no cloud, no API keys.
-        The orchestrator falls back to the heuristic evaluator when the VLM isn't installed.
+        Vision-language runtime (Ollama) for the optional AI auto-tune evaluator. Auto-tune defaults to the deterministic CV <b>analyzer</b> (no AI required). Run Ollama on <b>this machine</b> or use one on <b>another machine</b> on your LAN — no cloud, no API keys. Pick a vision model from <a href='/docs/help/ai-models' target='_blank' style='color:#3b82f6'>USER_MANUAL Appendix D</a> (e.g. <code>qwen2.5vl:3b</code>) and select it below.
+      </div>
+      <!-- #965 — where the runtime lives: this machine, or a remote Ollama. -->
+      <div id='ai-rt-where' style='font-size:.84em;margin-bottom:.5em;padding:.45em .55em;border:1px solid #334155;border-radius:5px'>
+        <div style='display:flex;gap:1em;align-items:center;flex-wrap:wrap'>
+          <b style='color:#cbd5e1'>Runs on</b>
+          <label><input type='radio' name='ai-rt-mode' id='ai-rt-mode-local' value='local' onchange='_aiRtModeChange()'> this machine</label>
+          <label><input type='radio' name='ai-rt-mode' id='ai-rt-mode-remote' value='remote' onchange='_aiRtModeChange()'> a remote Ollama</label>
+          <span id='ai-rt-env' style='display:none;color:#fbbf24;font-size:.9em'></span>
+        </div>
+        <div id='ai-rt-remote-row' style='display:none;margin-top:.4em'>
+          <div style='display:flex;gap:.4em;align-items:center;flex-wrap:wrap'>
+            <input id='ai-rt-url' placeholder='http://192.168.10.67:11434' style='flex:1;min-width:14em;font-family:monospace;font-size:.95em'>
+            <button class='btn btn-nav' id='ai-rt-test-btn' onclick='_aiRtTest()'>Test connection</button>
+          </div>
+          <label style='display:block;margin-top:.35em'><input type='checkbox' id='ai-rt-allow-pull'> Allow pulling models onto the remote (asks every time)</label>
+          <div id='ai-rt-security' style='margin-top:.35em;font-size:.88em;color:#fbbf24'>
+            Ollama has no login: the remote must listen on the LAN (<code>OLLAMA_HOST=0.0.0.0</code>) and camera frames are sent to it over the network. Use a LAN-only host. SlyLED never installs, starts or stops Ollama on a remote.
+          </div>
+        </div>
+        <div style='margin-top:.4em;display:flex;gap:.4em;align-items:center'>
+          <button class='btn btn-on' id='ai-rt-save' onclick='_aiRtSave()'>Save</button>
+          <span id='ai-rt-test' style='font-size:.9em'></span>
+        </div>
       </div>
       <div id='ollama-rt-status' style='font-size:.85em;margin-bottom:.4em'>Loading…</div>
       <div style='display:flex;gap:.5em;flex-wrap:wrap'>
@@ -623,7 +644,11 @@
         </div>
         <div style='font-size:.74em;color:#64748b;margin-top:.3em'>
           See <a href='/docs/help/ai-models' target='_blank' style='color:#3b82f6'>which models suit your hardware</a> · pull via shell:
-          <code style='background:#020617;padding:.1em .35em;border-radius:3px;color:#cbd5e1'>ollama pull &lt;name&gt;</code>
+          <code style='background:#020617;padding:.1em .35em;border-radius:3px;color:#cbd5e1'>ollama pull &lt;name&gt;</code> or here:
+        </div>
+        <div style='display:flex;gap:.4em;align-items:center;margin-top:.3em'>
+          <input id='ollama-rt-pull-name' placeholder='qwen2.5vl:3b' style='flex:1;font-family:monospace;font-size:.85em'>
+          <button class='btn btn-nav' id='ollama-rt-pull' onclick='_ollamaRuntimePull()' style='font-size:.75em;padding:.2em .5em'>Pull model</button>
         </div>
       </div>
     </div>

@@ -25,6 +25,15 @@ The orchestrator is also an image, `ghcr.io/slywombat/slyled:<version>` (x86_64 
 **Firewall:** open TCP 8080 and UDP 4210, 4211, 5568 and 6454 on the host.
 **Don't run it next to the `slyled` service** on the same port — the second one stops with "already answering on port 8080".
 
+### AI Runtime — local or remote Ollama
+Camera auto-tune works without AI (the default CV **analyzer**). The optional **AI** evaluator sends camera frames to a vision model served by [Ollama](https://ollama.com). **Settings → Advanced → AI Runtime → Runs on** chooses where Ollama runs:
+
+- **This machine** — SlyLED can install Ollama for you (**Install**) and starts/stops the `ollama serve` it launched.
+- **A remote Ollama** — another computer on your LAN (e.g. a Mac mini or a GPU box). Enter its URL (`http://192.168.10.67:11434`), **Test connection** (shows the Ollama version, its vision models and the round-trip time), **Save**, then pick a vision model. SlyLED is **hands-off** with a remote: it never installs, starts, stops or warms up Ollama there, and **Install** is hidden. Pulling a model onto the remote is off by default; tick *Allow pulling models onto the remote* and SlyLED still asks each time, naming the host and the download size. If the remote stops answering, the card says **Remote unreachable** and auto-tune uses the CV analyzer until it's back — nothing is installed locally.
+
+**Security:** Ollama has no login. The remote must listen on the LAN (`OLLAMA_HOST=0.0.0.0` in its environment) and camera frames travel over the network to it — use a LAN-only host, never one exposed to the internet.
+**Headless (Linux service, Docker):** the Settings page works the same. To pin it in the deployment instead, set `SLYLED_OLLAMA_URL` (and optionally `SLYLED_OLLAMA_MODEL`): `sudo systemctl edit slyled` → `[Service]` / `Environment=SLYLED_OLLAMA_URL=http://192.168.10.67:11434`, or `environment: SLYLED_OLLAMA_URL: http://192.168.10.67:11434` in `docker-compose.yml`. The environment wins over Settings and the card shows *set by environment*. A non-loopback URL means remote; `SLYLED_OLLAMA_MODE=local|remote` forces the mode.
+
 ### Android App
 Live operator tool for running shows from your phone. Connects to the desktop server over WiFi. As of v1.8.1 the Control tab is rebuilt as a **Command Surface** — see #888 / `docs/design/mobile_ui_redesign.md`.
 

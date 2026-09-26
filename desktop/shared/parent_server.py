@@ -7469,6 +7469,8 @@ def api_camera_settings_auto_tune(fid):
         slots[slot_name] = slot_entry
         _save("camera_settings_slots", _camera_settings_slots)
 
+    if result.get("fallback"):
+        _emit("warn", result["fallback"])
     job_state.update(result)
     job_state["status"] = "done"
     job_state["timestamp"] = time.time()
@@ -7588,7 +7590,8 @@ def api_camera_settings_evaluator_status():
                        "heuristic": {"available": True},
                        "ai": {"available": ok, "err": err,
                               "model": _cam_settings._OLLAMA_MODEL,
-                              "url": _cam_settings._OLLAMA_URL},
+                              "url": _cam_settings._ollama_url(),
+                              "remote": _cam_settings._ollama_is_remote()},
                    })
 
 
@@ -7596,9 +7599,98 @@ def api_camera_settings_evaluator_status():
 
 try:
     import ollama_runtime as _ollama_rt
+    # #965 — Settings → AI Runtime (local / remote) is read fresh on every
+    # call, so edits and project imports apply without a restart.
+    _ollama_rt.set_config_provider(lambda: _settings.get("aiRuntime") or {})
 except Exception as _e:  # pragma: no cover
     _ollama_rt = None
     log.warning("ollama_runtime not importable: %s", _e)
+
+
+def _ai_model():
+    """The model auto-tune uses: Settings (aiAutoTuneModel) else the env default."""
+    return _settings.get("aiAutoTuneModel") or (_ollama_rt.OLLAMA_MODEL if _ollama_rt else "")
+
+
+def _ai_runtime_view():
+    cfg = _ollama_rt.config()
+    return {"mode": cfg["mode"], "url": cfg["url"], "host": cfg["host"],
+            "source": cfg["source"], "settingsMode": cfg["settingsMode"],
+            "settingsUrl": cfg["settingsUrl"], "allowRemotePull": cfg["allowRemotePull"],
+            "envOverride": cfg["envOverride"], "model": _ai_model()}
+
+
+@app.get("/api/ai-runtime/config")
+def api_ai_runtime_config_get():
+    """#965 — where the AI runtime lives. ``source`` is "environment" when
+    SLYLED_OLLAMA_URL / _MODE override Settings (shown as "set by
+    environment" in the SPA)."""
+    if _ollama_rt is None:
+        return jsonify(ok=False, err="ollama_runtime module not bundled"), 500
+    return jsonify(ok=True, **_ai_runtime_view())
+
+
+@app.put("/api/ai-runtime/config")
+def api_ai_runtime_config_put():
+    """Body: ``{mode: "local"|"remote", url, allowRemotePull, model}``. A
+    remote needs an http(s) URL. ``model`` is the active auto-tune model
+    (stored as settings.aiAutoTuneModel, as the model picker always has)."""
+    if _ollama_rt is None:
+        return jsonify(ok=False, err="ollama_runtime module not bundled"), 500
+    body = request.get_json(silent=True) or {}
+    cur = dict(_settings.get("aiRuntime") or {})
+    mode = body.get("mode", cur.get("mode", "local"))
+    if mode not in ("local", "remote"):
+        return jsonify(ok=False, err="mode must be 'local' or 'remote'"), 400
+    url = str(body.get("url", cur.get("url") or "") or "").strip().rstrip("/")
+    if url and not url.startswith(("http://", "https://")):
+        return jsonify(ok=False, err="url must start with http:// or https://"), 400
+    if mode == "remote" and not url:
+        return jsonify(ok=False, err="a remote runtime needs a URL, e.g. http://192.168.10.67:11434"), 400
+    new = {"mode": mode, "url": url,
+           "allowRemotePull": bool(body.get("allowRemotePull", cur.get("allowRemotePull", False)))}
+    with _lock:
+        _settings["aiRuntime"] = new
+        if "model" in body:
+            m = body.get("model")
+            if m is None or (isinstance(m, str) and not m.strip()):
+                _settings.pop("aiAutoTuneModel", None)
+            elif isinstance(m, str):
+                _settings["aiAutoTuneModel"] = m.strip()
+            else:
+                return jsonify(ok=False, err="model must be a string"), 400
+        _save("settings", _settings)
+    # A local serve we spawned has no business running against a remote.
+    if mode == "remote":
+        try:
+            _ollama_rt.stop_serve()
+        except Exception:
+            pass
+    return jsonify(ok=True, **_ai_runtime_view())
+
+
+@app.post("/api/ai-runtime/test-connection")
+def api_ai_runtime_test_connection():
+    """#965 — probe a runtime without changing it: reachability, Ollama
+    version, vision models, round-trip time. Body ``{url?}`` tests a URL
+    before it is saved; default is the effective runtime."""
+    if _ollama_rt is None:
+        return jsonify(ok=False, err="ollama_runtime module not bundled"), 500
+    body = request.get_json(silent=True) or {}
+    return jsonify(_ollama_rt.test_connection(body.get("url") or None))
+
+
+@app.post("/api/ollama-runtime/pull")
+def api_ollama_runtime_pull():
+    """#965 — pull a model onto the runtime. On a remote: refused unless
+    Settings allows remote pulls (403), then needs ``confirm: true`` for
+    this pull (409 carries the host + size to confirm). Poll
+    /install-status for progress."""
+    if _ollama_rt is None:
+        return jsonify(ok=False, err="ollama_runtime module not bundled"), 500
+    body = request.get_json(silent=True) or {}
+    res = _ollama_rt.start_pull(body.get("model") or "", confirm=bool(body.get("confirm")))
+    return jsonify(**res), res.get("code", 200 if res.get("ok") else 409)
 
 
 @app.get("/api/ollama-runtime/status")
@@ -7609,8 +7701,7 @@ def api_ollama_runtime_status():
     # #685 follow-up — surface the operator-selected active model so the
     # Settings card can show "tune-active=qwen2.5vl:3b" even when the
     # env override is set to something else.
-    st["activeModel"] = (_settings.get("aiAutoTuneModel")
-                          or st.get("model"))
+    st["activeModel"] = _ai_model() or st.get("model")
     return jsonify(ok=True, **st)
 
 
@@ -7749,6 +7840,13 @@ def _ai_helpers_warmup():
     # are left alone). Warmup follows once /api/tags answers.
     if _ollama_rt is not None:
         def _ollama_boot():
+            if _ollama_rt.is_remote():
+                # #965 — hands off a remote: no serve, no pull and no boot
+                # warm-up (a warm-up loads the model into the remote's RAM,
+                # which on a shared box can evict someone else's model).
+                log.info("AI: remote runtime at %s — no local serve, no boot warm-up",
+                         _ollama_rt.current_url() or "(no URL)")
+                return
             try:
                 started = _ollama_rt.start_serve(wait_seconds=10.0)
                 if started:
