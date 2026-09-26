@@ -244,7 +244,8 @@ def down():
     for img in set(out.split()) - pre:
         if img.startswith(("ghcr.io/slywombat/slyled:", "python:3.12-slim", "python:3.11-slim", "slyled-qa-tests")):
             ssh(f"docker image rm {img}")
-    ssh(f"rm -rf {REMOTE}")
+    # Containers run as root and write into the mounted tree, so plain rm fails.
+    ssh(f"sudo -n rm -rf {REMOTE} || rm -rf {REMOTE}")
     code, out, _ = ssh(f"docker ps -a --format '{{{{.Names}}}}' | grep -c '^slyled-qa-'; "
                        f"docker network ls --format '{{{{.Name}}}}' | grep -c '^{NET}$'; test -d {REMOTE} && echo dir || echo nodir")
     left = out.split()
