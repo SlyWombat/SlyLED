@@ -5,6 +5,7 @@
 #        powershell -ExecutionPolicy Bypass -File build_release.ps1 -SetAppVersion "1.2.0"
 #        powershell -ExecutionPolicy Bypass -File build_release.ps1 -DryRun
 #        powershell -ExecutionPolicy Bypass -File build_release.ps1 -CompileOnly -Board mmwave
+#        powershell -ExecutionPolicy Bypass -File build_release.ps1 -MinorRelease
 #
 # Version tracks (all independent — see #824):
 #   Orchestrator (desktop):   parent_server.py VERSION → installer.iss
@@ -29,6 +30,12 @@ param(
     [switch]$SkipAndroid,
     [switch]$ForceFirmware,
     [string]$SetAppVersion = "",
+    # -MinorRelease: a full release — every track steps to its next minor
+    # (x.y.z -> x.(y+1).0): orchestrator, Android and every auto-built board,
+    # each rebuilt regardless of its source-hash gate. The tracks stay
+    # independent; each just moves up its own minor. Boards that aren't
+    # auto-built (Giga, camera) and iOS are still bumped by hand.
+    [switch]$MinorRelease,
     # #version-clobber-guard: required to step a firmware's major version up.
     # Without this the script refuses any v7→v8 (etc.) bump because that's how
     # the registry got contaminated by the legacy unified-track era. See
@@ -86,6 +93,19 @@ function Increment-Patch([string]$ver) {
     $parts = $ver.Split(".")
     $parts[2] = [string]([int]$parts[2] + 1)
     return ($parts -join ".")
+}
+
+function Increment-Minor([string]$ver) {
+    $parts = $ver.Split(".")
+    $parts[1] = [string]([int]$parts[1] + 1)
+    $parts[2] = "0"
+    return ($parts -join ".")
+}
+
+# The version a rebuilt track moves to: next minor under -MinorRelease.
+function Next-Version([string]$ver) {
+    if ($MinorRelease) { return Increment-Minor $ver }
+    return Increment-Patch $ver
 }
 
 # ── Helper: read/write registry.json ───────────────────────────────────────
@@ -366,7 +386,7 @@ if (-not $CompileOnly) {
 
     $orchSrcHash = Get-OrchestratorSourceHash
     $orchStored = Get-OrchStoredHash
-    $orchSourceUnchanged = ($orchStored -eq $orchSrcHash) -and (-not $SetAppVersion)
+    $orchSourceUnchanged = ($orchStored -eq $orchSrcHash) -and (-not $SetAppVersion) -and (-not $MinorRelease)
 
     if ($SetAppVersion) {
         $appVersion = $SetAppVersion
@@ -374,7 +394,7 @@ if (-not $CompileOnly) {
         $appVersion = $orchCurVer
         Write-Host "Orchestrator source unchanged - keeping v$appVersion" -ForegroundColor Gray
     } else {
-        $appVersion = Increment-Patch $orchCurVer
+        $appVersion = Next-Version $orchCurVer
     }
 
     # Validate no regression against git tags
@@ -469,7 +489,7 @@ if (-not $SkipFirmware) {
         $stored = Get-FwSourceHash $id
         $curVer = Get-FwVersion $id
 
-        if (-not $CompileOnly -and -not $ForceFirmware -and $stored -eq $srcHash) {
+        if (-not $CompileOnly -and -not $ForceFirmware -and -not $MinorRelease -and $stored -eq $srcHash) {
             Write-Host "${id}: source unchanged - skipping (v$curVer)" -ForegroundColor Gray
             continue
         }
@@ -477,7 +497,7 @@ if (-not $SkipFirmware) {
         if ($CompileOnly) {
             $newVer = $curVer
         } else {
-            $newVer = Increment-Patch $curVer
+            $newVer = Next-Version $curVer
             if (-not $AllowMajorBump) { Assert-NoMajorBumpRegression $id $curVer $newVer }
         }
 
@@ -621,12 +641,12 @@ if (-not $SkipAndroid) {
 
     $androidSrcHash = Get-AndroidSourceHash
     $androidStored = Get-AndroidStoredHash
-    if (-not $ForceFirmware -and $androidStored -eq $androidSrcHash) {
+    if (-not $ForceFirmware -and -not $MinorRelease -and $androidStored -eq $androidSrcHash) {
         Write-Host "`n--- Android APK ---" -ForegroundColor Yellow
         Write-Host "Android APK: source unchanged - skipping (v$androidCurVer, cached $((Get-Item $androidCachePath).LastWriteTime))" -ForegroundColor Gray
         $androidVer = $androidCurVer
     } elseif ($DryRun) {
-        $androidVer = Increment-Patch $androidCurVer
+        $androidVer = Next-Version $androidCurVer
         Write-Host "`n--- Android APK ---" -ForegroundColor Yellow
         Write-Host "DRY RUN: would bump Android v$androidCurVer -> v$androidVer (+versionCode) and run gradlew assembleRelease" -ForegroundColor Yellow
     } else {
@@ -634,7 +654,7 @@ if (-not $SkipAndroid) {
         # firmware boards use. Operator can hand-edit build.gradle.kts to
         # set a specific version (e.g. for a major bump) and this picks it
         # up as the new baseline.
-        $androidVer = Increment-Patch $androidCurVer
+        $androidVer = Next-Version $androidCurVer
         Write-Host "`n--- Android APK v$androidVer (was v$androidCurVer) ---" -ForegroundColor Yellow
 
         # Bump versionCode too so Play Store / sideload upgrade detection
