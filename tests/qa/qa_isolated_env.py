@@ -19,6 +19,8 @@ containers and networks (Ollama, Homepage, …) are never touched.
 
   python tests/qa/qa_isolated_env.py up [--tag 2.2.0]
   python tests/qa/qa_isolated_env.py smoke
+  python tests/qa/qa_isolated_env.py suites [--commit SHA] [--only substr]
+      server-spawning test suites, run inside the isolated net (operator rule)
   python tests/qa/qa_isolated_env.py down
 """
 import argparse
@@ -155,6 +157,80 @@ print(json.dumps({k: v for k, v in res.items() if k not in "ab"}))
     ok("network is --internal", out.strip() == "true", out.strip())
 
 
+TEST_IMG = "slyled-qa-tests:local"
+# Suites that spawn a real orchestrator process (parent_server.py / main.py):
+# operator rule 2026-09-26 — these run ONLY here, never on a LAN machine.
+SPAWNING_SUITES = [
+    "tests/test_platform_smoke.py", "tests/test_web.py", "tests/test_show_pipeline_regressions.py",
+    "tests/test_842_set_fixture_rgb_centralized.py", "tests/test_867_gyro_off.py", "tests/test_gyro_protocol.py",
+    "tests/test_capability_bake_e2e.py", "tests/test_parity_action_names.py", "tests/test_parity_aim_vector.py",
+    "tests/test_30_combos.py", "tests/test_dash_return.py", "tests/test_fixture_grid.py",
+    "tests/test_edit_rotation.py", "tests/test_runtime3d.py", "tests/test_unified_3d.py",
+    "tests/test_schedule_spa.py", "tests/test_963_offline_spa.py", "tests/test_880_profiles_spa.py",
+    "tests/test_hinkspix_config_spa.py", "tests/test_hinkspix_xlights_spa.py", "tests/test_hinkspix_discover_spa.py",
+    "tests/test_hinkspix_guide_spa.py",
+    "tests/regression/run_all.py",
+]
+DOCKERFILE = r"""
+FROM python:3.11-slim
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs tzdata libportaudio2 git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir "flask>=3.0" "qrcode>=7.0" requests numpy opencv-python-headless "cryptography>=41.0" \
+    pyyaml "paramiko>=3.0" "pyserial>=3.5" psutil tzdata waitress esptool playwright
+RUN playwright install --with-deps chromium
+# Harness-only: give every Playwright Chromium software WebGL (no GPU in the
+# container) so the SPA suites that open the 3D stage can run. Not product code.
+RUN printf '%s\n' \
+ 'try:' \
+ '    from playwright.sync_api._generated import BrowserType as _BT' \
+ '    _o = _BT.launch' \
+ '    def _l(self, *a, **k):' \
+ '        k["args"] = list(k.get("args") or []) + ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"]' \
+ '        k.setdefault("channel", "chromium")' \
+ '        return _o(self, *a, **k)' \
+ '    _BT.launch = _l' \
+ 'except Exception:' \
+ '    pass' > /usr/local/lib/python3.11/site-packages/sitecustomize.py
+"""
+
+
+def suites(commit, only):
+    import time
+    sha = subprocess.run(["git", "-C", str(QA.parent.parent), "rev-parse", commit],
+                         capture_output=True, text=True, check=True).stdout.strip()
+    print(f"== suites at {sha[:7]} (inside {NET}, no LAN)")
+    rc, _, e = ssh(f"mkdir -p {REMOTE} && rm -rf {REMOTE}/src && mkdir -p {REMOTE}/src && cd {REMOTE}/src && "
+                   f"git init -q && git fetch -q --depth 1 https://github.com/SlyWombat/SlyLED.git {sha} && "
+                   f"git checkout -q FETCH_HEAD", timeout=900)
+    ok("source fetched on kdocker3", rc == 0, e[-200:])
+    # Record the host's images before we pull/build anything, so `down` only
+    # removes what QA added (never a python:*-slim another service already had).
+    rc, out, _ = ssh(f"test -f {REMOTE}/.pre_images.json && echo have")
+    if "have" not in out:
+        _, imgs, _ = ssh("docker images --format '{{.Repository}}:{{.Tag}}'")
+        ssh(f"cat > {REMOTE}/.pre_images.json", stdin=json.dumps(sorted(set(imgs.split()))))
+    rc, out, _ = ssh(f"docker network ls --format '{{{{.Name}}}}' | grep -c '^{NET}$'")
+    if out.strip() != "1":
+        ssh(f"docker network create --internal --subnet {SUBNET} {NET}")
+    rc, _, e = ssh(f"cd {REMOTE} && cat > Dockerfile.tests && docker build -q -t {TEST_IMG} -f Dockerfile.tests .",
+                   timeout=1800, stdin=DOCKERFILE)
+    ok("test-runner image built", rc == 0, e[-300:])
+    chosen = [s for s in SPAWNING_SUITES if not only or only in s]
+    loop = " ".join(chosen)
+    script = (f'for t in {loop}; do [ -f "$t" ] || {{ echo "$t :: MISSING"; continue; }}; '
+              f'r=$(SLYLED_DATA=$(mktemp -d) timeout 900 python -X utf8 "$t" 2>&1 | tail -1); '
+              f'echo "$t :: $r"; done')
+    t0 = time.time()
+    rc, out, e = ssh(f"docker run --rm --name slyled-qa-tests --network {NET} "
+                     f"-v $(cd {REMOTE}/src && pwd):/src -w /src -e TZ=America/Toronto {TEST_IMG} bash -c '{script}'",
+                     timeout=7200)
+    print(f"  ({time.time() - t0:.0f}s)")
+    for line in out.strip().splitlines():
+        name, _, res = line.partition(" :: ")
+        good = (" 0 failed" in res) or res.startswith("OK") or ("passed" in res and "failed" not in res)
+        ok(f"{name}: {res[:90]}", good)
+
+
 def down():
     print("== down")
     code, out, _ = ssh(f"cat {REMOTE}/.pre_images.json 2>/dev/null || echo '[]'")
@@ -166,7 +242,7 @@ def down():
     ssh(f"docker network rm {NET} 2>/dev/null")
     code, out, _ = ssh("docker images --format '{{.Repository}}:{{.Tag}}'")
     for img in set(out.split()) - pre:
-        if img.startswith(("ghcr.io/slywombat/slyled:", "python:3.12-slim")):
+        if img.startswith(("ghcr.io/slywombat/slyled:", "python:3.12-slim", "python:3.11-slim", "slyled-qa-tests")):
             ssh(f"docker image rm {img}")
     ssh(f"rm -rf {REMOTE}")
     code, out, _ = ssh(f"docker ps -a --format '{{{{.Names}}}}' | grep -c '^slyled-qa-'; "
@@ -177,10 +253,13 @@ def down():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("step", choices=["up", "smoke", "down"])
+    ap.add_argument("step", choices=["up", "smoke", "suites", "down"])
     ap.add_argument("--tag", default="2.2.0")
+    ap.add_argument("--commit", default="origin/main")
+    ap.add_argument("--only", default="", help="substring filter on the suite list")
     a = ap.parse_args()
-    {"up": lambda: up(a.tag), "smoke": smoke, "down": down}[a.step]()
+    {"up": lambda: up(a.tag), "smoke": smoke, "suites": lambda: suites(a.commit, a.only),
+     "down": down}[a.step]()
     print(f"\n{_p} passed, {_f} failed out of {_p + _f} tests")
     sys.exit(1 if _f else 0)
 
