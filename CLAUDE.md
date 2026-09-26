@@ -190,6 +190,17 @@ first, which points `SLYLED_DATA` at a temp dir so the live project is never rea
 (#942). A new test that imports `parent_server` must do the same — `tests/test_bootstrap_guard.py`
 fails CI otherwise. Details in `tests/README.md`.
 
+**Test isolation (operator rule, 2026-09-26).** Suites that start a real orchestrator
+process (anything spawning `parent_server.py` / `main.py`: platform smoke, web/SPA suites,
+`tests/regression/`, gyro/ArUco/Android UI, …) bind UDP 4210/4211 and broadcast discovery on
+the LAN, i.e. they act as a second orchestrator next to production (house-network-ops#278,
+#966). **Run them only in the isolated QA network**
+(`python tests/qa/qa_isolated_env.py suites [--commit SHA]`, a Docker `--internal` net on
+kdocker3) **or in GitHub CI** — never on a LAN-connected machine (davebook-5, gpd-dave,
+Windows Python). In-process Flask `test_client` suites are fine locally. Anything else that
+would be a second SlyLED on the lighting LAN (bench installs, extra containers) also goes in
+the isolated network (`qa_isolated_env.py up|smoke|down`); `tests/qa/` is hand-run only.
+
 | Suite                                  | Coverage |
 |----------------------------------------|----------|
 | `tests/test_parent.py`                 | Parent API, action types, WLED, runners, schema (782 — CI pins the exact total) |
