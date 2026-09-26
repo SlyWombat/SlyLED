@@ -23,6 +23,7 @@ Three independent fixes from the sample-rig trace 2026-04-26:
 
 This file covers Bug 1 and Bug 3.
 """
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))
 

@@ -11,6 +11,7 @@ Usage:
     python tests/test_cv_engine.py -v     # verbose
 """
 
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import sys, os, time, threading
 
 os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))

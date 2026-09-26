@@ -9,6 +9,7 @@ Tests:
 4. Gobo Select and Color Wheel actions produce correct segments
 5. Emulator: verify Art-Net output channel values for each action type
 """
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import sys, os, json, time, threading
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))
 

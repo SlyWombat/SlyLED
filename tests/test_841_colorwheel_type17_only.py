@@ -22,6 +22,7 @@ Covers:
 Run: python -X utf8 tests/test_841_colorwheel_type17_only.py
 """
 
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import json
 import os
 import sys

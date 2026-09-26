@@ -26,6 +26,7 @@ flakes plus a screenshot per failed transition.
 Run with ``python tests/test_view_toggles.py [-v]``. Designed to run
 in the background (~3-4 minutes for the full sweep).
 """
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import os, sys, time, threading, signal, json
 
 PROJ = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))

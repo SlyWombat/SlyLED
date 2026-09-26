@@ -23,8 +23,9 @@ Non-pytest entry points are covered separately:
   - tests/docker/run_tests.sh / run_dmx_tests.sh set it in-container.
   - tools/devgui/server.py injects it into spawned test subprocesses.
   - GitHub Actions sets it at the job level in python-tests.yml.
-Residual risk (direct `python3 tests/test_foo.py` on Windows) is
-documented in tests/README.md.
+  - Direct `python3 tests/test_foo.py` runs: each such file does
+    `import _bootstrap` first (tests/_bootstrap.py, #942), enforced by
+    tests/test_bootstrap_guard.py.
 """
 import os
 import tempfile

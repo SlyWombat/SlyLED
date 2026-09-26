@@ -21,12 +21,14 @@ This test verifies via static source inspection that:
 Run: python -X utf8 tests/test_840_playlist_loop_blackout.py
 """
 
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "desktop", "shared"))
 
 import inspect
+import re
 
 import parent_server  # noqa: E402
 
@@ -64,9 +66,11 @@ def test_blackout_sweep_gated_on_is_final_or_stop():
 
 def test_single_item_loop_all_routes_to_dmx_playback_loop():
     src = inspect.getsource(parent_server._show_playback_loop)
+    # go_epoch may carry a start offset (the scheduler resumes mid-show),
+    # so match the call's shape, not its exact first argument.
     _assert("len(tl_list) == 1" in src
             and "loop_all" in src
-            and "_dmx_playback_loop(tid, time.time(), duration, loop=True)" in src,
+            and re.search(r"_dmx_playback_loop\(tid, [^,]+, duration, loop=True\)", src),
             "single-item loop_all routes through _dmx_playback_loop(loop=True)")
 
 

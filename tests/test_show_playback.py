@@ -8,6 +8,7 @@ Usage:
     python tests/test_show_playback.py -v
 """
 
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import sys, os, json, time, threading
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))

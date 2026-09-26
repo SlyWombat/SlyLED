@@ -15,6 +15,7 @@ Exits 0 if every scale keeps fusion under 50 ms (10× headroom vs the
 2 Hz tracker push), 1 otherwise.
 """
 
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import os
 import random
 import sys

@@ -9,6 +9,7 @@ Usage:
     python tests/run_rgb_test.py
 """
 
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import sys, os, time, json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))
 

@@ -17,6 +17,7 @@ pin and the CLAUDE.md UDP-table row.
 Run: python -X utf8 tests/test_869_gyro_aim_wizard.py
 """
 
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import inspect
 import os
 import struct

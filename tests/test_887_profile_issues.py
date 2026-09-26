@@ -15,6 +15,7 @@ channel read the LSB byte as a slow-fast value).
 Usage:
     python tests/test_887_profile_issues.py
 """
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import os
 import sys
 

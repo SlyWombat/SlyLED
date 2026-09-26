@@ -9,6 +9,7 @@ recovers the original pose.
 Also tests the API endpoints (start / aim / observe / solve / apply /
 cancel) via the Flask test client.
 """
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import os, sys, math
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))
 

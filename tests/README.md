@@ -24,26 +24,25 @@ dir, unless you deliberately preset `SLYLED_DATA` yourself):
 - **CI** (`.github/workflows/python-tests.yml`) — sets it at the job
   level.
 
-**Residual risk — direct script runs.** `python3 tests/test_foo.py`
-bypasses all of the above. Most test files import parent_server at
-module level, and there is no clean shared hook that runs before a
-directly-executed script's imports (Python only offers
-`sitecustomize`/`usercustomize`, which are machine-global — too
-invasive for a repo to install). A handful of files self-isolate
-(`test_persistence_atomic.py`, `test_893_cors.py`,
-`test_896_fused_id_rebind.py`, `test_dmx_bake.py`,
-`screenshot_capture.py`); the rest do not. **On Windows, never run a
-test file directly without prefixing `SLYLED_DATA`:**
+**Direct script runs (#942).** `python3 tests/test_foo.py` bypasses all
+of the above, so every file that imports parent_server starts with
 
-```powershell
-$env:SLYLED_DATA = (New-TemporaryFile).DirectoryName + '\slyled-test'
-python -X utf8 tests\test_parent.py
+```python
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 ```
 
-or run it through pytest / run_all.py / the devgui instead. New tests
-that import parent_server should copy the self-isolation preamble from
-`test_893_cors.py` (set `SLYLED_DATA` to a `tempfile.mkdtemp()` before
-the import, only if not already set).
+`tests/_bootstrap.py` points `SLYLED_DATA` at a fresh temp dir (unless the
+caller already set it) and puts `desktop/shared` on `sys.path`. It raises
+if parent_server was imported first. A direct run is therefore safe:
+`python -X utf8 tests\test_parent.py` never touches the live project.
+New tests that import parent_server must add that line as their first
+import (files under `tests/aim/` put `..` on `sys.path` first — see
+`tests/aim/test_routes.py`). `tests/test_bootstrap_guard.py` fails CI for
+any file that imports parent_server without it.
+
+A test that needs real dev data (e.g. `test_pointcloud_view.py` and the
+point cloud) copies the file it needs into the isolated dir. It never
+points parent_server at `desktop/shared/data`.
 
 ## Simulator-coverage policy (#852)
 

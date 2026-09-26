@@ -14,6 +14,7 @@ Usage:
 Requires: pip install flask playwright (and ``playwright install chromium``).
 """
 
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import os, sys, time, threading, signal
 
 PROJ = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))

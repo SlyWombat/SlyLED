@@ -25,6 +25,7 @@ on the orchestrator side:
 Run:  python -X utf8 tests/test_825_gyro_handshake.py
 """
 
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import os
 import struct
 import sys

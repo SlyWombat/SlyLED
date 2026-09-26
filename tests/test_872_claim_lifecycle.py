@@ -15,6 +15,7 @@ Covers the two architectural changes:
 Run: python3 -X utf8 tests/test_872_claim_lifecycle.py
 """
 
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import inspect
 import os
 import sys

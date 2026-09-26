@@ -16,6 +16,7 @@ Two changes are now in place:
 
 The SPA polls the status endpoint and renders the log as it grows.
 """
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import os, sys, time, threading
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))
 

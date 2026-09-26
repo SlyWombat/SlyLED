@@ -9,6 +9,7 @@ zero UDP traffic toward gyro gyros.
 Run:  python -X utf8 tests/test_813_gyro_lock_removed.py
 """
 
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import os
 import sys
 import threading

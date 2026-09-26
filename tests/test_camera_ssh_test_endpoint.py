@@ -13,6 +13,7 @@ fall through. The connect attempt itself happens against the live host
 assert that paramiko is invoked with the expected kwargs by patching
 ``SSHClient.connect``.
 """
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import os, sys, json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))
 

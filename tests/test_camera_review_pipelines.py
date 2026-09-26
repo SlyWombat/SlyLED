@@ -19,6 +19,7 @@ Both tests print PASS/FAIL counts and exit non-zero on any failure so a
 CI runner can wire it into the regression suite.
 """
 
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import math
 import sys
 import os

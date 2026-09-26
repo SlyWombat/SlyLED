@@ -10,6 +10,7 @@ values. Prior to the fix in fixtures.js:loadFixtures → /api/layout,
 this was silently returning 0, 0, 0 for every fixture because
 /api/fixtures doesn't include positions.
 """
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import os
 import sys
 import threading

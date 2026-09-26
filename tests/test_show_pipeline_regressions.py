@@ -19,6 +19,7 @@ expects ({r, g, b, dimmer, pan, tilt}).
 Run: python -X utf8 tests/test_show_pipeline_regressions.py
 """
 
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import os
 import sys
 import threading

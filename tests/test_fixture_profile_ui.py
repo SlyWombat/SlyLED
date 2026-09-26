@@ -3,6 +3,7 @@
 test_fixture_profile_ui.py — Load user's fixture profile, test all UI paths:
 browse, search, add fixture, share to community, dedup check.
 """
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import sys, os, json, time, threading
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))
 

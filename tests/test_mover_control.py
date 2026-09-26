@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """test_mover_control.py — Unit tests for unified mover control engine (#472)."""
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import sys, os, json, time, threading
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))
 

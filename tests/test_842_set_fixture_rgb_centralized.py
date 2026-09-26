@@ -17,6 +17,7 @@ rgb_to_wheel_slot(...)` branch (i.e. they delegate to set_fixture_rgb).
 Run: python -X utf8 tests/test_842_set_fixture_rgb_centralized.py
 """
 
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import inspect
 import os
 import sys

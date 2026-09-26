@@ -16,6 +16,7 @@ fixture for: name (customName → name → unchanged), fovDeg, resolutionW
 (resW), resolutionH (resH), device, flip, plus a new `hwDescriptor`
 field carrying the device-string regardless of customName.
 """
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import os, sys, json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))
 

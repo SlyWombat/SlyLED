@@ -1,4 +1,5 @@
 """Capture layout with point cloud visible."""
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import sys, os, json, time, threading, shutil
 from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))
@@ -7,9 +8,13 @@ PORT = 18099
 BASE = f'http://127.0.0.1:{PORT}'
 OUTDIR = os.path.join(os.path.dirname(__file__), '..', 'docs', 'screenshots')
 
-# Use real data directory (has pointcloud.json)
+# The capture needs the dev point cloud. Copy it into the isolated data dir
+# (#942) instead of pointing parent_server at desktop/shared/data, which the
+# config import below would rewrite.
+_PC = os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared', 'data', 'pointcloud.json')
+if os.path.exists(_PC) and not os.path.exists(os.path.join(os.environ['SLYLED_DATA'], 'pointcloud.json')):
+    shutil.copy(_PC, os.environ['SLYLED_DATA'])
 import parent_server
-# Don't override DATA — use default desktop/shared/data which has the point cloud
 
 # Load user config
 CONFIG = os.path.join(os.path.dirname(__file__), 'user', 'slyled-config.json')

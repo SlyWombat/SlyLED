@@ -142,7 +142,8 @@ jobs:
                    tests/test_send_recv_handoff.py \
                    tests/test_870_ota_app_only.py \
                    tests/test_camera_bump_version.py \
-                   tests/test_no_bom.py; do
+                   tests/test_no_bom.py \
+                   tests/test_bootstrap_guard.py; do
             echo "== $t"
             SLYLED_DATA=$(mktemp -d) python3 -X utf8 "$t"
           done
@@ -214,46 +215,45 @@ jobs:
             python3 -X utf8 "$f"
           done
 
-      - name: test_parent.py (known-failure allowlist)
-        # test_parent.py currently has exactly 1 known-red assertion
-        # (777/778 pass as of 2026-07-09 post-#899 SPA registry; observed up to 786 total
-        # on runs where more network-conditional branches execute):
-        #   - "#739 import → fixtures.json matches memory" — open bug
-        #     #739 (import → persist), red until that bug is fixed.
-        # (The stale "OTA trigger returns version" expectation was fixed
-        # under #919 — the test now asserts the #832 contract: version
-        # comes from firmware/registry.json's per-board entry.)
-        # Policy (option a from #904): run the full suite unmodified and
-        # fail this step if EITHER the pass count regresses below 777
-        # or any failure appears that is not on the allowlist. The floor
-        # is deliberately below (total - 1): the assertion TOTAL varies
-        # by environment (network-conditional branches add/skip ok()
-        # calls), so the allowlist check is the precise gate and the
-        # floor is a backstop against silent count collapse. When #739
-        # is fixed, shrink the allowlist to empty and raise the floor.
+      - name: test_parent.py (exact total, network skips only)
+        # #942: the total is fixed. Every branch-gated check records a
+        # skip() instead of vanishing, and the data dir is always fresh, so
+        # test_parent.py emits exactly EXPECTED assertions on any machine.
+        # This step fails on ANY failure, on a total other than EXPECTED
+        # (a test was added or removed: update EXPECTED in the same
+        # commit), or on a skip outside NETWORK_SKIPS (a precondition that
+        # should always hold did not).
         run: |
-          python3 -X utf8 tests/test_parent.py | tee "$RUNNER_TEMP/test_parent.out" || true
+          SLYLED_DATA=$(mktemp -d) python3 -X utf8 tests/test_parent.py | tee "$RUNNER_TEMP/test_parent.out" || true
           python3 - "$RUNNER_TEMP/test_parent.out" <<'EOF'
           import io, re, sys
-          out = io.open(sys.argv[1], encoding="utf-8").read()
-          ALLOW = {
-              "#739 import → fixtures.json matches memory",
+          EXPECTED = 782
+          NETWORK_SKIPS = {
+              "Firmware check has latest version",
+              "OTA trigger returns board=esp32",
+              "OTA trigger returns version",
           }
-          fails = [m.group(1).rstrip()
-                   for m in re.finditer(r"^\s*\[FAIL\] (.+?)(?:  \(.*)?$", out, re.M)]
-          summary = re.search(r"(\d+) passed, (\d+) failed out of (\d+) tests", out)
+          out = io.open(sys.argv[1], encoding="utf-8").read()
+          summary = re.search(r"(\d+) passed, (\d+) failed, (\d+) skipped out of (\d+) tests", out)
           if not summary:
               sys.exit("test_parent.py produced no summary line — suite crashed?")
-          passed, failed, total = map(int, summary.groups())
-          unexpected = [f for f in fails if f not in ALLOW]
-          print(f"summary: {passed}/{total} passed, {failed} failed; "
-                f"allowlisted failures seen: {sorted(set(fails) & ALLOW)}")
-          if unexpected:
-              sys.exit("UNEXPECTED failures (not on the #739 allowlist):\n  "
-                       + "\n  ".join(unexpected))
-          if passed < 777:
-              sys.exit(f"pass count regressed: {passed} < 777")
-          print("test_parent.py OK (known failures only)")
+          passed, failed, skipped, total = map(int, summary.groups())
+          fails = [m.group(1).rstrip()
+                   for m in re.finditer(r"^\s*\[FAIL\] (.+?)(?:  \(.*)?$", out, re.M)]
+          skips = [m.group(1).rstrip()
+                   for m in re.finditer(r"^\s*\[SKIP\] (.+?)(?:  \(.*)?$", out, re.M)]
+          print(f"summary: {passed} passed, {failed} failed, {skipped} skipped of {total}")
+          problems = []
+          if fails:
+              problems.append("failures:\n  " + "\n  ".join(fails))
+          if total != EXPECTED:
+              problems.append(f"total {total} != EXPECTED {EXPECTED}")
+          bad_skips = [s for s in skips if s not in NETWORK_SKIPS]
+          if bad_skips:
+              problems.append("unexpected skips:\n  " + "\n  ".join(bad_skips))
+          if problems:
+              sys.exit("\n".join(problems))
+          print("test_parent.py OK")
           EOF
 
       - name: Docs — screenshot validation

@@ -19,6 +19,7 @@ Usage: python tests/test_save_restore_spa.py [-v]
 
 Requires: pip install playwright && python -m playwright install chromium
 """
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import sys
 import os
 import time

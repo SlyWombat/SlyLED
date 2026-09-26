@@ -185,10 +185,14 @@ The legacy IK modules (`mover_calibrator.py`, `coverage_math.py`, `sphere_model.
 ## Tests
 
 All commands run from project root. Wrap with `powershell.exe -Command "python -X utf8 …"` on Windows.
+Direct script runs are safe: every test that imports `parent_server` does `import _bootstrap`
+first, which points `SLYLED_DATA` at a temp dir so the live project is never read or written
+(#942). A new test that imports `parent_server` must do the same — `tests/test_bootstrap_guard.py`
+fails CI otherwise. Details in `tests/README.md`.
 
 | Suite                                  | Coverage |
 |----------------------------------------|----------|
-| `tests/test_parent.py`                 | Parent API, action types, WLED, runners, schema (523 assertions) |
+| `tests/test_parent.py`                 | Parent API, action types, WLED, runners, schema (782 — CI pins the exact total) |
 | `tests/test_spatial_math.py`           | Coordinate transforms, pan/tilt math (47) |
 | `tests/aim/` (4 suites)                | AimSphere IK, mech↔stage frame, profile mechanics, `/aim` endpoint (121) |
 | `tests/test_beam_detector.py`          | Synthetic frame detection (35, requires OpenCV) |

@@ -20,6 +20,7 @@ End-to-end test of the Android-side grip-publish flow:
 Run: python -X utf8 tests/test_816_phone_grip_publish.py
 """
 
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import math
 import os
 import sys

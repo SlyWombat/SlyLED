@@ -6,6 +6,7 @@ Usage:
     python tests/test_parent.py
 """
 
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import sys, os, json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))
 
@@ -16,6 +17,12 @@ results = []
 
 def ok(name, cond, detail=''):
     results.append((name, bool(cond), detail))
+
+def skip(name, reason=''):
+    """Record an assertion whose precondition didn't hold (#942), so the
+    total stays constant: CI pins the exact total and accepts skips only
+    from its list of network-dependent checks."""
+    results.append((name, None, reason))
 
 def run():
     with app.test_client() as c:
@@ -481,6 +488,10 @@ def run():
             ok('Moving head has beamWidth', mh[0].get('beamWidth', 0) > 0)
             ok('Moving head has panRange', mh[0].get('panRange', 0) > 0)
             ok('Moving head has tiltRange', mh[0].get('tiltRange', 0) > 0)
+        else:
+            skip('Moving head has beamWidth', 'no moving-head profile')
+            skip('Moving head has panRange', 'no moving-head profile')
+            skip('Moving head has tiltRange', 'no moving-head profile')
 
         # Create DMX fixture WITH profile and verify aimPoint + layout inclusion
         mh_id = mh[0]['id'] if mh else 'generic-moving-head-8ch'
@@ -982,16 +993,18 @@ def run():
         ok('SSH no password', ssh.get('hasPassword') is False)
 
         r = c.post('/api/cameras/ssh', json={'sshUser': 'pi', 'sshPassword': 'test123'})
-        ok('POST /api/cameras/ssh', r.status_code == 200 and r.get_json().get('ok'))
+        try:
+            ok('POST /api/cameras/ssh', r.status_code == 200 and r.get_json().get('ok'))
 
-        r = c.get('/api/cameras/ssh')
-        ssh = r.get_json()
-        ok('SSH user updated', ssh.get('sshUser') == 'pi')
-        ok('SSH has password', ssh.get('hasPassword') is True)
-        ok('SSH password masked', 'sshPassword' not in ssh)
-
-        # Reset SSH back
-        c.post('/api/cameras/ssh', json={'sshUser': 'root', 'sshPassword': ''})
+            r = c.get('/api/cameras/ssh')
+            ssh = r.get_json()
+            ok('SSH user updated', ssh.get('sshUser') == 'pi')
+            ok('SSH has password', ssh.get('hasPassword') is True)
+            ok('SSH password masked', 'sshPassword' not in ssh)
+        finally:
+            # Always reset: a crash here used to leave hasPassword=True in
+            # the data dir, failing 'SSH no password' on every later run (#942).
+            c.post('/api/cameras/ssh', json={'sshUser': 'root', 'sshPassword': ''})
 
         # ── Camera network scan ──────────────────────────────────────
         r = c.get('/api/cameras/scan-network')
@@ -1673,10 +1686,10 @@ def run():
         ok('Config export has children', len(d.get('children', [])) >= 1)
         ok('Config export has layout', 'canvasW' in d.get('layout', {}))
         # v3: internal fields stripped
-        for fx in d.get('fixtures', []):
-            ok('Config export no aimPoint', 'aimPoint' not in fx)
-            ok('Config export no orientation', 'orientation' not in fx)
-            ok('Config export no _placed', '_placed' not in fx)
+        _xf = d.get('fixtures', [])
+        ok('Config export no aimPoint', not [fx for fx in _xf if 'aimPoint' in fx])
+        ok('Config export no orientation', not [fx for fx in _xf if 'orientation' in fx])
+        ok('Config export no _placed', not [fx for fx in _xf if '_placed' in fx])
         config_bundle = d
 
         # Bad type rejected
@@ -1843,6 +1856,12 @@ def run():
                          if c2.get('id') == wipe_fid), None)
             ok('#739 force=true position is (0,0,0)',
                cur2 is not None and cur2.get('x') == 0 and cur2.get('y') == 0 and cur2.get('z') == 0)
+        else:
+            skip('#739 wipe POST returns 200', 'no positioned fixture in layout')
+            skip('#739 wipe was reported as blocked', 'no positioned fixture in layout')
+            skip('#739 fixture position preserved after stale wipe', 'no positioned fixture in layout')
+            skip('#739 force=true zeroes position', 'no positioned fixture in layout')
+            skip('#739 force=true position is (0,0,0)', 'no positioned fixture in layout')
 
         # ── #741: expanded save/restore regression coverage ────────────
         # #741 plugs the holes #739 fell through. The existing #739 block
@@ -2371,10 +2390,16 @@ def run():
         d = r.get_json()
         ok('Fixtures live exposes claimedFixtures', isinstance(d.get('claimedFixtures'), list))
         ok('Fixtures live claimedFixtures empty before claim', d['claimedFixtures'] == [])
-        for f in d['fixtures']:
-            ok(f"Fixture {f['id']} has source field", f.get('source') in ('idle', 'show', 'claim'))
-            ok(f"Fixture {f['id']} unclaimed by default", f.get('source') != 'claim')
-            ok(f"Fixture {f['id']} claimedBy null when unclaimed", f.get('claimedBy') is None)
+        _lf = d['fixtures']
+        ok('Every live fixture has a source field',
+           _lf and all(f.get('source') in ('idle', 'show', 'claim') for f in _lf),
+           [f['id'] for f in _lf if f.get('source') not in ('idle', 'show', 'claim')])
+        ok('Every live fixture unclaimed by default',
+           _lf and all(f.get('source') != 'claim' for f in _lf),
+           [f['id'] for f in _lf if f.get('source') == 'claim'])
+        ok('Every live fixture claimedBy null when unclaimed',
+           _lf and all(f.get('claimedBy') is None for f in _lf),
+           [f['id'] for f in _lf if f.get('claimedBy') is not None])
 
         # Claim the DMX fixture via mover-control
         dmx_fid = dmx_fx['id']
@@ -2398,6 +2423,8 @@ def run():
         led_entry = next((f for f in d['fixtures'] if f['id'] != dmx_fid), None)
         if led_entry:
             ok('Other fixture not claimed', led_entry.get('source') != 'claim')
+        else:
+            skip('Other fixture not claimed', 'no second fixture')
 
         # /api/show/status also exposes claimedFixtures
         r = c.get('/api/show/status')
@@ -2703,6 +2730,7 @@ def run():
             ok('Firmware check has latest version', 'latest' in d)
         else:
             ok('Firmware check blocked (no WiFi or no internet)', r.status_code in (400, 502))
+            skip('Firmware check has latest version', 'firmware check blocked (network)')
 
         # /api/firmware/ota — child not found
         r = c.post('/api/firmware/ota/9999')
@@ -2715,6 +2743,8 @@ def run():
             r = c.post(f'/api/firmware/ota/{test_cid}')
             ok('OTA offline child → 400', r.status_code == 400)
             c.delete(f'/api/children/{test_cid}')
+        else:
+            skip('OTA offline child → 400', 'no child registered')
 
         # ── OTA asset map + proxy URL tests (mocked release) ────────
         # Seed the GitHub release cache so these tests don't need internet
@@ -2828,6 +2858,9 @@ def run():
             ok('OTA trigger returns version',
                _reg_esp32 is not None and d.get('version') == _reg_esp32,
                f"got={d.get('version')} registry={_reg_esp32}")
+        else:
+            skip('OTA trigger returns board=esp32', 'OTA trigger did not return 200 (network)')
+            skip('OTA trigger returns version', 'OTA trigger did not return 200 (network)')
 
         # /api/firmware/binary/<board> — serves binary or tries to download
         r = c.get('/api/firmware/binary/unknown')
@@ -3094,6 +3127,8 @@ def run():
                chans[dim_idx] == 200,
                f'ch{dim_idx+1}={chans[dim_idx]} '
                f'(expected 200; 0 means orphan-blackout regressed)')
+        else:
+            skip('#835 orphan Track action did NOT blackout dimmer', 'profile has no dimmer')
 
         _ps_pb._dmx_playback_stop.set()
         _time_pb.sleep(0.05)
@@ -3266,6 +3301,9 @@ def run():
                new_blue_id != op_act_blue_id,
                f'got actionId={blue_clip.get("actionId")}, '
                f'expected {new_blue_id} (new), not {op_act_blue_id} (op)')
+        else:
+            skip('#838 timeline red-clip remapped to existing op id', 'imported timeline missing')
+            skip('#838 timeline variant-blue clip remapped to new id', 'imported timeline missing')
 
         # Verify operator's spatial effect untouched + only one Sphere.
         all_eff = c.get('/api/spatial-effects').get_json()
@@ -3318,38 +3356,62 @@ def run():
             'totalFrames': 0, 'fps': 40,
         }
 
-        # Drive `_show_playback_loop` directly with the single-item
-        # loop_all path — exercises the v1.7.82 routing fix.
-        _thr_pb.Thread(target=_ps_pb._show_playback_loop,
-                       args=([loop_tid], True, _time_pb.time(), 0),
-                       daemon=True).start()
-
         prof = _ps_pb._profile_lib.channel_info('movinghead-150w-12ch') or {}
         dim_off = (prof.get('channel_map') or {}).get('dimmer')
         dim_idx = 300 - 1 + dim_off if dim_off is not None else None
 
-        # Sample every 25 ms for 1.0 s — covers 2.5 wrap boundaries.
-        # Pre-fix at least one sample would land on the blackout
-        # frame at each wrap and read dimmer=0.
-        zero_samples = 0
-        sample_count = 0
-        if dim_idx is not None:
-            for _ in range(40):  # 40 × 25 ms = 1.0 s
-                _time_pb.sleep(0.025)
-                rr = c.get('/api/dmx/monitor/1')
-                if rr.status_code != 200:
-                    continue
-                cs = rr.get_json().get('channels', [])
-                if len(cs) > dim_idx:
-                    sample_count += 1
-                    if cs[dim_idx] == 0:
-                        zero_samples += 1
+        # Record every write to the dimmer byte (#942). This used to sample
+        # /api/dmx/monitor every 25 ms for 1 s: a loaded machine collected
+        # too few samples, and a sample taken before the loop's first frame
+        # read 0. A spy on the universe buffer sees a wrap blackout whenever
+        # one is written — set_channel, set_data and blackout() all store
+        # into _data — independent of scheduling.
+        dim_writes = []  # (monotonic time, value)
 
-        ok('#840 sampled ≥ 30 frames across wraps', sample_count >= 30,
-           f'sample_count={sample_count}')
+        class _DimSpy(bytearray):
+            def __setitem__(self, k, v):
+                super().__setitem__(k, v)
+                if dim_idx is None:
+                    return
+                if (k == dim_idx if isinstance(k, int)
+                        else dim_idx in range(*k.indices(len(self)))):
+                    dim_writes.append((_time_pb.monotonic(), self[dim_idx]))
+
+        _uni_pb = _ps_pb._artnet.get_universe(1)
+        _uni_pb._data = _DimSpy(_uni_pb._data)
+        try:
+            # Drive `_show_playback_loop` directly with the single-item
+            # loop_all path — exercises the v1.7.82 routing fix.
+            _thr_pb.Thread(target=_ps_pb._show_playback_loop,
+                           args=([loop_tid], True, _time_pb.time(), 0),
+                           daemon=True).start()
+            # Wait for the loop's first lit frame, then let it run 3 full
+            # durations (3 wraps) past it. The deadline only bounds a hang.
+            first_lit = None
+            deadline = _time_pb.monotonic() + 10.0
+            while _time_pb.monotonic() < deadline:
+                if first_lit is None:
+                    first_lit = next((t for t, v in list(dim_writes) if v == 200), None)
+                elif _time_pb.monotonic() - first_lit >= 3 * 0.4:
+                    break
+                _time_pb.sleep(0.02)
+        finally:
+            # Stopping legitimately blacks out; judge only the frames before it.
+            t_stop = _time_pb.monotonic()
+            _ps_pb._dmx_playback_stop.set()
+            _time_pb.sleep(0.1)
+            _uni_pb._data = bytearray(_uni_pb._data)
+
+        lit = [(t, v) for t, v in dim_writes
+               if first_lit is not None and first_lit <= t < t_stop]
+        after_stop = [v for t, v in dim_writes if t >= t_stop]
+        ok('#840 loop kept writing the dimmer across ≥ 2 wraps',
+           bool(lit) and lit[-1][0] - first_lit >= 2 * 0.4,
+           f'{len(lit)} writes over {lit[-1][0] - first_lit:.2f}s' if lit else f'no lit frame; dim_idx={dim_idx}')
         ok('#840 single-item loop_all has NO wrap blackout',
-           zero_samples == 0,
-           f'{zero_samples}/{sample_count} samples read dimmer=0')
+           bool(lit) and all(v == 200 for _, v in lit),
+           f'{sum(1 for _, v in lit if v != 200)}/{len(lit)} writes were not 200; '
+           f'after stop: {after_stop[:4]}')
 
         _ps_pb._dmx_playback_stop.set()
         _time_pb.sleep(0.1)
@@ -3810,6 +3872,10 @@ def run():
                f'currentValue={extras.get("currentValue")}')
             ok('#849 autoBrightness.globalBrightness present',
                extras.get('globalBrightness') is not None)
+        else:
+            skip('#849 auto-brightness LIVE (lastDataAge < 3s)', 'no auto-brightness entry')
+            skip('#849 autoBrightness.currentValue carries last value', 'no auto-brightness entry')
+            skip('#849 autoBrightness.globalBrightness present', 'no auto-brightness entry')
 
         # ── #888 — new mobile-redesign endpoints ────────────────────
         # Each endpoint guards on the DMX engine running; with no
@@ -3893,17 +3959,18 @@ def run():
            'strobe' not in eligible)
 
     # ── Print results ───────────────────────────────────────────────
-    passed = sum(1 for _, v, _ in results if v)
-    failed = sum(1 for _, v, _ in results if not v)
+    passed = sum(1 for _, v, _ in results if v is True)
+    failed = sum(1 for _, v, _ in results if v is False)
+    skipped = sum(1 for _, v, _ in results if v is None)
 
     for name, v, detail in results:
-        status = 'PASS' if v else 'FAIL'
+        status = 'SKIP' if v is None else 'PASS' if v else 'FAIL'
         line = f'  [{status}] {name}'
         if detail and not v:
             line += f'  ({detail})'
         print(line, flush=True)
 
-    print(f'\n{passed} passed, {failed} failed out of {len(results)} tests')
+    print(f'\n{passed} passed, {failed} failed, {skipped} skipped out of {len(results)} tests')
     return 0 if failed == 0 else 1
 
 

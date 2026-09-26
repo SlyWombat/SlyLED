@@ -14,6 +14,7 @@ same target — within ±2 LSB of rounding.
 Run:  python -X utf8 tests/test_track_action_809.py
 """
 
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import os
 import sys
 
@@ -97,6 +98,11 @@ def _setup_profile_and_fixture():
     }
     with parent_server.app.test_client() as c:
         c.post("/api/dmx-profiles", json=profile_doc)
+        # The live-test stage (6 x 3 x 4 m). Set explicitly: the Track
+        # target (y = 3241 mm) lies outside the default stage, and the
+        # result must not depend on whatever stage.json the data dir holds.
+        c.post("/api/stage", json={"w": 6.0, "h": 3.0, "d": 4.0,
+                                   "stageBoundsManual": True})
 
     # Build the fixture record exactly as the live test had it. Stage
     # Right at (600, 0, 1760), Home + Secondary saved, no rotation.
@@ -263,6 +269,11 @@ def test_track_falls_back_to_geometric_for_underconfigured_fixture():
     }
     with parent_server.app.test_client() as c:
         c.post("/api/dmx-profiles", json=profile_doc)
+        # The live-test stage (6 x 3 x 4 m). Set explicitly: the Track
+        # target (y = 3241 mm) lies outside the default stage, and the
+        # result must not depend on whatever stage.json the data dir holds.
+        c.post("/api/stage", json={"w": 6.0, "h": 3.0, "d": 4.0,
+                                   "stageBoundsManual": True})
     fx = {
         "id": 178100,
         "name": "Test Unconfigured 809",

@@ -10,6 +10,7 @@ Usage:
     python tests/capture_demo.py --child 192.168.10.233
 """
 
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import sys, os, json, time, threading, argparse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))
 

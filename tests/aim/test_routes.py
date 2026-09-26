@@ -13,6 +13,8 @@ parent_server Flask app. Verifies:
 import os
 import sys
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..',
                                   'desktop', 'shared'))
 

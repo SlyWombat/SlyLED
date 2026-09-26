@@ -16,6 +16,7 @@ Two failure modes locked in:
 Run:  python -X utf8 tests/test_807_track_action_park.py
 """
 
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import os
 import sys
 import time

@@ -10,6 +10,7 @@ Tests:
 - ArtPoll discovery populates discovered nodes
 - Packet capture validates ArtDMX wire format
 """
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import sys, os, json, struct, socket, time, threading
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))
 

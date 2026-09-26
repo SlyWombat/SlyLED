@@ -13,6 +13,7 @@ in three regimes:
      at small radii. Filter restricts to ±100 mm of local floor.
   4. Manual shift endpoint as the operator-accessible escape hatch.
 """
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))
 

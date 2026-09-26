@@ -9,6 +9,7 @@ Orphan remotes (registered but never sent live data) must:
   - persist registered_at across save / load
   - be idempotently removed via DELETE /api/remotes/<id> (200 + removed bool)
 """
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import os, sys, time, tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))

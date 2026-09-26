@@ -17,6 +17,7 @@ Asserts the new `aurora-curtain` template + ribbon primitive:
 Run: python -X utf8 tests/test_839_ribbon_aurora_curtain.py
 """
 
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import math
 import os
 import sys

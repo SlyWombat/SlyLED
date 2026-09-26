@@ -14,6 +14,7 @@ Tests:
 8. Bake produces non-empty segments for all DMX fixtures
 9. Two loads of same theme produce different shows (randomization)
 """
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import sys, os, json, time, threading
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))
 

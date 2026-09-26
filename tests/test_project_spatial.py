@@ -10,6 +10,7 @@ Usage:
     python tests/test_project_spatial.py -v     # verbose
 """
 
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import sys, os, json, gzip, base64
 
 os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))

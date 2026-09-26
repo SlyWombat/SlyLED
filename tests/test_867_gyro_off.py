@@ -16,6 +16,7 @@ deliberately narrow.
 Run: python -X utf8 tests/test_867_gyro_off.py
 """
 
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import inspect
 import os
 import sys

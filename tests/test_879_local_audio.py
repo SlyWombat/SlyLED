@@ -12,6 +12,7 @@ Usage:
     python tests/test_879_local_audio.py
 """
 
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
 import math
 import os
 import struct
