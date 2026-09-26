@@ -248,9 +248,28 @@ def suites(commit, only):
 ORCH_SRC_IMG = "slyled-qa-orch:src"
 
 
+RELEASE = None   # set by --release: use ghcr.io/slywombat/slyled:<tag> instead of a source build
+
+
 def _fetch_and_build(commit):
     """Fetch the commit on kdocker3 and build the orchestrator image from the
-    repo's own Dockerfile (#962) plus the test-runner image (Playwright)."""
+    repo's own Dockerfile (#962) plus the test-runner image (Playwright).
+    With --release TAG, the published ghcr image is used instead (exact
+    artifact QA signs off), tagged locally as the orchestrator image."""
+    if RELEASE:
+        rc, out, _ = ssh(f"test -f {REMOTE}/.pre_images.json && echo have")
+        if "have" not in out:
+            _, imgs, _ = ssh("docker images --format '{{.Repository}}:{{.Tag}}'")
+            ssh(f"mkdir -p {REMOTE} && cat > {REMOTE}/.pre_images.json", stdin=json.dumps(sorted(set(imgs.split()))))
+        img = f"ghcr.io/slywombat/slyled:{RELEASE}"
+        rc, out, e = ssh(f"docker pull -q {img} && docker tag {img} {ORCH_SRC_IMG} && "
+                         f"docker inspect --format '{{{{index .RepoDigests 0}}}}' {img}", timeout=1800)
+        ok(f"release image {img} pulled", rc == 0, e[-200:])
+        print(f"  digest: {out.strip().splitlines()[-1] if out.strip() else '?'}")
+        rc, _, e = ssh(f"cd {REMOTE} && cat > Dockerfile.tests && docker build -q -t {TEST_IMG} -f Dockerfile.tests .",
+                       timeout=1800, stdin=DOCKERFILE)
+        ok("test-runner image built", rc == 0, e[-300:])
+        return f"release-{RELEASE}"
     sha = subprocess.run(["git", "-C", str(QA.parent.parent), "rev-parse", commit],
                          capture_output=True, text=True, check=True).stdout.strip()
     rc, out, _ = ssh(f"test -f {REMOTE}/.pre_images.json && echo have")
@@ -272,7 +291,7 @@ def _fetch_and_build(commit):
 def peer966(commit):
     """#966 acceptance: two orchestrators on one network must each alert."""
     sha = _fetch_and_build(commit)
-    print(f"== #966 peer detection at {sha[:7]} (isolated net)")
+    print(f"== #966 peer detection at {sha[:14]} (isolated net)")
     rc, out, _ = ssh(f"docker network ls --format '{{{{.Name}}}}' | grep -c '^{NET}$'")
     if out.strip() != "1":
         ssh(f"docker network create --internal --subnet {SUBNET} {NET}")
@@ -389,7 +408,7 @@ def ollama965(commit):
     mini's Ollama through a single-purpose relay (TCP 11434 → Mac only). The
     orchestrator's broadcasts never leave the isolated net."""
     sha = _fetch_and_build(commit)
-    print(f"== #965 remote Ollama at {sha[:7]} via relay → {MAC_OLLAMA[0]}:{MAC_OLLAMA[1]}")
+    print(f"== #965 remote Ollama at {sha[:14]} via relay → {MAC_OLLAMA[0]}:{MAC_OLLAMA[1]}")
     rc, out, _ = ssh(f"docker network ls --format '{{{{.Name}}}}' | grep -c '^{NET}$'")
     if out.strip() != "1":
         ssh(f"docker network create --internal --subnet {SUBNET} {NET}")
@@ -496,7 +515,7 @@ def down():
     ssh(f"docker network rm {NET} 2>/dev/null")
     code, out, _ = ssh("docker images --format '{{.Repository}}:{{.Tag}}'")
     for img in set(out.split()) - pre:
-        if img.startswith(("ghcr.io/slywombat/slyled:", "python:3.12-slim", "python:3.11-slim", "slyled-qa-")):
+        if img.startswith(("ghcr.io/slywombat/slyled:", "python:3.12-slim", "python:3.11-slim", "slyled-qa-", "slyled-qa-orch")):
             ssh(f"docker image rm {img}")
     # Containers run as root and write into the mounted tree, so plain rm fails.
     ssh(f"sudo -n rm -rf {REMOTE} || rm -rf {REMOTE}")
@@ -512,7 +531,10 @@ def main():
     ap.add_argument("--tag", default="2.2.0")
     ap.add_argument("--commit", default="origin/main")
     ap.add_argument("--only", default="", help="substring filter on the suite list")
+    ap.add_argument("--release", default=None, help="peer966/ollama965: test the published ghcr image <tag>")
     a = ap.parse_args()
+    global RELEASE
+    RELEASE = a.release
     {"up": lambda: up(a.tag), "smoke": smoke, "suites": lambda: suites(a.commit, a.only), "peer966": lambda: peer966(a.commit), "ollama965": lambda: ollama965(a.commit),
      "down": down}[a.step]()
     print(f"\n{_p} passed, {_f} failed out of {_p + _f} tests")
