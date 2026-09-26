@@ -309,14 +309,15 @@ jobs:
             "paramiko>=3.0" "pyserial>=3.5" playwright
           playwright install --with-deps chromium
 
-      - name: Docs — strict screenshot validation (freshness reminder)
-        # Full four-check run incl. freshness: stays red after any SPA
-        # change until captures are re-taken on the rig (#898 follow-up).
-        continue-on-error: true
+      - name: Docs — screenshot validation incl. freshness (warnings)
+        # All four checks. Freshness is reported as warnings (#898): any SPA
+        # change stales every capture until the next recapture, and the
+        # rig-only shots (walkthrough, calibration, Android) wait for a rig
+        # session. Broken links, orphans and weak alt text still fail.
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q git-restore-mtime
           git restore-mtime
-          python3 tools/docs/validate_screenshots.py
+          python3 tools/docs/validate_screenshots.py --warn-freshness
 
       - name: HinksPix SPA suites (tests/test_hinkspix_*_spa.py)
         # The browser half of the HinksPix set. Both stub the

@@ -34,6 +34,12 @@ BASE = f'http://127.0.0.1:{PORT}'
 captured = []
 skipped = []
 
+# closeModal() only pops a stacked sub-dialog (profile view over the library),
+# which left the library covering every later example-B capture. Drop the
+# stack and any unsaved-editor flag so the modal really closes.
+CLOSE_ALL = ("(() => { if (typeof _modalStack !== 'undefined') _modalStack.length = 0;"
+             " if (typeof _peDirty !== 'undefined') _peDirty = false; closeModal(); })()")
+
 
 def out(name):
     return os.path.join(OUTDIR, name)
@@ -74,6 +80,10 @@ def start_server():
     def run():
         app.run(host='127.0.0.1', port=PORT, threaded=True, use_reloader=False)
 
+    # start_background_tasks() (which runs the startup fixture check) is not
+    # called here, so mark the check done or the dashboard shows
+    # "Checking fixtures..." in every capture.
+    parent_server._startup_check_done = True
     t = threading.Thread(target=run, daemon=True)
     t.start()
     time.sleep(1.5)  # wait for server to start
@@ -119,7 +129,7 @@ def capture_spa():
         page.evaluate("document.getElementById('aft').value='dmx';_toggleAddFixFields()")
         snap('spa-setup-add-dmx.png', 1.0)
 
-        page.evaluate("closeModal()")
+        page.evaluate(CLOSE_ALL)
 
         # Edit DMX fixture (find first DMX fixture)
         try:
@@ -128,7 +138,7 @@ def capture_spa():
                 if (dmxFix) editFixture(dmxFix.id);
             """)
             snap('spa-setup-edit-dmx.png', 0.5)
-            page.evaluate("closeModal()")
+            page.evaluate(CLOSE_ALL)
         except Exception:
             skipped.append('spa-setup-edit-dmx.png')
 
@@ -139,7 +149,7 @@ def capture_spa():
                 if (camFix) editFixture(camFix.id);
             """)
             snap('spa-setup-edit-camera.png', 0.5)
-            page.evaluate("closeModal()")
+            page.evaluate(CLOSE_ALL)
         except Exception:
             skipped.append('spa-setup-edit-camera.png')
 
@@ -173,7 +183,7 @@ def capture_spa():
         try:
             page.evaluate("openLoadShowModal()")
             snap('spa-runtime-load-show.png', 1.0)
-            page.evaluate("closeModal()")
+            page.evaluate(CLOSE_ALL)
         except Exception:
             skipped.append('spa-runtime-load-show.png')
 
@@ -189,13 +199,13 @@ def capture_spa():
             page.evaluate("viewProfile('generic-moving-head-16bit')")
             snap('spa-settings-profile-view.png', 0.5)
 
-            page.evaluate("closeModal(); setTimeout(showProfileEditor, 300)")
+            page.evaluate(CLOSE_ALL + "; setTimeout(showProfileEditor, 300)")
             snap('spa-settings-profile-editor.png', 1.0)
 
-            page.evaluate("closeModal(); setTimeout(showOflImport, 300)")
+            page.evaluate(CLOSE_ALL + "; setTimeout(showOflImport, 300)")
             snap('spa-settings-ofl-import.png', 1.0)
 
-            page.evaluate("closeModal()")
+            page.evaluate(CLOSE_ALL)
         except Exception as e:
             skipped.append(f'profile modals: {e}')
 
@@ -229,7 +239,7 @@ def capture_spa():
                 if (dmxFix) editFixture(dmxFix.id);
             """)
             snap('workflow-test-channels.png', 0.5)
-            page.evaluate("closeModal()")
+            page.evaluate(CLOSE_ALL)
         except Exception:
             skipped.append('workflow-test-channels.png')
 
@@ -242,7 +252,7 @@ def capture_spa():
                 setTimeout(function(){ _peEditCaps(0); }, 500);
             """)
             snap('workflow-profile-caps.png', 1.5)
-            page.evaluate("closeModal()")
+            page.evaluate(CLOSE_ALL)
         except Exception:
             skipped.append('workflow-profile-caps.png')
 
@@ -443,7 +453,7 @@ def capture_examples():
             'name': 'Sweep Green', 'category': 'spatial-field', 'shape': 'sphere',
             'r': 0, 'g': 255, 'b': 0, 'size': {'radius': 800},
             'motion': {'startPos': [1000, 2000, 0], 'endPos': [5000, 2000, 0],
-                       'durationS': 8, 'easing': 'linear'},
+                       'durationS': 10, 'easing': 'linear'},
             'blend': 'replace'
         })
         eff_id = r.get_json().get('id')
@@ -454,18 +464,22 @@ def capture_examples():
         })
         tl_id = r.get_json().get('id')
 
-        # Add track + clip
-        c.post(f'/api/timelines/{tl_id}/tracks', json={'target': 'all'})
-        tl_data = c.get(f'/api/timelines/{tl_id}').get_json()
-        tracks = tl_data.get('tracks', [])
-        if tracks:
-            track_id = tracks[0].get('id')
-            c.post(f'/api/timelines/{tl_id}/tracks/{track_id}/clips', json={
-                'effectId': eff_id, 'startS': 0, 'durationS': 8
-            })
+        # One all-performers track carrying the sweep (the old per-track
+        # POST routes no longer exist, which left this timeline empty).
+        r = c.put(f'/api/timelines/{tl_id}', json={
+            'tracks': [{'allPerformers': True, 'clips': [
+                {'effectId': eff_id, 'startS': 0, 'durationS': 10}]}],
+        })
+        if r.status_code != 200:
+            print(f'  WARNING: timeline tracks not set — {r.status_code}')
 
-        # Bake
+        # Bake, and wait for it: start refuses an unbaked timeline
         c.post(f'/api/timelines/{tl_id}/bake')
+        for _ in range(100):
+            st = c.get(f'/api/timelines/{tl_id}/baked/status').get_json() or {}
+            if st.get('done') or st.get('error'):
+                break
+            time.sleep(0.1)
 
         # Start playback
         c.post(f'/api/timelines/{tl_id}/start')
@@ -497,7 +511,7 @@ def capture_examples():
             time.sleep(0.5)
             page.evaluate("viewProfile('narrow-mover')")
             snap('example-b-profile.png', 1.0)
-            page.evaluate("closeModal()")
+            page.evaluate(CLOSE_ALL)
         except Exception as e:
             print(f'    Profile capture failed: {e}')
             skipped.append('example-b-profile.png')
@@ -516,22 +530,31 @@ def capture_examples():
         page.evaluate("showTab('actions')")
         snap('example-b-action.png', 1.5)
 
-        # Shows tab with timeline
+        # Shows tab with the demo timeline selected (else the preview is empty)
         page.evaluate("showTab('shows')")
+        time.sleep(1.0)
+        page.evaluate("""(() => {
+            var sel = document.getElementById('tl-select');
+            var opt = sel && [...sel.options].find(o => /Mover Tracking Demo/.test(o.text));
+            if (opt) { sel.value = opt.value; loadTimelineDetail(); }
+        })()""")
         snap('example-b-timeline.png', 1.5)
 
-        # Runtime tab — tracking T=0
+        # Runtime tab — the 10 s sweep at T=0 / 5 / 10. Playback started
+        # during setup, so restart it here: otherwise the frames land at an
+        # arbitrary point of the 20 s loop (t0 and t5 came out identical).
         page.evaluate("showTab('runtime')")
         time.sleep(2)
-        snap('example-b-tracking-t0.png', 1.0)
-
-        # Wait and capture T=5
-        time.sleep(5)
-        snap('example-b-tracking-t5.png', 0.5)
-
-        # Wait and capture T=10
-        time.sleep(5)
-        snap('example-b-tracking-t10.png', 0.5)
+        with app.test_client() as c:
+            c.post(f'/api/timelines/{tl_id}/stop')
+            time.sleep(0.3)
+            c.post(f'/api/timelines/{tl_id}/start')
+        t_go = time.monotonic()
+        for name, at in (('example-b-tracking-t0.png', 0.4),
+                         ('example-b-tracking-t5.png', 5.0),
+                         ('example-b-tracking-t10.png', 9.6)):
+            time.sleep(max(0.0, t_go + at - time.monotonic()))
+            snap(name, 0)
 
         # ── Example D screenshots — camera calibration panels ──
 
@@ -548,7 +571,7 @@ def capture_examples():
         try:
             page.evaluate("_printAruco()")
             snap('example-d-print-markers.png', 1.0)
-            page.evaluate("closeModal()")
+            page.evaluate(CLOSE_ALL)
         except Exception:
             skipped.append('example-d-print-markers.png')
 
@@ -564,7 +587,7 @@ def capture_examples():
                 if (mover) editFixture(mover.id);
             """)
             snap('example-c-calibrate-panel.png', 1.0)
-            page.evaluate("closeModal()")
+            page.evaluate(CLOSE_ALL)
         except Exception as e:
             print(f'    Calibrate panel capture failed: {e}')
             skipped.append('example-c-calibrate-panel.png')

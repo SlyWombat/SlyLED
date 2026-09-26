@@ -25,8 +25,10 @@ before any docs release.
 Usage:
     python tools/docs/validate_screenshots.py
     python tools/docs/validate_screenshots.py --json
+    python tools/docs/validate_screenshots.py --warn-freshness   # stale = warning
 """
 import argparse
+import os
 import json
 import re
 import sys
@@ -97,7 +99,7 @@ def _spa_mtime():
     return newest
 
 
-def validate(skip_freshness=False):
+def validate(skip_freshness=False, warn_freshness=False):
     fails = []          # (check, detail)
     referenced = {}     # png name -> list of (doc, alt)
     spa_mtime = _spa_mtime()
@@ -152,10 +154,14 @@ def validate(skip_freshness=False):
                               f"{doc}: screenshots/{name} has no descriptive "
                               f"alt text"))
 
+    stale = [d for c, d in fails if c == "stale"]
+    if warn_freshness:
+        fails = [(c, d) for c, d in fails if c != "stale"]
     return {
         "screenshotsOnDisk": len(on_disk),
         "screenshotsReferenced": len(referenced),
         "failures": fails,
+        "warnings": stale if warn_freshness else [],
         "ok": not fails,
     }
 
@@ -165,13 +171,21 @@ def main():
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("--skip-freshness", action="store_true",
                     help="skip check 3 (stale-vs-SPA); used by the per-PR CI job")
+    ap.add_argument("--warn-freshness", action="store_true",
+                    help="report check 3 as warnings, not failures (#898): stale "
+                         "captures wait for a rig recapture, the other checks still fail")
     args = ap.parse_args()
-    r = validate(skip_freshness=args.skip_freshness)
+    r = validate(skip_freshness=args.skip_freshness, warn_freshness=args.warn_freshness)
     if args.json:
         print(json.dumps(r, indent=2))
     else:
         print(f"Screenshots: {r['screenshotsReferenced']} referenced, "
               f"{r['screenshotsOnDisk']} on disk")
+        if r["warnings"]:
+            gha = bool(os.environ.get("GITHUB_ACTIONS"))
+            print(f"\nSTALE — warning only ({len(r['warnings'])}):")
+            for d in r["warnings"]:
+                print(f"::warning title=Stale screenshot::{d}" if gha else f"  - {d}")
         if r["ok"]:
             print("PASS — all documentation screenshots validate.")
         else:
