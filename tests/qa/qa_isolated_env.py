@@ -23,6 +23,9 @@ containers and networks (Ollama, Homepage, …) are never touched.
       server-spawning test suites, run inside the isolated net (operator rule)
   python tests/qa/qa_isolated_env.py peer966 [--commit SHA]
       #966 acceptance: two orchestrators built from source, both must alert
+  python tests/qa/qa_isolated_env.py ollama965 [--commit SHA]
+      #965 acceptance: SlyLED on the isolated net uses the Mac mini's Ollama via a
+      single-purpose relay (TCP 11434 only); verifies no local install / no pulls
   python tests/qa/qa_isolated_env.py down
 """
 import argparse
@@ -353,6 +356,127 @@ print(json.dumps(out))
     ok("orch-b restarted → orch-a sees it again (<= 45 s)", bool(r.get("a_sees")) and (r.get("secs") if r.get("secs") is not None else 999) <= 45, (r.get("secs"), r.get("a_sees")))
 
 
+MAC_OLLAMA = ("192.168.10.67", 11434)      # Mac mini M4 — SlyTab's backup Ollama; read/generate only
+RELAY_IP = "10.250.0.20"
+RELAY_PY = r'''
+import socket, threading
+DST = ("%s", %d)
+def pipe(a, b):
+    try:
+        while True:
+            d = a.recv(65536)
+            if not d: break
+            b.sendall(d)
+    except Exception: pass
+    finally:
+        for s in (a, b):
+            try: s.close()
+            except Exception: pass
+srv = socket.socket(); srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(("0.0.0.0", 11434)); srv.listen(16)
+print("relay 11434 ->", DST, flush=True)
+while True:
+    c, _ = srv.accept()
+    try: u = socket.create_connection(DST, timeout=10)
+    except Exception: c.close(); continue
+    threading.Thread(target=pipe, args=(c, u), daemon=True).start()
+    threading.Thread(target=pipe, args=(u, c), daemon=True).start()
+''' % MAC_OLLAMA
+
+
+def ollama965(commit):
+    """#965 acceptance: SlyLED (on the --internal net, no LAN route) uses the Mac
+    mini's Ollama through a single-purpose relay (TCP 11434 → Mac only). The
+    orchestrator's broadcasts never leave the isolated net."""
+    sha = _fetch_and_build(commit)
+    print(f"== #965 remote Ollama at {sha[:7]} via relay → {MAC_OLLAMA[0]}:{MAC_OLLAMA[1]}")
+    rc, out, _ = ssh(f"docker network ls --format '{{{{.Name}}}}' | grep -c '^{NET}$'")
+    if out.strip() != "1":
+        ssh(f"docker network create --internal --subnet {SUBNET} {NET}")
+    _, mac_before, _ = ssh_mac("ollama list")
+    ssh(f"mkdir -p {REMOTE}/relay && cat > {REMOTE}/relay/relay.py", stdin=RELAY_PY)
+    rc, _, e = ssh(f"docker rm -f slyled-qa-relay >/dev/null 2>&1; docker run -d --name slyled-qa-relay --network {NET} "
+                   f"--ip {RELAY_IP} -v $(cd {REMOTE}/relay && pwd):/r:ro {TEST_IMG} python -u /r/relay.py && "
+                   f"docker network connect bridge slyled-qa-relay")
+    ok("relay up (isolated net + default bridge, forwards only to the Mac's 11434)", rc == 0, e[-200:])
+    rc, _, e = ssh(f"docker rm -f slyled-qa-orch-a >/dev/null 2>&1; docker run -d --name slyled-qa-orch-a "
+                   f"--hostname qa-orch-a --network {NET} --ip {IPS['orch-a']} -e TZ=America/Toronto {ORCH_SRC_IMG}")
+    ok("orch-a started on the isolated net", rc == 0, e[-200:])
+    probe = r'''
+import json, sys, time, urllib.request
+A = "http://10.250.0.10:8080"; RELAY = "http://10.250.0.20:11434"
+def call(p, m="GET", body=None, t=30):
+    d = json.dumps(body).encode() if body is not None else None
+    r = urllib.request.Request(A + p, data=d, method=m, headers={"Content-Type": "application/json"} if d else {})
+    try:
+        with urllib.request.urlopen(r, timeout=t) as x: return x.status, json.loads(x.read())
+    except urllib.error.HTTPError as e:
+        try: return e.code, json.loads(e.read())
+        except Exception: return e.code, {}
+    except Exception as e: return None, {"_err": str(e)}
+for _ in range(60):
+    if call("/status")[0] == 200: break
+    time.sleep(2)
+phase = sys.argv[1]; out = {}
+if phase == "main":
+    out["cfg"] = call("/api/ai-runtime/config", "PUT", {"mode": "remote", "url": RELAY, "model": "qwen2.5vl:7b"})
+    out["conn"] = call("/api/ai-runtime/test-connection", "POST", {})
+    out["status"] = call("/api/ollama-runtime/status")
+    out["models"] = call("/api/ollama-runtime/models")
+    out["install"] = call("/api/ollama-runtime/install", "POST", {"force": False})
+    out["pull_default"] = call("/api/ollama-runtime/pull", "POST", {"name": "moondream"})
+    t0 = time.time(); out["gen"] = call("/api/ai/ollama/test", "POST", {}, t=300); out["gen_s"] = round(time.time() - t0, 1)
+elif phase == "down":
+    out["status"] = call("/api/ollama-runtime/status")
+    out["install"] = call("/api/ollama-runtime/install", "POST", {"force": False})
+    out["conn"] = call("/api/ai-runtime/test-connection", "POST", {})
+print(json.dumps(out))
+'''
+    ssh(f"mkdir -p {REMOTE}/probe && cat > {REMOTE}/probe/p965.py", stdin=probe)
+
+    def run(phase):
+        rc, out, e = ssh(f"docker run --rm --network {NET} --ip {IPS['runner']} -v $(cd {REMOTE}/probe && pwd):/p:ro "
+                         f"{TEST_IMG} python /p/p965.py {phase}", timeout=900)
+        try:
+            return json.loads(out.strip().splitlines()[-1])
+        except Exception:
+            return {"_err": (out + e)[-400:]}
+
+    r = run("main")
+    print("  " + json.dumps(r)[:1500])
+    s = lambda k: (r.get(k) or [None, {}])
+    ok("config PUT accepts remote mode + URL + model", s("cfg")[0] == 200, s("cfg"))
+    conn = s("conn")[1]
+    ok("Test connection: reachable, reports the Mac's Ollama version and vision models",
+       conn.get("ok") and "0.33" in json.dumps(conn) and "qwen" in json.dumps(conn), conn)
+    st = s("status")[1]
+    ok("status says remote and running (not 'not installed')", st.get("remote") is True and st.get("running") is True, st)
+    ok("models list comes from the Mac (qwen2.5vl:7b / qwen3-vl:8b)", "qwen2.5vl:7b" in json.dumps(s("models")[1]), s("models"))
+    ok("Install is refused/no-op in remote mode (no local Ollama)", s("install")[0] != 200 or not s("install")[1].get("started", False), s("install"))
+    ok("pull onto the remote refused by default (remote pulls disabled)", s("pull_default")[0] in (403, 409), s("pull_default"))
+    gen = s("gen")[1]
+    ok(f"AI test round-trip generates via the Mac ({r.get('gen_s')} s)", s("gen")[0] == 200 and gen.get("ok") is not False and "_err" not in gen, gen)
+
+    ssh("docker stop -t 5 slyled-qa-relay")
+    r = run("down")
+    print("  " + json.dumps(r)[:600])
+    st = (r.get("status") or [None, {}])[1]
+    ok("relay down → status 'remote unreachable', not 'not installed'",
+       st.get("remote") is True and st.get("running") is False and "unreach" in json.dumps(st).lower(), st)
+    ok("still no local install when the remote is down", (r.get("install") or [0, {}])[0] != 200 or not (r.get("install") or [0, {}])[1].get("started"), r.get("install"))
+    _, mac_after, _ = ssh_mac("ollama list")
+    ok("the Mac's model list is unchanged (nothing pulled onto it)", mac_before.strip() == mac_after.strip(), (mac_before, mac_after))
+    rc, out, _ = ssh("docker exec slyled-qa-orch-a python -c \"import socket; s=socket.socket(); s.settimeout(3); "
+                     f"print(s.connect_ex(('{MAC_OLLAMA[0]}', {MAC_OLLAMA[1]})))\"")
+    ok("orch-a itself has no direct LAN route (only the relay)", out.strip() != "0", out.strip())
+
+
+def ssh_mac(cmd, timeout=60):
+    r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "claude@192.168.10.67",
+                        "export PATH=/opt/homebrew/bin:$PATH; " + cmd], capture_output=True, text=True, timeout=timeout)
+    return r.returncode, r.stdout, r.stderr
+
+
 def down():
     print("== down")
     code, out, _ = ssh(f"cat {REMOTE}/.pre_images.json 2>/dev/null || echo '[]'")
@@ -376,12 +500,12 @@ def down():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("step", choices=["up", "smoke", "suites", "peer966", "down"])
+    ap.add_argument("step", choices=["up", "smoke", "suites", "peer966", "ollama965", "down"])
     ap.add_argument("--tag", default="2.2.0")
     ap.add_argument("--commit", default="origin/main")
     ap.add_argument("--only", default="", help="substring filter on the suite list")
     a = ap.parse_args()
-    {"up": lambda: up(a.tag), "smoke": smoke, "suites": lambda: suites(a.commit, a.only), "peer966": lambda: peer966(a.commit),
+    {"up": lambda: up(a.tag), "smoke": smoke, "suites": lambda: suites(a.commit, a.only), "peer966": lambda: peer966(a.commit), "ollama965": lambda: ollama965(a.commit),
      "down": down}[a.step]()
     print(f"\n{_p} passed, {_f} failed out of {_p + _f} tests")
     sys.exit(1 if _f else 0)
