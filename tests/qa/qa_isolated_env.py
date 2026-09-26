@@ -161,7 +161,7 @@ TEST_IMG = "slyled-qa-tests:local"
 # Suites that spawn a real orchestrator process (parent_server.py / main.py):
 # operator rule 2026-09-26 — these run ONLY here, never on a LAN machine.
 SPAWNING_SUITES = [
-    "tests/test_platform_smoke.py", "tests/test_web.py", "tests/test_show_pipeline_regressions.py",
+    "tests/test_platform_smoke.py", "tests/test_web_http.py", "tests/test_show_pipeline_regressions.py",
     "tests/test_842_set_fixture_rgb_centralized.py", "tests/test_867_gyro_off.py", "tests/test_gyro_protocol.py",
     "tests/test_capability_bake_e2e.py", "tests/test_parity_action_names.py", "tests/test_parity_aim_vector.py",
     "tests/test_30_combos.py", "tests/test_dash_return.py", "tests/test_fixture_grid.py",
@@ -169,6 +169,9 @@ SPAWNING_SUITES = [
     "tests/test_schedule_spa.py", "tests/test_963_offline_spa.py", "tests/test_880_profiles_spa.py",
     "tests/test_hinkspix_config_spa.py", "tests/test_hinkspix_xlights_spa.py", "tests/test_hinkspix_discover_spa.py",
     "tests/test_hinkspix_guide_spa.py",
+    # #965 / #966 — added with the features (#967 retired test_web.py → test_web_http.py).
+    "tests/test_965_remote_ollama_spa.py", "tests/test_966_peer_banner_spa.py",
+    "tests/test_966_two_orchestrators.py",
     "tests/regression/run_all.py",
 ]
 DOCKERFILE = r"""

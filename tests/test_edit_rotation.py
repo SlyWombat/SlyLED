@@ -1,20 +1,29 @@
-"""Validate: double-click dialog has rotation fields, saving updates 3D vector arrow."""
-import subprocess, time, requests, sys, os, json
+"""Validate: the edit / double-click dialogs carry rotation fields, saves land
+in the #600 rotation convention, and the 3D beam cone follows.
+
+Rotation convention (CLAUDE.md, #586/#600): ``rotation = [rx, ry, rz]`` with
+rx = pitch (rx > 0 aims DOWN), ry = roll, rz = pan. The dialogs show tilt in
+the operator's sense (positive = above the horizon), so UI tilt −22 is stored
+as rx = +22. Never read ``rotation[1]``/``[2]`` directly — go through
+``camera_math.rotation_from_layout`` (#967 — this suite asserted the pre-#600
+layout: rotation[0] == −22 and pan in rotation[1]).
+
+In-process server on 127.0.0.1, no UDP listener / broadcasts (#966 rule).
+Run: python tests/test_edit_rotation.py   (needs playwright + chromium)
+"""
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
+import os, sys, threading, time
+import requests
+
+import parent_server
+from camera_math import rotation_from_layout
 
 os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-env = os.environ.copy()
-env['PYTHONIOENCODING'] = 'utf-8'
-proc = subprocess.Popen([sys.executable, 'desktop/shared/parent_server.py', '--no-browser', '--port', '5555'],
-                        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-time.sleep(5)
-try:
-    requests.get('http://localhost:5555/api/settings', timeout=5)
-    print('Server up')
-except:
-    print('Server failed'); proc.kill(); sys.exit(1)
-
-BASE = 'http://localhost:5555'
-requests.post(BASE + '/api/reset')
+PORT = 18107
+threading.Thread(target=lambda: parent_server.app.run(host='127.0.0.1', port=PORT, threaded=True,
+                                                      use_reloader=False), daemon=True).start()
+time.sleep(1.5)
+BASE = 'http://127.0.0.1:%d' % PORT
 requests.post(BASE + '/api/settings', json={'stageW': 600, 'stageH': 300, 'stageD': 400})
 
 # Create a camera fixture
@@ -53,8 +62,9 @@ def check(name, cond):
 with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page(viewport={'width': 1280, 'height': 900})
-    page.goto(BASE)
-    page.wait_for_timeout(2000)
+    page.goto(BASE, wait_until='domcontentloaded')
+    page.wait_for_function("typeof showTab === 'function'", timeout=15000)
+    page.wait_for_timeout(1000)
 
     # Go to Layout, switch to 3D view
     page.click('#n-layout')
@@ -83,7 +93,8 @@ with sync_playwright() as p:
     # Verify rotation was saved on server
     r = requests.get(BASE + '/api/fixtures/%d' % cam_id)
     fx = r.json()
-    check('Camera rotation saved: tilt=-22', fx.get('rotation', [0])[0] == -22)
+    tilt, pan, roll = rotation_from_layout(fx.get('rotation'))
+    check('Camera UI tilt -22 saved as 22 deg below horizon (rx=+22)', tilt == 22)
 
     # --- Test 2: Double-click dialog has rotation fields ---
     print('\n--- Double-click dialog ---')
@@ -110,8 +121,10 @@ with sync_playwright() as p:
     # Verify on server
     r = requests.get(BASE + '/api/fixtures/%d' % cam_id)
     fx = r.json()
-    check('Camera pan saved: 45', fx.get('rotation', [0, 0])[1] == 45)
-    check('Camera tilt preserved: -22', fx.get('rotation', [0])[0] == -22)
+    tilt, pan, roll = rotation_from_layout(fx.get('rotation'))
+    check('Camera pan saved: 45 (rz)', pan == 45)
+    check('Camera tilt preserved: 22 below horizon', tilt == 22)
+    check('Camera roll untouched', roll == 0)
 
     # --- Test 3: Same for DMX fixture ---
     print('\n--- DMX fixture double-click ---')
@@ -130,8 +143,9 @@ with sync_playwright() as p:
 
     r = requests.get(BASE + '/api/fixtures/%d' % dmx_id)
     fx = r.json()
-    check('DMX tilt saved: -30', fx.get('rotation', [0])[0] == -30)
-    check('DMX pan saved: 10', fx.get('rotation', [0, 0])[1] == 10)
+    tilt, pan, roll = rotation_from_layout(fx.get('rotation'))
+    check('DMX UI tilt -30 saved as 30 below horizon (rx=+30)', tilt == 30)
+    check('DMX pan saved: 10 (rz)', pan == 10)
 
     # --- Test 4: 3D vector arrow reflects rotation ---
     print('\n--- 3D vector arrow ---')
@@ -163,9 +177,9 @@ with sync_playwright() as p:
         cp = scene_info['conePos']
         check('Cone not at zero (has direction)', cp['x'] != '0.000' or cp['y'] != '0.000' or cp['z'] != '0.000')
 
-    page.screenshot(path='tests/user/rotation_arrows.png')
+    page.screenshot(path=os.path.join(os.environ['SLYLED_DATA'], 'rotation_arrows.png'))
 
     print('\n%d passed, %d failed out of %d tests' % (passed, failed, passed + failed))
     browser.close()
 
-proc.kill()
+sys.exit(1 if failed else 0)

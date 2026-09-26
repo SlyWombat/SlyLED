@@ -1,64 +1,81 @@
 #!/usr/bin/env python3
 """
-SlyLED 30-Combination Bake Test — tests diverse timeline configurations
-against 10 emulated children with varied string layouts.
+SlyLED 30-Combination Bake Test — bakes 30 diverse timelines (single /
+sequential / overlapping actions, spatial fields, mixed, long, short, all
+action types) across 10 performers with varied string layouts, and checks
+every fixture stays within the performer step buffer (<= 16 segments).
 
-Prerequisites:
-  1. Server running: python desktop/shared/parent_server.py
-  2. Emulated children running: python tests/emulated_children.py
-  3. Children registered (this script auto-registers them)
+#967: runs in-process (Flask test_client, isolated SLYLED_DATA). The
+performers are seeded straight into the orchestrator with the string layouts
+tests/emulated_children.py used to serve — no emulated UDP children, no
+running server, and nothing on the LAN. (It used to need both, plus the
+long-removed POST /api/migrate/layout.)
 
-Usage: python tests/test_30_combos.py [host:port]
+Usage: python tests/test_30_combos.py
 """
-import json, sys, time, urllib.request, random
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
+import sys, time
 
-HOST = sys.argv[1] if len(sys.argv) > 1 else "localhost:8080"
-BASE = f"http://{HOST}"
+import parent_server as ps
+
+_client = ps.app.test_client()
 P = 0; F = 0; ISSUES = []
 
+
 def api(method, path, body=None):
-    data = json.dumps(body).encode() if body else None
-    req = urllib.request.Request(f"{BASE}{path}", data=data, method=method)
-    if data: req.add_header("Content-Type", "application/json")
+    r = _client.open(path, method=method, json=body)
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return resp.status, json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        raw = e.read(); return e.code, json.loads(raw) if raw else {}
-    except Exception as e:
-        return 0, {"err": str(e)}
+        return r.status_code, r.get_json(silent=True) or {}
+    except Exception:
+        return r.status_code, {}
+
 
 def ok(name, result):
     global P, F
     if result: P += 1
     else: F += 1; ISSUES.append(name); print(f"    FAIL {name}")
 
+
 def bake(tl_id, name):
     api("POST", f"/api/timelines/{tl_id}/bake")
-    for _ in range(30):
-        time.sleep(0.3)
+    bs = {}
+    for _ in range(100):
+        time.sleep(0.1)
         _, bs = api("GET", f"/api/timelines/{tl_id}/baked/status")
-        if bs.get("done"): break
+        if bs.get("done") or bs.get("error"): break
     ok(f"{name}: bake ok", bs.get("done") and not bs.get("error"))
     _, baked = api("GET", f"/api/timelines/{tl_id}/baked")
     return baked
 
-# ── Setup: register emulated children ────────────────────────────────────
+
+# ── Setup: 10 performers, the layouts emulated_children.py served ────────────
 print("=== SETUP ===")
-for port in range(9000, 9010):
-    api("POST", "/api/children", {"ip": f"127.0.0.1"})  # will fail for non-private but that's ok for localhost
-
-# Actually children need to be on the network — use discover or direct add
-# For localhost testing, just use existing children
-_, children = api("GET", "/api/children")
-print(f"  {len(children)} children available")
-if not children:
-    print("  No children! Start emulated_children.py or ensure real children are online.")
-    sys.exit(1)
-
-api("POST", "/api/migrate/layout")
+LAYOUTS = [
+    ("Emu-East50",   [{"leds": 50,  "mm": 800,  "sdir": 0}]),
+    ("Emu-West100",  [{"leds": 100, "mm": 1600, "sdir": 2}]),
+    ("Emu-North150", [{"leds": 150, "mm": 2400, "sdir": 1}]),
+    ("Emu-South75",  [{"leds": 75,  "mm": 1200, "sdir": 3}]),
+    ("Emu-DualEW",   [{"leds": 100, "mm": 1600, "sdir": 0}, {"leds": 100, "mm": 1600, "sdir": 2}]),
+    ("Emu-DualNS",   [{"leds": 60,  "mm": 960,  "sdir": 1}, {"leds": 60,  "mm": 960,  "sdir": 3}]),
+    ("Emu-TriENW",   [{"leds": 50,  "mm": 800,  "sdir": 0}, {"leds": 50,  "mm": 800,  "sdir": 1},
+                      {"leds": 50,  "mm": 800,  "sdir": 2}]),
+    ("Emu-Long200",  [{"leds": 200, "mm": 3200, "sdir": 0}]),
+    ("Emu-Folded",   [{"leds": 150, "mm": 2400, "sdir": 0, "folded": True}, {"leds": 150, "mm": 2400, "sdir": 0}]),
+    ("Emu-Quad",     [{"leds": 30,  "mm": 480,  "sdir": 0}, {"leds": 30,  "mm": 480,  "sdir": 1},
+                      {"leds": 30,  "mm": 480,  "sdir": 2}, {"leds": 30,  "mm": 480,  "sdir": 3}]),
+]
+children = []
+for i, (name, strings) in enumerate(LAYOUTS):
+    cid = 97000 + i
+    ps._children.append({"id": cid, "ip": f"192.0.2.{100 + i}", "hostname": name[:10], "name": name,
+                         "sc": len(strings), "strings": [dict(s_, type=0, cdir=0, cmm=0) for s_ in strings],
+                         "status": 1, "type": "slyled"})
+    _, r = api("POST", "/api/fixtures", {"name": name, "fixtureType": "led", "type": "linear",
+                                         "childId": cid})
+    children.append({"id": r.get("id"), "name": name})
 _, fixtures = api("GET", "/api/fixtures")
-print(f"  {len(fixtures)} fixtures")
+print(f"  {len(children)} performers, {len(fixtures)} fixtures")
+ok("setup: 10 performer fixtures", len([c for c in children if c["id"] is not None]) == 10)
 
 # Place children in a line across the stage
 positions = []
@@ -227,7 +244,7 @@ for test in TESTS:
 
     _, r = api("POST", "/api/timelines", {"name": name, "durationS": test["dur"]})
     tl_id = r.get("id")
-    if not tl_id:
+    if tl_id is None:            # id 0 is a real timeline
         ok(f"{name}: create", False); continue
 
     api("PUT", f"/api/timelines/{tl_id}", {
@@ -258,9 +275,9 @@ for test in TESTS:
 # ── Cleanup ──────────────────────────────────────────────────────────────
 print("\n=== CLEANUP ===")
 for aid in actions.values():
-    if aid: api("DELETE", f"/api/actions/{aid}")
+    if aid is not None: api("DELETE", f"/api/actions/{aid}")
 for eid in effects.values():
-    if eid: api("DELETE", f"/api/spatial-effects/{eid}")
+    if eid is not None: api("DELETE", f"/api/spatial-effects/{eid}")
 
 print(f"\n{'='*60}")
 print(f"  RESULTS: {P} passed, {F} failed")
@@ -273,3 +290,4 @@ if ISSUES:
     sys.exit(1)
 else:
     print("\n  ✓ ALL TESTS PASS")
+print(f"\n{P} passed, {F} failed out of {P + F} tests")

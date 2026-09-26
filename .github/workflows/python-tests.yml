@@ -146,7 +146,9 @@ jobs:
                    tests/test_bootstrap_guard.py \
                    tests/test_965_remote_ollama.py \
                    tests/test_966_peer_orchestrators.py \
-                   tests/test_966_two_orchestrators.py; do
+                   tests/test_966_two_orchestrators.py \
+                   tests/test_web_http.py \
+                   tests/test_30_combos.py; do
             echo "== $t"
             SLYLED_DATA=$(mktemp -d) python3 -X utf8 "$t"
           done
@@ -331,7 +333,8 @@ jobs:
         run: |
           for f in tests/test_hinkspix_*_spa.py tests/test_schedule_spa.py tests/test_880_profiles_spa.py \
                    tests/test_963_offline_spa.py tests/test_965_remote_ollama_spa.py \
-                   tests/test_966_peer_banner_spa.py; do
+                   tests/test_966_peer_banner_spa.py \
+                   tests/test_edit_rotation.py tests/test_unified_3d.py; do
             echo "== $f"
             SLYLED_DATA=$(mktemp -d) python3 -X utf8 "$f"
           done

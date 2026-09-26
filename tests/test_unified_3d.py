@@ -1,44 +1,41 @@
-"""Test unified 3D viewport across Dashboard, Runtime, and Layout tabs."""
-import subprocess, time, requests, sys, os
+"""Test unified 3D viewport across Dashboard, Runtime, and Layout tabs.
+
+In-process server on 127.0.0.1 with no UDP listener / broadcasts (#966 rule;
+#967 moved this off a spawned subprocess). The #603 check uses two real
+moving heads (a pan/tilt profile — a profile-less DMX fixture has no rest
+arrow at all, which is what this suite measured as |Y| = 0 after #892) in
+the #600 convention: rotation = [rx, ry, rz] = [tilt, roll, pan], rx > 0 aims
+down. MH1 is pitched UP 30 degrees, MH2 is level.
+
+Run: python tests/test_unified_3d.py   (needs playwright + chromium)
+"""
+import _bootstrap  # noqa: F401,E402  SLYLED_DATA isolation, before parent_server (#942)
+import os, sys, threading, time
+import requests
+
+import parent_server
 
 os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-env = os.environ.copy()
-env['PYTHONIOENCODING'] = 'utf-8'
-proc = subprocess.Popen([sys.executable, 'desktop/shared/parent_server.py', '--no-browser', '--port', '5559'],
-                        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-# Always tear down the server subprocess on exit — exception, assertion
-# failure, Ctrl+C, anything. Abandoned parent_server processes keep
-# driving the DMX bridge at the 1 Hz Art-Net keep-alive and leave
-# venue lights glowing for hours afterwards (see memory
-# feedback_test_scripts_must_teardown).
-import atexit, signal
-def _teardown_server():
-    try: proc.kill()
-    except Exception: pass
-    try: proc.wait(timeout=3)
-    except Exception: pass
-atexit.register(_teardown_server)
-for _sig in (signal.SIGINT, signal.SIGTERM):
-    try: signal.signal(_sig, lambda *_: (_teardown_server(), sys.exit(1)))
-    except Exception: pass
-
-time.sleep(5)
-try:
-    requests.get('http://localhost:5559/api/settings', timeout=5)
-    print('Server up')
-except:
-    print('FAIL'); _teardown_server(); sys.exit(1)
-
-BASE = 'http://localhost:5559'
+PORT = 18108
+threading.Thread(target=lambda: parent_server.app.run(host='127.0.0.1', port=PORT, threaded=True,
+                                                      use_reloader=False), daemon=True).start()
+time.sleep(1.5)
+BASE = 'http://127.0.0.1:%d' % PORT
 requests.post(BASE + '/api/settings', json={'stageW': 600, 'stageH': 300, 'stageD': 400})
-# Create a DMX fixture
+# Two moving heads: MH1 pitched up 30 deg (rx = -30) and panned 10; MH2 level.
 r = requests.post(BASE + '/api/fixtures', json={
-    'name': 'MH1', 'fixtureType': 'dmx', 'rotation': [-30, 10, 0],
-    'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 16})
+    'name': 'MH1', 'fixtureType': 'dmx', 'rotation': [-30, 0, 10],
+    'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 16,
+    'dmxProfileId': 'generic-moving-head-16bit'})
 fid = r.json()['id']
+r = requests.post(BASE + '/api/fixtures', json={
+    'name': 'MH2', 'fixtureType': 'dmx', 'rotation': [0, 0, 10],
+    'dmxUniverse': 1, 'dmxStartAddr': 20, 'dmxChannelCount': 16,
+    'dmxProfileId': 'generic-moving-head-16bit'})
+fid_level = r.json()['id']
 lay = requests.get(BASE + '/api/layout').json()
-lay['children'] = [{'id': fid, 'x': 3000, 'y': 2000, 'z': 2800}]
+lay['children'] = [{'id': fid, 'x': 3000, 'y': 2000, 'z': 2800},
+                   {'id': fid_level, 'x': 1500, 'y': 2000, 'z': 2800}]
 requests.post(BASE + '/api/layout', json=lay)
 
 from playwright.sync_api import sync_playwright
@@ -55,8 +52,9 @@ with sync_playwright() as p:
     page = browser.new_page(viewport={'width': 1280, 'height': 900})
     errs = []
     page.on('console', lambda m: errs.append(m.text) if m.type == 'error' else None)
-    page.goto(BASE)
-    page.wait_for_timeout(2000)
+    page.goto(BASE, wait_until='domcontentloaded')
+    page.wait_for_function("typeof showTab === 'function'", timeout=15000)
+    page.wait_for_timeout(1000)
 
     # --- Layout tab (init Three.js) ---
     print('\n--- Layout ---')
@@ -66,27 +64,28 @@ with sync_playwright() as p:
     check('Layout: canvas in #stage3d', page.evaluate('() => !!document.querySelector("#stage3d canvas")'))
     check('Layout: fixture nodes', page.evaluate('() => (window._s3d.nodes||[]).length') >= 1)
 
-    # #603 — rest-direction arrow must honour pitch (rx). Fixture above
-    # is rotation=[-30, 10, 0] (pitch up 30°, yaw 10°). Pre-fix, the arrow
-    # was computed from yaw only with Y hardcoded to 0 — any pitched
-    # fixture drew a flat arrow. Now homeDir = (sin(yaw)*cos(pitch),
-    # -sin(pitch), cos(yaw)*cos(pitch)), so Y ≈ 0.5 * vecLen(0.4) = 0.2
-    # for this fixture. Assert the absolute Y >= 0.05 (well above the
-    # <0.001 noise the old flat computation would produce).
+    # #603 — the rest-direction arrow honours pitch: homeDir =
+    # (sin(pan)*cos(tilt), -sin(tilt), cos(pan)*cos(tilt)) in Three.js Y-up,
+    # tilt read through rotationFromLayout. MH1 (tilt -30 = up) → arrow tip
+    # Y ≈ +0.2 (vecLen 0.4); MH2 (level) → Y ≈ 0.
     rest_y = page.evaluate('''() => {
-        var maxY = 0;
+        var out = {};
         (window._s3d && window._s3d.nodes || []).forEach(function(g) {
+            var id = g.userData && g.userData.childId, y = null;
             g.traverse(function(obj) {
-                if (obj.userData && obj.userData.restArrow && obj.position) {
-                    var y = Math.abs(obj.position.y);
-                    if (y > maxY) maxY = y;
-                }
+                if (obj.userData && obj.userData.restArrow && obj.isMesh) y = obj.position.y;
             });
+            if (id != null) out[id] = y;
         });
-        return maxY;
+        return out;
     }''')
-    check('#603 Layout: rest arrow honours pitch (|Y| = {:.3f})'.format(rest_y),
-          rest_y >= 0.05)
+    y_up, y_level = rest_y.get(str(fid)), rest_y.get(str(fid_level))
+    check('#603 Layout: both moving heads draw a rest arrow ({})'.format(rest_y),
+          y_up is not None and y_level is not None)
+    check('#603 Layout: pitched-up head\'s arrow rises (Y = {})'.format(y_up),
+          y_up is not None and y_up >= 0.15)
+    check('#603 Layout: level head\'s arrow stays level (Y = {})'.format(y_level),
+          y_level is not None and abs(y_level) < 0.01)
 
     # --- Dashboard tab ---
     print('\n--- Dashboard ---')
@@ -100,7 +99,7 @@ with sync_playwright() as p:
     check('Dashboard: 3D viewport active', dash_active)
     dash_nodes = page.evaluate('() => (window._emu3d && window._emu3d.nodes) ? window._emu3d.nodes.length : 0')
     check('Dashboard: fixture nodes: ' + str(dash_nodes), dash_nodes >= 1)
-    page.screenshot(path='tests/user/dash_3d.png')
+    page.screenshot(path=os.path.join(os.environ['SLYLED_DATA'], 'dash_3d.png'))
 
     # --- Runtime tab ---
     print('\n--- Runtime ---')
@@ -236,4 +235,4 @@ with sync_playwright() as p:
     print('\n%d passed, %d failed out of %d tests' % (passed, failed, passed + failed))
     browser.close()
 
-proc.kill()
+sys.exit(1 if failed else 0)
