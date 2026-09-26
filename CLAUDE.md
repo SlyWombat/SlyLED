@@ -260,6 +260,18 @@ Phase tracking in issues #15–#19.
 - All features tracked in [GitHub Issues](https://github.com/SlyWombat/SlyLED/issues).
 - Releases: `gh release create` with binaries. App reset to v1.0 (April 2026); firmware tracks per-board in `firmware/registry.json`.
 
+## Production install & upgrades (operator rule, 2026-09-26)
+
+**v2.2.2 is the production release** (house-network-ops#278: host-networked container pinned by digest,
+data in the `/var/lib/slyled` volume). SlyLED is still greenfield — no legacy firmware/protocol paths,
+no back-compat shims, no deprecation windows; old code paths can be deleted — **but the production
+install's persisted data must keep working across upgrades.** Any change to the shape or meaning of
+persisted JSON (`children`, `fixtures`, `timelines`, `actions`, `settings` incl. `aiRuntime`,
+`schedule`, `dmx_settings`, HinksPix `hinks` config/snapshots, project export/import) ships with an
+**automatic one-off load-time migration or a safe default** in the same PR, plus a test that loads
+data written by the previous release. Each release gets an upgrade-in-place QA run with real data
+(previous version → new version) in the isolated QA network before promotion.
+
 ## `website/` Node environment (machine setup, 2026-09-14)
 
 - **Node 24 LTS** satisfies `engines.node >=18.17.0`. WSL Debian: nvm, `nvm use 24`
