@@ -142,6 +142,7 @@ Moving-head aim uses **stage-frame fixture-internal angles**, not mechanical yok
 | 0x6F | GYRO_AIM_WIZARD | gyro→parent | 36 bytes — three Euler triples in degrees (roll, pitch, yaw) for {neutral, pitch_forward, yaw_left} (#869). Server converts each to a body-to-world unit quat via `quat_from_euler_zyx_deg` and runs the same `_aim_wizard_compute` math the Android wizard (#826) uses; persists derived `forward_local` / `up_local` on the gyro's `gyro-<ip>` Remote. Fire-and-forget; no ACK |
 | 0x70 | MMW_TARGETS  | node→parent    | 28 bytes — seq(u16) + count(u8) + flags(u8: bit0 = radar-frame parse healthy) + 3 × {xMm i16, yMm i16, speedCms i16, resMm u16}; fixed 3 slots, unused zeroed. Source of truth: `mmwave/MmwProtocol.h::MmwTargetsPayload`; design doc `docs/design/mmwave_tracking.md` §4.3 |
 | 0x71 | MMW_CONFIG   | parent→node    | reserved — not implemented in v1 (`mmwave/MmwProtocol.h`; design doc §4.3) |
+| 0x72 | ORCH_ANNOUNCE | orchestrator→broadcast | ≥8 bytes — instanceId(u32) + httpPort(u16) + verLen(u8)+version + hostLen(u8)+hostname (each ≤32). Sent every 30 s (and back to a newly seen peer) so a second orchestrator on the LAN is detected on both sides (#966); a CMD_PING from a foreign address also counts. Firmware ignores it; UDP_VERSION stays 5. Source: `desktop/shared/peer_orchestrators.py` |
 
 **v3→v4:** `ledStart[]` / `ledEnd[]` upgraded uint8 → uint16 (8 entries each, +16 bytes per ACTION/LOAD_STEP). Parent accepts both v3 and v4 PONGs. **v4→v5 (#819):** CMD_GYRO_STOP (0x69) split out from the retired CMD_GYRO_ORIENT flags bit 3.
 

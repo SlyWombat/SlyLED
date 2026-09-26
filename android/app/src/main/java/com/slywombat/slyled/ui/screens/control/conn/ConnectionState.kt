@@ -16,6 +16,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.slywombat.slyled.data.model.PeerOrchestrator
 import com.slywombat.slyled.data.repository.SlyLedRepository
 import com.slywombat.slyled.ui.screens.control.haptics.HapticEvent
 import com.slywombat.slyled.ui.screens.control.haptics.rememberHaptics
@@ -50,6 +51,10 @@ class LinkStateViewModel @Inject constructor(
     private val _state = MutableStateFlow(LinkState.CONNECTED)
     val state: StateFlow<LinkState> = _state.asStateFlow()
 
+    // #966 — other orchestrators the server has seen on its network.
+    private val _peers = MutableStateFlow<List<PeerOrchestrator>>(emptyList())
+    val peers: StateFlow<List<PeerOrchestrator>> = _peers.asStateFlow()
+
     @Volatile private var lastOkAtMs: Long = System.currentTimeMillis()
 
     init {
@@ -64,8 +69,9 @@ class LinkStateViewModel @Inject constructor(
     private suspend fun poll() {
         while (true) {
             try {
-                repository.getStatus()
+                val st = repository.getStatus()
                 lastOkAtMs = System.currentTimeMillis()
+                if (_peers.value != st.peerOrchestrators) _peers.value = st.peerOrchestrators
             } catch (_: Throwable) {
                 // Swallow — the elapsed counter does the work.
             }

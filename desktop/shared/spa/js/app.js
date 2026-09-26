@@ -1406,12 +1406,59 @@ var _origLoadTimelines=loadTimelines;
 loadTimelines=function(){_origLoadTimelines();setTimeout(_wrapTlSelect,400);};
 
 
+// ── #966 — another orchestrator on this network ─────────────────────────
+// Both instances see each other's broadcasts, so both show this. It can be
+// acknowledged for the session (collapses to a red strip) but never hidden:
+// a peer that wasn't acknowledged — or a new one — expands it again.
+function _peerKey(p){return p.instanceId||p.ip;}
+function _peerBannerRender(peers){
+  var el=document.getElementById('peer-banner');
+  if(!el)return;
+  peers=peers||[];
+  if(!peers.length){el.style.display='none';el.innerHTML='';return;}
+  var keys=peers.map(_peerKey).sort().join(',');
+  var acked=false;
+  try{acked=sessionStorage.getItem('slyled-peer-ack')===keys;}catch(e){}
+  var names=peers.map(function(p){
+    var label=escapeHtml(p.hostname||p.ip)+' ('+escapeHtml(p.ip)+(p.version?', v'+escapeHtml(p.version):'')+')';
+    return p.url?'<a href="'+escapeHtml(p.url)+'" target="_blank" style="color:#fff;font-weight:bold">'+label+'</a>':'<b>'+label+'</b>';
+  }).join(', ');
+  el.style.display='block';
+  if(acked){
+    el.innerHTML='&#9888; '+peers.length+' other SlyLED orchestrator'+(peers.length>1?'s':'')+' on this network: '+names
+      +' <a href="#" onclick="_peerBannerUnack();return false" style="color:#fecaca;margin-left:.6em">details</a>';
+    el.style.padding='.2em .9em';
+    return;
+  }
+  el.style.padding='.5em .9em';
+  el.innerHTML='<b>&#9888; Another SlyLED orchestrator is running on this network:</b> '+names+'. '
+    +'Two orchestrators will fight over the same lights (DMX / sACN output, HinksPix, performers, the scheduler). Stop one of them.'
+    +' <button class="btn" onclick="_peerBannerAck()" style="margin-left:.6em;font-size:.8em;background:#991b1b;color:#fff;border:1px solid #fca5a5">Acknowledge for this session</button>';
+}
+function _peerBannerAck(){
+  try{sessionStorage.setItem('slyled-peer-ack',(window._peerLast||[]).map(_peerKey).sort().join(','));}catch(e){}
+  _peerBannerRender(window._peerLast);
+}
+function _peerBannerUnack(){
+  try{sessionStorage.removeItem('slyled-peer-ack');}catch(e){}
+  _peerBannerRender(window._peerLast);
+}
+function _peerPoll(){
+  ra('GET','/status',null,function(d){
+    if(!d)return;
+    window._peerLast=d.peerOrchestrators||[];
+    _peerBannerRender(window._peerLast);
+  });
+}
+setInterval(_peerPoll,15000);
+
 // Init
 ra('GET','/status',null,function(d){
   if(d&&d.version){
     var fv=document.getElementById('fv');
     if(fv)fv.textContent='SlyLED v'+d.version+' \u2014 The Orchestrator';
   }
+  if(d){window._peerLast=d.peerOrchestrators||[];_peerBannerRender(window._peerLast);}
 });
 var _qTab=new URLSearchParams(location.search).get('tab')||location.hash.replace('#','')||'dash';
 showTab(_qTab);

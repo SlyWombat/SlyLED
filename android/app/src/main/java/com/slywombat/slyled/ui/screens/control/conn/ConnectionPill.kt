@@ -11,11 +11,16 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -34,6 +39,8 @@ import com.slywombat.slyled.ui.theme.RedError
  * Connected = solid green dot + "Connected".
  * Degraded  = orange dot + "Reconnecting…" with slow alpha pulse.
  * Disconnected = red dot + "Offline" with fast pulse.
+ * Conflict (#966) = red dot + "2 orchestrators" while the server reports
+ *   another SlyLED orchestrator on its network; tap explains it.
  */
 @Composable
 fun ConnectionPill(
@@ -41,11 +48,30 @@ fun ConnectionPill(
     vm: LinkStateViewModel = hiltViewModel(),
 ) {
     val state by vm.state.collectAsState()
+    val peers by vm.peers.collectAsState()
+    var showPeers by remember { mutableStateOf(false) }
+    val conflict = state == LinkState.CONNECTED && peers.isNotEmpty()
 
-    val (color, label) = when (state) {
-        LinkState.CONNECTED    -> GreenOnline to "Connected"
-        LinkState.DEGRADED     -> OrangeWled to "Reconnecting…"
-        LinkState.DISCONNECTED -> RedError to "Offline"
+    val (color, label) = when {
+        conflict -> RedError to "${peers.size + 1} orchestrators"
+        state == LinkState.CONNECTED    -> GreenOnline to "Connected"
+        state == LinkState.DEGRADED     -> OrangeWled to "Reconnecting…"
+        else                            -> RedError to "Offline"
+    }
+
+    if (showPeers && peers.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { showPeers = false },
+            title = { Text("Another SlyLED orchestrator is running") },
+            text = {
+                Text(
+                    "On this network: " + peers.joinToString(", ") { it.label } +
+                        ".\n\nTwo orchestrators fight over the same lights (DMX / sACN " +
+                        "output, HinksPix, performers, the scheduler). Stop one of them."
+                )
+            },
+            confirmButton = { TextButton(onClick = { showPeers = false }) { Text("OK") } },
+        )
     }
 
     // Pulse alpha for non-Connected states.
@@ -70,7 +96,7 @@ fun ConnectionPill(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         modifier = modifier
-            .clickable { vm.retry() }
+            .clickable { if (conflict) showPeers = true else vm.retry() }
             .background(
                 color = Color.Transparent,
                 shape = RoundedCornerShape(12.dp),

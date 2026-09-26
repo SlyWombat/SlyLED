@@ -24,6 +24,23 @@ class ModelSerializationTest {
     }
 
     @Test
+    fun `deserialize status with peer orchestrators (#966)`() {
+        val input = """{"role":"parent","hostname":"prod","version":"2.2.0","instanceId":"0000abcd","udpListener":{"ok":true},"peerOrchestrators":[{"ip":"192.168.10.38","hostname":"kdocker3","version":"2.2.0","port":8080,"url":"http://192.168.10.38:8080","instanceId":"00001234","firstSeen":1.0,"lastSeen":2.0,"via":"announce"},{"ip":"192.0.2.44","hostname":null,"version":null,"port":null,"url":null}]}"""
+        val st = json.decodeFromString<StatusResponse>(input)
+        assertEquals("0000abcd", st.instanceId)
+        assertEquals(2, st.peerOrchestrators.size)
+        assertEquals("kdocker3 (192.168.10.38, v2.2.0)", st.peerOrchestrators[0].label)
+        assertEquals("192.0.2.44 (192.0.2.44)", st.peerOrchestrators[1].label)
+        assertEquals(8080, st.peerOrchestrators[0].port)
+    }
+
+    @Test
+    fun `status from an older server has no peers (#966)`() {
+        val st = json.decodeFromString<StatusResponse>("""{"role":"parent","hostname":"h","version":"2.1.8"}""")
+        assertTrue(st.peerOrchestrators.isEmpty())
+    }
+
+    @Test
     fun `deserialize Child without id (discovery endpoint)`() {
         val input = """{"ip":"192.168.10.50","hostname":"SLYC-ABCD","name":"","sc":1,"strings":[],"status":1}"""
         val child = json.decodeFromString<Child>(input)

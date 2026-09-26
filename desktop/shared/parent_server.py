@@ -104,7 +104,9 @@ VERSION = "2.2.0"
 
 UDP_MAGIC   = 0x534C
 UDP_VERSION = 5   # #819 — added CMD_GYRO_STOP (0x69); orient-flags bit 3 retired
-UDP_PORT    = 4210
+# SLYLED_UDP_PORT is a testing knob only (#966: two orchestrators on one
+# host in the peer-detection test). Performers always talk on 4210.
+UDP_PORT    = int(os.environ.get("SLYLED_UDP_PORT") or 4210)
 # #862 — Android Auto Brightness has its own UDP port. Pre-fix #861 dispatched
 # AUTOBRI_PUSH on the shared 4210 listener, but Windows hosts intermittently
 # refuse to bind 4210 (kernel-level reservation by HNS / Hyper-V port pool;
@@ -149,6 +151,7 @@ CMD_GYRO_AIM_WIZARD    = 0x6F  # gyro→parent: empirical aim-axis wizard (#869)
 # mmwave/MmwProtocol.h (the node's isolated sketch tree); parity with
 # main/Protocol.h is enforced by tests/test_mmwave_wire_parity.py.
 CMD_MMW_TARGETS = 0x70  # radar node→parent: MmwTargetsPayload — seq(u16) count(u8) flags(u8, bit0 = radar parse healthy) + 3 × {xMm i16, yMm i16, speedCms i16, resMm u16} = 28 bytes; unused slots zeroed. Sent on fresh frames with targets (≤25 Hz) + 1 Hz empty keepalive.
+CMD_ORCH_ANNOUNCE = 0x72  # orchestrator→broadcast (#966): instanceId(u32) httpPort(u16) verLen(u8)+version hostLen(u8)+hostname. Peer detection; performer/gyro/Giga firmware ignores it, UDP_VERSION stays 5.
 CMD_MMW_CONFIG  = 0x71  # parent→node: reserved (mode switch / report-rate cap) — deliberately NOT implemented in v1 (design doc §4.3).
 
 # #825 — uiState codes carried in CMD_GYRO_HEARTBEAT_REP.
@@ -1550,7 +1553,8 @@ def status():
     # port reservation on Windows is the known trigger).
     udp = get_udp_listener_status()
     return jsonify(role="parent", hostname=socket.gethostname(),
-                   version=VERSION, platform=HOST_PLATFORM, udpListener=udp)
+                   version=VERSION, platform=HOST_PLATFORM, udpListener=udp,
+                   instanceId="%08x" % _INSTANCE_ID, peerOrchestrators=_peer_status())
 
 
 @app.get("/api/status")
@@ -1559,7 +1563,8 @@ def api_status():
     the listener-health banner (#771)."""
     udp = get_udp_listener_status()
     return jsonify(role="parent", hostname=socket.gethostname(),
-                   version=VERSION, platform=HOST_PLATFORM, udpListener=udp)
+                   version=VERSION, platform=HOST_PLATFORM, udpListener=udp,
+                   instanceId="%08x" % _INSTANCE_ID, peerOrchestrators=_peer_status())
 
 
 @app.post("/api/diagnostics/restart-udp-listener")
@@ -2511,7 +2516,110 @@ def _handle_ota_status(ip, port, hdr, data):
 # Adding a new command is a one-line registration — #910's 0x70
 # MMW_TARGETS below landed as exactly that. (0x71 MMW_CONFIG is
 # parent→node and reserved — nothing to dispatch.)
+# ── #966 — a second orchestrator on the network ─────────────────────────────
+import random as _random
+import peer_orchestrators as _peer_orch
+
+_INSTANCE_ID = _random.getrandbits(32) or 1
+_HTTP_PORT = int(os.environ.get("SLYLED_PORT") or 8080)   # main() sets the real one
+ORCH_ANNOUNCE_S = float(os.environ.get("SLYLED_ORCH_ANNOUNCE_S") or 30)
+_own_ip_cache = {"at": 0.0, "ips": set()}
+
+
+def _own_ips():
+    now = time.time()
+    if now - _own_ip_cache["at"] > 60:
+        try:
+            _own_ip_cache["ips"] = {e["ip"] for e in net_ifaces.ipv4_interfaces()}
+        except Exception:
+            pass
+        _own_ip_cache["at"] = now
+    return _own_ip_cache["ips"]
+
+
+def _peer_changed(event, peer):
+    who = peer.get("hostname") or peer.get("ip")
+    if event == "appeared":
+        log.warning("CONFLICT: another SlyLED orchestrator is running on this network: %s "
+                    "(%s%s%s). Two orchestrators fight over the same lights — stop one.",
+                    who, peer.get("ip"),
+                    f", port {peer['port']}" if peer.get("port") else "",
+                    f", v{peer['version']}" if peer.get("version") else "")
+    else:
+        log.info("Peer orchestrator %s (%s) is gone", who, peer.get("ip"))
+
+
+_peer_registry = _peer_orch.PeerRegistry(_INSTANCE_ID, expire_s=3 * ORCH_ANNOUNCE_S,
+                                         own_ips=_own_ips, on_change=_peer_changed)
+
+
+def _announce_packet():
+    return _peer_orch.build_announce(_hdr(CMD_ORCH_ANNOUNCE), _INSTANCE_ID, _HTTP_PORT,
+                                     VERSION, socket.gethostname())
+
+
+def _peer_targets():
+    """SLYLED_PEER_TARGETS=host[:port],… — extra unicast targets for peers
+    outside this broadcast domain (routed VLANs), and the two-instance test."""
+    out = []
+    for item in (os.environ.get("SLYLED_PEER_TARGETS") or "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        host, _, port = item.partition(":")
+        out.append((host, int(port) if port else UDP_PORT))
+    return out
+
+
+def _broadcast_orch_announce():
+    pkt = _announce_packet()
+    targets = [(bc, UDP_PORT) for bc in ["255.255.255.255"] + _local_broadcasts()]
+    targets += _peer_targets()
+    for dest in targets:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sk:
+                sk.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                sk.sendto(pkt, dest)
+        except Exception:
+            pass
+
+
+def _orch_announce_loop():
+    """Announce ourselves every ORCH_ANNOUNCE_S (and at start) so a second
+    orchestrator — which does the same — finds us, and we it."""
+    while True:
+        _broadcast_orch_announce()
+        _peer_registry.peers()        # expire the silent ones (logs "gone")
+        time.sleep(ORCH_ANNOUNCE_S)
+
+
+def _handle_ping(ip, port, hdr, data):
+    """CMD_PING — only orchestrators send it, so one from a foreign address
+    is a peer orchestrator (#966; older ones that don't announce)."""
+    _peer_registry.note_ping(ip)
+
+
+def _handle_orch_announce(ip, port, hdr, data):
+    """CMD_ORCH_ANNOUNCE — a peer's identity. A new peer gets our announce
+    straight back so both sides alert within seconds, not an interval."""
+    info = _peer_orch.parse_announce(data)
+    if _peer_registry.note_announce(ip, info):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sk:
+                dests = [(ip, UDP_PORT)] + [t for t in _peer_targets() if t[0] == ip]
+                for dest in dests:
+                    sk.sendto(_announce_packet(), dest)
+        except Exception:
+            pass
+
+
+def _peer_status():
+    return _peer_registry.peers()
+
+
 _UDP_DISPATCH = {
+    CMD_PING: (8, _handle_ping),
+    CMD_ORCH_ANNOUNCE: (_peer_orch.MIN_ANNOUNCE_LEN, _handle_orch_announce),
     CMD_ACTION_EVENT: (12, _handle_action_event),
     CMD_GYRO_ORIENT: (16, _handle_gyro_orient),
     CMD_GYRO_STOP: (8, _handle_gyro_stop),
@@ -2972,6 +3080,8 @@ def start_background_tasks():
     threading.Thread(target=_heartbeat_loop, daemon=True).start()
     # #956 — always: a device added after boot needs the same refresh.
     threading.Thread(target=_periodic_ping, daemon=True, name="status-loop").start()
+    # #966 — announce ourselves; notice any other orchestrator on the LAN.
+    threading.Thread(target=_orch_announce_loop, daemon=True, name="orch-announce").start()
     # #954 — the show scheduler (idles when disabled). Waits ~5 s so the
     # DMX engine auto-start and the first performer ping land first.
     _scheduler.start(delay_s=5.0)
@@ -19456,6 +19566,7 @@ if __name__ == "__main__":
         webbrowser.open(f"http://localhost:{args.port}")
         sys.exit(0)
 
+    _HTTP_PORT = args.port          # #966 — peers link to us on this port (module scope)
     start_background_tasks()
 
     if not args.no_browser:

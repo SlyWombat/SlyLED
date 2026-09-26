@@ -89,6 +89,9 @@ or with the `docker-compose.yml` attached to each release (repo root copy uses
 - **Health:** `docker ps` shows `healthy` once `/status` answers.
 - **Stop:** `docker stop` sends SIGTERM: DMX output is blacked out and stopped, the
   scheduler's HinksPix hand-off runs, exit 0 (grace 20 s, as the unit).
+- **One orchestrator per lighting network.** A second one anywhere on the LAN (a laptop,
+  a bench container) is detected and both show a red conflict banner (#966); stop one.
+  Peers on a routed VLAN: `SLYLED_PEER_TARGETS=host[,host…]`.
 - **Don't run it alongside the `slyled` service** on the same port — the container exits
   1 ("already answering on port 8080").
 - **USB flashing (optional):** `--device /dev/ttyUSB0 --group-add <host dialout gid>`

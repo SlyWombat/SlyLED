@@ -11,8 +11,26 @@ import kotlinx.serialization.json.intOrNull
 data class StatusResponse(
     val role: String = "",
     val hostname: String = "",
-    val version: String = ""
+    val version: String = "",
+    // #966 — this orchestrator's id + any other orchestrator it has seen on
+    // the network. Non-empty means two orchestrators fight over the lights.
+    val instanceId: String = "",
+    val peerOrchestrators: List<PeerOrchestrator> = emptyList()
 )
+
+/** #966 — another SlyLED orchestrator on the same network. */
+@Serializable
+data class PeerOrchestrator(
+    val ip: String = "",
+    val hostname: String? = null,
+    val version: String? = null,
+    val port: Int? = null,
+    val url: String? = null,
+) {
+    /** "kdocker3 (192.168.10.38, v2.2.0)" — hostname falls back to the IP. */
+    val label: String
+        get() = (hostname ?: ip) + " (" + ip + (version?.let { ", v$it" } ?: "") + ")"
+}
 
 @Serializable
 data class OkResponse(

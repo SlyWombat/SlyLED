@@ -75,10 +75,12 @@ def run_table_coverage():
     # promised one-line registrations; MMW_TARGETS is checked separately
     # below (its wire truth is mmwave/MmwProtocol.h, not main/Protocol.h
     # like the pre-#901 set) and OTA_STATUS has its own contract suite
-    # (tests/test_922_ota_status.py).
-    post_901 = {ps.CMD_MMW_TARGETS, ps.CMD_OTA_STATUS}
+    # (tests/test_922_ota_status.py). #966 added CMD_PING (a peer
+    # orchestrator's broadcast) and 0x72 ORCH_ANNOUNCE — covered by
+    # tests/test_966_peer_orchestrators.py.
+    post_901 = {ps.CMD_MMW_TARGETS, ps.CMD_OTA_STATUS, ps.CMD_PING, ps.CMD_ORCH_ANNOUNCE}
     ok("dispatch table covers exactly the pre-#901 command set "
-       "+ MMW_TARGETS + OTA_STATUS",
+       "+ MMW_TARGETS + OTA_STATUS + PING/ORCH_ANNOUNCE (#966)",
        set(table.keys()) == set(expected_cmds.keys()) | post_901,
        f"extra={sorted(set(table) - set(expected_cmds) - post_901)} "
        f"missing={sorted(set(expected_cmds) - set(table))}")

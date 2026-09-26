@@ -12,6 +12,9 @@
 <link rel="stylesheet" href="/css/app.css">
 </head>
 <body id='app'>
+<!-- #966 — another SlyLED orchestrator on this network. Filled by
+     _peerBannerRender() from /status.peerOrchestrators; shown on every tab. -->
+<div id='peer-banner' role='alert' style='display:none;position:sticky;top:0;z-index:300;background:#7f1d1d;color:#fee2e2;border-bottom:2px solid #ef4444;padding:.5em .9em;font-size:.9em'></div>
 <div id='hdr' style='display:flex;align-items:center;gap:.8em'><button onclick='toggleHelp()' style='position:fixed;top:12px;right:16px;z-index:200;background:#1e3a5f;color:#93c5fd;border:1px solid #334155;border-radius:50%;width:32px;height:32px;font-size:1em;cursor:pointer;font-weight:bold' title='Help'>?</button>
 <div id='help-panel' style='display:none;position:fixed;top:0;right:0;width:360px;height:100%;background:#0f172a;border-left:1px solid #334155;z-index:150;overflow-y:auto;padding:1.2em;box-shadow:-4px 0 20px rgba(0,0,0,.5)'>
 <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:1em'><span style='font-family:Space Grotesk;font-weight:600;color:#e2e8f0'>Help</span><button onclick='toggleHelp()' style='background:none;border:none;color:#64748b;font-size:1.3em;cursor:pointer'>&times;</button></div>
